@@ -1,0 +1,64 @@
+{
+  "name": "react-native-mapbox-navigation",
+  "version": "1.1.0",
+  "description": "Native Mapbox turn-by-turn navigation for Expo and React Native (iOS + Android)",
+  "main": "src/index.tsx",
+  "types": "src/index.tsx",
+  "react-native": "src/index.tsx",
+  "exports": {
+    ".": {
+      "types": "./src/index.tsx",
+      "default": "./src/index.tsx"
+    },
+    "./app.plugin.js": "./app.plugin.js",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "android/src",
+    "android/build.gradle",
+    "android/src/main/AndroidManifest.xml",
+    "ios/ExpoMapboxNavigationNative.podspec",
+    "ios/MapboxNavigationModule.swift",
+    "ios/MapboxNavigationView.swift",
+    "src",
+    "app.plugin.js",
+    "expo-module.config.json",
+    "README.md",
+    "QUICKSTART.md",
+    "CHANGELOG.md",
+    "docs",
+    "scripts"
+  ],
+  "scripts": {
+    "build": "expo-module build",
+    "clean": "expo-module clean",
+    "lint": "expo-module lint",
+    "test": "expo-module test",
+    "verify": "node ./scripts/verify-release.mjs"
+  },
+  "keywords": [
+    "react-native",
+    "expo",
+    "mapbox",
+    "navigation",
+    "turn-by-turn"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "expo": {
+    "plugins": [
+      "./app.plugin.js"
+    ]
+  },
+  "peerDependencies": {
+    "expo": ">=50",
+    "react": "*",
+    "react-native": "*"
+  },
+  "devDependencies": {
+    "expo-module-scripts": "^3.0.0"
+  }
+}
