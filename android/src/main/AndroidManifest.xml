@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="expo.modules.mapboxnavigation">
+  <application>
+    <activity
+      android:name="expo.modules.mapboxnavigation.MapboxNavigationActivity"
+      android:exported="false"
+      android:theme="@style/Theme.AppCompat.Light.NoActionBar" />
+  </application>
+</manifest>
