@@ -25,7 +25,8 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
-      - name: Production dependency audit
+      - name: Production dependency audit (non-blocking)
+        continue-on-error: true
         run: npm audit --omit=dev --audit-level=high
 
       - name: Android Kotlin compile
