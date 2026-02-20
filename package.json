@@ -1,6 +1,6 @@
 {
   "name": "@atomiqlab/react-native-mapbox-navigation",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Native Mapbox turn-by-turn navigation for Expo and React Native (iOS + Android)",
   "main": "src/index.tsx",
   "types": "src/index.tsx",
