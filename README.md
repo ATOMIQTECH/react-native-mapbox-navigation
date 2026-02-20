@@ -14,7 +14,6 @@ Native Mapbox turn-by-turn navigation bridge for Expo / React Native (iOS + Andr
 
 ```bash
 npm install @atomiqlab/react-native-mapbox-navigation
-npx expo install expo-build-properties
 ```
 
 ## Expo Config
@@ -31,7 +30,7 @@ Add plugin in app config:
 }
 ```
 
-### Required tokens
+### Required tokens(place in .env)
 
 - `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN`: Mapbox public token (`pk...`)
 - `MAPBOX_DOWNLOADS_TOKEN`: Mapbox downloads token (`sk...`) with `DOWNLOADS:READ`
@@ -41,6 +40,80 @@ Then regenerate native projects:
 ```bash
 npx expo prebuild --clean
 ```
+
+## React Native CLI (Without Expo)
+
+This package also works in bare React Native apps, but you must configure native files manually (the Expo config plugin is not used).
+
+### 1. Install dependencies
+
+```bash
+npm install @atomiqlab/react-native-mapbox-navigation
+```
+
+### 2. Android manual setup
+
+In `android/build.gradle`, add the Mapbox Maven repo in `allprojects.repositories`:
+
+```gradle
+def mapboxDownloadsToken = (findProperty("MAPBOX_DOWNLOADS_TOKEN") ?: System.getenv("MAPBOX_DOWNLOADS_TOKEN") ?: "")
+  .toString()
+  .replace('"', '')
+  .trim()
+
+allprojects {
+  repositories {
+    google()
+    mavenCentral()
+    maven {
+      url 'https://api.mapbox.com/downloads/v2/releases/maven'
+      authentication {
+        basic(BasicAuthentication)
+      }
+      credentials {
+        username = "mapbox"
+        password = mapboxDownloadsToken
+      }
+    }
+  }
+}
+```
+
+In `android/app/build.gradle`, add:
+
+```gradle
+def mapboxPublicToken = project.findProperty("MAPBOX_PUBLIC_TOKEN") ?: System.getenv("EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN") ?: ""
+resValue "string", "mapbox_access_token", mapboxPublicToken
+```
+
+In `android/app/src/main/AndroidManifest.xml`, ensure these permissions exist:
+
+- `android.permission.ACCESS_COARSE_LOCATION`
+- `android.permission.ACCESS_FINE_LOCATION`
+- `android.permission.ACCESS_BACKGROUND_LOCATION`
+- `android.permission.FOREGROUND_SERVICE`
+- `android.permission.FOREGROUND_SERVICE_LOCATION`
+- `android.permission.POST_NOTIFICATIONS`
+
+### 3. iOS manual setup
+
+In `ios/<YourApp>/Info.plist`, add:
+
+- `MBXAccessToken` = your Mapbox public token (`pk...`)
+- `NSLocationWhenInUseUsageDescription`
+- `NSLocationAlwaysAndWhenInUseUsageDescription`
+- `UIBackgroundModes` includes `location` and `audio`
+
+Then run:
+
+```bash
+cd ios && pod install
+```
+
+### 4. Required tokens (place in .env)
+
+- `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN`: Mapbox public token (`pk...`)
+- `MAPBOX_DOWNLOADS_TOKEN`: Mapbox downloads token (`sk...`) with `DOWNLOADS:READ`
 
 ## Quick Usage
 
