@@ -1,4 +1,4 @@
-import { MapboxNavigationView } from '@atomiqtech/react-native-mapbox-navigation';
+import { MapboxNavigationView } from '@atomiqlab/react-native-mapbox-navigation';
 import { useMemo, useState } from 'react';
 import {
   Platform,

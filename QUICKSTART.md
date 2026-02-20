@@ -3,7 +3,7 @@
 ## 1. Install
 
 ```bash
-npm install @atomiqtech/react-native-mapbox-navigation
+npm install @atomiqlab/react-native-mapbox-navigation
 npx expo install expo-build-properties
 ```
 
@@ -15,7 +15,7 @@ In `app.json` / `app.config.js`:
 {
   "expo": {
     "plugins": [
-      "@atomiqtech/react-native-mapbox-navigation"
+      "@atomiqlab/react-native-mapbox-navigation"
     ]
   }
 }
@@ -35,7 +35,7 @@ npx expo prebuild --clean
 ## 5. Start navigation
 
 ```ts
-import { startNavigation } from '@atomiqtech/react-native-mapbox-navigation';
+import { startNavigation } from '@atomiqlab/react-native-mapbox-navigation';
 
 await startNavigation({
   destination: { latitude: 37.7847, longitude: -122.4073, name: 'Downtown' },
