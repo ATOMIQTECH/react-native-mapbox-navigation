@@ -33,3 +33,25 @@ If not, verify you are running the latest package version and rebuilt native cod
 ```bash
 npx expo prebuild --clean
 ```
+
+## Prebuild Fails With Missing Token Error
+
+The config plugin now validates tokens early. Ensure one of these provides a public token:
+
+- `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN`
+- `MAPBOX_PUBLIC_TOKEN`
+- `expo.extra.mapboxPublicToken`
+
+And provide downloads token:
+
+- `MAPBOX_DOWNLOADS_TOKEN` or `expo.extra.mapboxDownloadsToken`
+
+## Route Fetch Errors (401/403/429)
+
+Listen to `onError` / `addErrorListener` and check `code`:
+
+- `MAPBOX_TOKEN_INVALID` (invalid/expired token)
+- `MAPBOX_TOKEN_FORBIDDEN` (missing scopes)
+- `MAPBOX_RATE_LIMITED` (request throttling)
+
+For Android dependency download failures during build, verify `MAPBOX_DOWNLOADS_TOKEN` has `DOWNLOADS:READ` scope.
