@@ -1,4 +1,4 @@
-# react-native-mapbox-navigation
+# @atomiqtech/react-native-mapbox-navigation
 
 Native Mapbox turn-by-turn navigation bridge for Expo / React Native (iOS + Android).
 
@@ -13,7 +13,7 @@ Native Mapbox turn-by-turn navigation bridge for Expo / React Native (iOS + Andr
 ## Installation
 
 ```bash
-npm install react-native-mapbox-navigation
+npm install @atomiqtech/react-native-mapbox-navigation
 npx expo install expo-build-properties
 ```
 
@@ -25,7 +25,7 @@ Add plugin in app config:
 {
   "expo": {
     "plugins": [
-      "react-native-mapbox-navigation"
+      "@atomiqtech/react-native-mapbox-navigation"
     ]
   }
 }
@@ -54,7 +54,7 @@ import {
   addArriveListener,
   addCancelNavigationListener,
   addErrorListener,
-} from "react-native-mapbox-navigation";
+} from "@atomiqtech/react-native-mapbox-navigation";
 
 await startNavigation({
   destination: { latitude: 37.7847, longitude: -122.4073, name: "Downtown" },
@@ -81,7 +81,7 @@ await stopNavigation();
 ## Embedded View
 
 ```tsx
-import { MapboxNavigationView } from "react-native-mapbox-navigation";
+import { MapboxNavigationView } from "@atomiqtech/react-native-mapbox-navigation";
 
 <MapboxNavigationView
   style={{ flex: 1 }}

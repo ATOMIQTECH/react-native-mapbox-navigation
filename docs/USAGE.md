@@ -3,7 +3,7 @@
 ## Start Full-Screen Navigation
 
 ```ts
-import { startNavigation } from "react-native-mapbox-navigation";
+import { startNavigation } from "@atomiqtech/react-native-mapbox-navigation";
 
 await startNavigation({
   destination: { latitude: 37.7847, longitude: -122.4073, name: "Downtown" },
@@ -31,7 +31,7 @@ await startNavigation({
 ## Stop Navigation
 
 ```ts
-import { stopNavigation } from "react-native-mapbox-navigation";
+import { stopNavigation } from "@atomiqtech/react-native-mapbox-navigation";
 
 await stopNavigation();
 ```
@@ -46,7 +46,7 @@ import {
   addArriveListener,
   addCancelNavigationListener,
   addErrorListener,
-} from "react-native-mapbox-navigation";
+} from "@atomiqtech/react-native-mapbox-navigation";
 
 const subscriptions = [
   addLocationChangeListener((location) => {
@@ -76,7 +76,7 @@ subscriptions.forEach((sub) => sub.remove());
 ## Embedded Navigation View
 
 ```tsx
-import { MapboxNavigationView } from "react-native-mapbox-navigation";
+import { MapboxNavigationView } from "@atomiqtech/react-native-mapbox-navigation";
 
 export function EmbeddedNavigationScreen() {
   return (
