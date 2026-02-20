@@ -45,6 +45,14 @@
     "turn-by-turn"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ATOMIQTECH/react-native-mapbox-navigation"
+  },
+  "homepage": "https://github.com/ATOMIQTECH/react-native-mapbox-navigation#readme",
+  "bugs": {
+    "url": "https://github.com/ATOMIQTECH/react-native-mapbox-navigation/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
