@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const moduleDir = path.resolve(path.dirname(__filename), "..");
-const repoRoot = path.resolve(moduleDir, "..", "..");
-const androidDir = path.join(repoRoot, "android");
-const envFilePath = path.join(repoRoot, ".env");
+const repoRoot = moduleDir;
+const androidDir = path.join(moduleDir, "android");
+const envFilePath = path.join(moduleDir, ".env");
 
 function loadDotEnv(filePath) {
   if (!existsSync(filePath)) {
@@ -49,7 +49,8 @@ function run(command, cwd = moduleDir, options = {}) {
       env: {
         ...process.env,
         GRADLE_USER_HOME:
-          process.env.GRADLE_USER_HOME || "/tmp/gradle-user-home-react-native-mapbox-navigation",
+          process.env.GRADLE_USER_HOME ||
+          "/tmp/gradle-user-home-react-native-mapbox-navigation",
       },
     });
     if (output?.length) {
@@ -72,7 +73,9 @@ function run(command, cwd = moduleDir, options = {}) {
       combined.includes("SocketException: Operation not permitted");
 
     if (optionalOnOfflineGradle && skippableGradleEnvironmentIssue) {
-      console.warn(`\nSkipping optional Gradle check due to restricted/offline environment: ${command}`);
+      console.warn(
+        `\nSkipping optional Gradle check due to restricted/offline environment: ${command}`,
+      );
       return;
     }
     throw error;
@@ -95,7 +98,14 @@ function runWithFallback(commands, cwd, options = {}) {
 
 loadDotEnv(envFilePath);
 
-run("npx tsc --noEmit", repoRoot);
+const tsconfigPath = path.join(moduleDir, "tsconfig.json");
+if (existsSync(tsconfigPath)) {
+  run(`npx --no-install tsc -p ${tsconfigPath} --noEmit`, moduleDir);
+} else {
+  console.log(
+    "\n> Skipping TypeScript check (tsconfig.json not found in package root).",
+  );
+}
 
 if (existsSync(path.join(androidDir, "gradlew"))) {
   runWithFallback(
@@ -104,12 +114,17 @@ if (existsSync(path.join(androidDir, "gradlew"))) {
       "./gradlew :mapbox-navigation-native:compileDebugKotlin",
     ],
     androidDir,
-    { optionalOnOfflineGradle: true }
+    { optionalOnOfflineGradle: true },
   );
 } else {
-  console.log("\n> Skipping Android compile check (android/gradlew not found).");
+  console.log(
+    "\n> Skipping Android compile check (android/gradlew not found).",
+  );
 }
 
-run("npm pack --dry-run --cache /tmp/npm-cache-react-native-mapbox-navigation", moduleDir);
+run(
+  "npm pack --dry-run --cache /tmp/npm-cache-react-native-mapbox-navigation",
+  moduleDir,
+);
 
 console.log("\nRelease verification completed.");

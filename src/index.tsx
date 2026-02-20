@@ -2,24 +2,22 @@ import { requireNativeModule, requireNativeViewManager } from "expo-modules-core
 import { ViewProps } from "react-native";
 
 import type {
-    ArrivalEvent,
-    BannerInstruction,
-    LocationUpdate,
-    MapboxNavigationModule as MapboxNavigationModuleType,
-    MapboxNavigationViewProps,
-    NavigationSettings,
-    NavigationError,
-    NavigationOptions,
-    RouteProgress,
-    Subscription,
+  ArrivalEvent,
+  BannerInstruction,
+  LocationUpdate,
+  MapboxNavigationModule as MapboxNavigationModuleType,
+  MapboxNavigationViewProps,
+  NavigationSettings,
+  NavigationError,
+  NavigationOptions,
+  RouteProgress,
+  Subscription,
 } from "./MapboxNavigation.types";
 
-// Get the native module (use requireNativeModule instead of deprecated NativeModulesProxy)
 const MapboxNavigationModule = requireNativeModule<MapboxNavigationModuleType>(
   "MapboxNavigationModule",
 );
 
-// The native module already acts as an EventEmitter; don't wrap with `new EventEmitter`.
 const emitter = MapboxNavigationModule as unknown as {
   addListener: (
     eventName: string,
@@ -106,74 +104,166 @@ function normalizeNavigationOptions(options: NavigationOptions): NavigationOptio
   };
 }
 
-// Module API
+function normalizeNativeError(error: unknown, fallbackCode = "NATIVE_ERROR"): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+
+  const candidate = error as { code?: string; message?: string } | undefined;
+  const code = candidate?.code ?? fallbackCode;
+  const message = candidate?.message ?? "Unknown native error";
+  return new Error(`[${code}] ${message}`);
+}
+
+/**
+ * Start full-screen native turn-by-turn navigation.
+ *
+ * @param options Navigation settings such as destination, camera mode, simulation, and map UI options.
+ * @throws Error if options are invalid or native route/token setup fails.
+ */
 export async function startNavigation(
   options: NavigationOptions,
 ): Promise<void> {
   const normalizedOptions = normalizeNavigationOptions(options);
-  return await MapboxNavigationModule.startNavigation(normalizedOptions);
+  try {
+    await MapboxNavigationModule.startNavigation(normalizedOptions);
+  } catch (error) {
+    throw normalizeNativeError(error, "START_NAVIGATION_FAILED");
+  }
 }
 
+/**
+ * Stop/dismiss native navigation if active.
+ */
 export async function stopNavigation(): Promise<void> {
-  return await MapboxNavigationModule.stopNavigation();
+  try {
+    await MapboxNavigationModule.stopNavigation();
+  } catch (error) {
+    throw normalizeNativeError(error, "STOP_NAVIGATION_FAILED");
+  }
 }
 
+/**
+ * Enable or disable voice guidance.
+ *
+ * @param muted `true` to mute voice instructions.
+ */
 export async function setMuted(muted: boolean): Promise<void> {
-  return await MapboxNavigationModule.setMuted(muted);
+  try {
+    await MapboxNavigationModule.setMuted(muted);
+  } catch (error) {
+    throw normalizeNativeError(error, "SET_MUTED_FAILED");
+  }
 }
 
+/**
+ * Set voice instruction volume in range `0..1`.
+ */
 export async function setVoiceVolume(volume: number): Promise<void> {
-  return await MapboxNavigationModule.setVoiceVolume(volume);
+  try {
+    await MapboxNavigationModule.setVoiceVolume(volume);
+  } catch (error) {
+    throw normalizeNativeError(error, "SET_VOICE_VOLUME_FAILED");
+  }
 }
 
+/**
+ * Set spoken and displayed distance units.
+ */
 export async function setDistanceUnit(unit: "metric" | "imperial"): Promise<void> {
-  return await MapboxNavigationModule.setDistanceUnit(unit);
+  try {
+    await MapboxNavigationModule.setDistanceUnit(unit);
+  } catch (error) {
+    throw normalizeNativeError(error, "SET_DISTANCE_UNIT_FAILED");
+  }
 }
 
+/**
+ * Set instruction language (BCP-47-like code, for example `en`, `fr`).
+ */
 export async function setLanguage(language: string): Promise<void> {
-  return await MapboxNavigationModule.setLanguage(language);
+  try {
+    await MapboxNavigationModule.setLanguage(language);
+  } catch (error) {
+    throw normalizeNativeError(error, "SET_LANGUAGE_FAILED");
+  }
 }
 
+/**
+ * Check whether full-screen native navigation is currently active.
+ */
 export async function isNavigating(): Promise<boolean> {
-  return await MapboxNavigationModule.isNavigating();
+  try {
+    return await MapboxNavigationModule.isNavigating();
+  } catch (error) {
+    throw normalizeNativeError(error, "IS_NAVIGATING_FAILED");
+  }
 }
 
+/**
+ * Read current native navigation runtime settings.
+ */
 export async function getNavigationSettings(): Promise<NavigationSettings> {
-  return await MapboxNavigationModule.getNavigationSettings();
+  try {
+    return await MapboxNavigationModule.getNavigationSettings();
+  } catch (error) {
+    throw normalizeNativeError(error, "GET_NAVIGATION_SETTINGS_FAILED");
+  }
 }
 
-// Event listeners
+/**
+ * Subscribe to location updates from native navigation.
+ */
 export function addLocationChangeListener(
   listener: (location: LocationUpdate) => void,
 ): Subscription {
   return emitter.addListener("onLocationChange", listener);
 }
 
+/**
+ * Subscribe to route progress updates.
+ */
 export function addRouteProgressChangeListener(
   listener: (progress: RouteProgress) => void,
 ): Subscription {
   return emitter.addListener("onRouteProgressChange", listener);
 }
 
+/**
+ * Subscribe to arrival events.
+ */
 export function addArriveListener(listener: (point: ArrivalEvent) => void): Subscription {
   return emitter.addListener("onArrive", listener);
 }
 
+/**
+ * Subscribe to cancellation events.
+ */
 export function addCancelNavigationListener(listener: () => void): Subscription {
   return emitter.addListener("onCancelNavigation", listener);
 }
 
+/**
+ * Subscribe to native errors (token issues, route fetch failures, permission failures, etc.).
+ */
 export function addErrorListener(listener: (error: NavigationError) => void): Subscription {
   return emitter.addListener("onError", listener);
 }
 
+/**
+ * Subscribe to banner instruction updates.
+ */
 export function addBannerInstructionListener(
   listener: (instruction: BannerInstruction) => void,
 ): Subscription {
   return emitter.addListener("onBannerInstruction", listener);
 }
 
-// React component wrapper
+/**
+ * Embedded native navigation component.
+ *
+ * Use this when you need navigation inside your own screen layout instead of full-screen modal navigation.
+ */
 export function MapboxNavigationView(
   props: MapboxNavigationViewProps & ViewProps,
 ) {
@@ -181,10 +271,8 @@ export function MapboxNavigationView(
   return <NativeView {...props} />;
 }
 
-// Export types
 export * from "./MapboxNavigation.types";
 
-// Default export
 export default {
   startNavigation,
   stopNavigation,
