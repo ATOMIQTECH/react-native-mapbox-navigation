@@ -112,6 +112,15 @@ class MapboxNavigationActivity : AppCompatActivity() {
 
     override fun onRouteFetchFailed(reasons: List<RouterFailure>, routeOptions: RouteOptions) {
       Log.e(TAG, "Route fetch failed. reasons=${reasons.size}, options=$routeOptions")
+      val (code, message) = mapRouteFetchFailure(reasons)
+      MapboxNavigationEventBridge.emit(
+        "onError",
+        mapOf(
+          "code" to code,
+          "message" to message
+        )
+      )
+      showErrorAndStay(message, null)
     }
 
     override fun onRouteFetchSuccessful(routes: List<NavigationRoute>) {
@@ -127,6 +136,13 @@ class MapboxNavigationActivity : AppCompatActivity() {
 
     override fun onRouteFetchCanceled(routeOptions: RouteOptions, routerOrigin: RouterOrigin) {
       Log.w(TAG, "Route fetch canceled. origin=$routerOrigin, options=$routeOptions")
+      MapboxNavigationEventBridge.emit(
+        "onError",
+        mapOf(
+          "code" to "ROUTE_FETCH_CANCELED",
+          "message" to "Route fetch canceled (origin: $routerOrigin)."
+        )
+      )
     }
   }
 
@@ -301,6 +317,25 @@ class MapboxNavigationActivity : AppCompatActivity() {
     }
   }
 
+  private fun mapRouteFetchFailure(reasons: List<RouterFailure>): Pair<String, String> {
+    val details = reasons.joinToString(" | ") { it.message.orEmpty() }.trim()
+    if (details.contains("401") || details.contains("unauthorized", ignoreCase = true)) {
+      return "MAPBOX_TOKEN_INVALID" to
+        "Route fetch failed: unauthorized. Check EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN and token scopes."
+    }
+    if (details.contains("403") || details.contains("forbidden", ignoreCase = true)) {
+      return "MAPBOX_TOKEN_FORBIDDEN" to
+        "Route fetch failed: access forbidden. Verify token scopes and account permissions."
+    }
+    if (details.contains("429") || details.contains("rate", ignoreCase = true)) {
+      return "MAPBOX_RATE_LIMITED" to
+        "Route fetch failed: rate limited by Mapbox."
+    }
+
+    return "ROUTE_FETCH_FAILED" to
+      (if (details.isNotEmpty()) "Route fetch failed: $details" else "Route fetch failed for unknown reason.")
+  }
+
   private fun hasLocationPermission(): Boolean {
     val fineGranted = ContextCompat.checkSelfPermission(
       this,
@@ -321,6 +356,14 @@ class MapboxNavigationActivity : AppCompatActivity() {
     } else {
       Log.e(TAG, message)
     }
+
+    MapboxNavigationEventBridge.emit(
+      "onError",
+      mapOf(
+        "code" to "NATIVE_ERROR",
+        "message" to message
+      )
+    )
 
     val errorView = TextView(this).apply {
       text = message

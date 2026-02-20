@@ -159,6 +159,10 @@ public class MapboxNavigationModule: Module {
   
   private func startNavigation(options: NavigationStartOptions, promise: Promise) {
     guard let destination = options.destination.toCLLocationCoordinate2D() else {
+      self.sendEvent("onError", [
+        "code": "INVALID_COORDINATES",
+        "message": "Invalid coordinates provided"
+      ])
       promise.reject("INVALID_COORDINATES", "Invalid coordinates provided")
       return
     }
@@ -184,6 +188,10 @@ public class MapboxNavigationModule: Module {
           promise: promise
         )
       case .failure(let error):
+        self.sendEvent("onError", [
+          "code": "CURRENT_LOCATION_UNAVAILABLE",
+          "message": error.localizedDescription
+        ])
         promise.reject("CURRENT_LOCATION_UNAVAILABLE", error.localizedDescription)
       }
     }
@@ -225,6 +233,10 @@ public class MapboxNavigationModule: Module {
       switch result {
       case .success(let response):
         guard response.routes?.first != nil else {
+          self.sendEvent("onError", [
+            "code": "NO_ROUTE",
+            "message": "No route found"
+          ])
           promise.reject("NO_ROUTE", "No route found")
           return
         }
@@ -276,7 +288,12 @@ public class MapboxNavigationModule: Module {
         }
         
       case .failure(let error):
-        promise.reject("ROUTE_ERROR", error.localizedDescription)
+        let (code, message) = self.mapDirectionsError(error)
+        self.sendEvent("onError", [
+          "code": code,
+          "message": message
+        ])
+        promise.reject(code, message)
       }
     }
   }
@@ -292,6 +309,23 @@ public class MapboxNavigationModule: Module {
     }
   }
   
+  private func mapDirectionsError(_ error: Error) -> (String, String) {
+    let message = error.localizedDescription
+    let lowered = message.lowercased()
+
+    if lowered.contains("401") || lowered.contains("unauthorized") {
+      return ("MAPBOX_TOKEN_INVALID", "Route fetch failed: unauthorized. Check EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN and token scopes.")
+    }
+    if lowered.contains("403") || lowered.contains("forbidden") {
+      return ("MAPBOX_TOKEN_FORBIDDEN", "Route fetch failed: access forbidden. Verify token scopes and account permissions.")
+    }
+    if lowered.contains("429") || lowered.contains("rate") {
+      return ("MAPBOX_RATE_LIMITED", "Route fetch failed: rate limited by Mapbox.")
+    }
+
+    return ("ROUTE_ERROR", message)
+  }
+
   private func stopNavigation(promise: Promise) {
     guard let navVC = navigationViewController else {
       promise.resolve(nil)

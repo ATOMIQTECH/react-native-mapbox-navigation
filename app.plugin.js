@@ -32,6 +32,64 @@ const REQUIRED_ANDROID_PERMISSIONS = [
 const DEFAULT_IOS_LOCATION_USAGE =
   "Allow $(PRODUCT_NAME) to access your location for turn-by-turn navigation.";
 
+function resolveToken(config, envKeys = [], extraKeys = []) {
+  for (const key of envKeys) {
+    const value = process.env[key]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  const extra = config?.extra ?? {};
+  for (const key of extraKeys) {
+    const value = typeof extra[key] === "string" ? extra[key].trim() : "";
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+function validateMapboxTokenShape(token, expectedPrefix) {
+  return token.startsWith(expectedPrefix) && token.length > 20;
+}
+
+function assertRequiredTokens(config) {
+  const publicToken = resolveToken(
+    config,
+    ["EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN", "MAPBOX_PUBLIC_TOKEN"],
+    ["mapboxPublicToken", "expoPublicMapboxAccessToken", "mapboxAccessToken"]
+  );
+  const downloadsToken = resolveToken(
+    config,
+    ["MAPBOX_DOWNLOADS_TOKEN"],
+    ["mapboxDownloadsToken"]
+  );
+
+  if (!publicToken) {
+    throw new Error(
+      "[@atomiqlab/react-native-mapbox-navigation] Missing EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN (or MAPBOX_PUBLIC_TOKEN / expo.extra.mapboxPublicToken)."
+    );
+  }
+  if (!validateMapboxTokenShape(publicToken, "pk.")) {
+    throw new Error(
+      "[@atomiqlab/react-native-mapbox-navigation] Invalid public token format. Expected a Mapbox public token starting with 'pk.'."
+    );
+  }
+
+  if (!downloadsToken) {
+    throw new Error(
+      "[@atomiqlab/react-native-mapbox-navigation] Missing MAPBOX_DOWNLOADS_TOKEN (or expo.extra.mapboxDownloadsToken)."
+    );
+  }
+  if (!validateMapboxTokenShape(downloadsToken, "sk.")) {
+    throw new Error(
+      "[@atomiqlab/react-native-mapbox-navigation] Invalid downloads token format. Expected a Mapbox secret token starting with 'sk.' and DOWNLOADS:READ scope."
+    );
+  }
+}
+
 function ensureAndroidPermissions(androidManifest) {
   const manifest = androidManifest.manifest;
   if (!manifest["uses-permission"]) {
@@ -114,10 +172,11 @@ function withMapboxNavigationAndroid(config) {
 function withMapboxNavigationIos(config) {
   return withInfoPlist(config, (config) => {
     const infoPlist = config.modResults;
-    const mapboxPublicToken =
-      process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ||
-      process.env.MAPBOX_PUBLIC_TOKEN ||
-      "";
+    const mapboxPublicToken = resolveToken(
+      config,
+      ["EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN", "MAPBOX_PUBLIC_TOKEN"],
+      ["mapboxPublicToken", "expoPublicMapboxAccessToken", "mapboxAccessToken"]
+    );
 
     if (!infoPlist.MBXAccessToken && mapboxPublicToken) {
       infoPlist.MBXAccessToken = mapboxPublicToken;
@@ -142,6 +201,7 @@ function withMapboxNavigationIos(config) {
 }
 
 const withMapboxNavigation = (config) => {
+  assertRequiredTokens(config);
   config = withMapboxNavigationAndroid(config);
   config = withMapboxNavigationIos(config);
   return config;
