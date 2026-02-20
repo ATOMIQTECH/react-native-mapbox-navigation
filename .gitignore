@@ -1,3 +1,11 @@
 android/build
 ios/build
 *.tgz
+node_modules
+*.log
+*.lock
+.DS_Store
+*.iml
+.idea
+.vscode
+*.expo
