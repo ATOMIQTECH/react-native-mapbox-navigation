@@ -1,0 +1,6 @@
+android/build
+ios/build
+example
+.github
+website
+*.log
