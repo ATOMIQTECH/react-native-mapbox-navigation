@@ -1,14 +1,23 @@
 # @atomiqlab/react-native-mapbox-navigation
 
-Native Mapbox turn-by-turn navigation bridge for Expo / React Native (iOS + Android).
+Native Mapbox turn-by-turn navigation for Expo apps on iOS and Android.
 
-## Highlights
+## Features
 
-- Full-screen native navigation (`startNavigation`).
-- Embedded native navigation (`MapboxNavigationView`).
-- Event stream: location, route progress, banner instruction, arrival, cancel, error.
-- Flexible camera/theme/style controls.
-- Expo config plugin for Android + iOS setup defaults.
+- Full-screen native navigation via `startNavigation`.
+- Embedded native navigation UI via `MapboxNavigationView`.
+- Real-time events: location, route progress, banner instruction, arrival, cancel, and error.
+- Runtime controls for mute, voice volume, distance unit, and language.
+- Navigation customization: camera mode/pitch/zoom, theme, map style, and UI visibility toggles.
+- Expo config plugin that applies required Android and iOS native setup.
+
+## Requirements
+
+- Expo SDK `>=50`
+- iOS `14+`
+- Mapbox access credentials:
+  - Public token (`pk...`)
+  - Downloads token (`sk...`) with `DOWNLOADS:READ`
 
 ## Installation
 
@@ -16,9 +25,9 @@ Native Mapbox turn-by-turn navigation bridge for Expo / React Native (iOS + Andr
 npm install @atomiqlab/react-native-mapbox-navigation
 ```
 
-## Expo Config
+## Expo Setup
 
-Add plugin in app config:
+Add the plugin in your app config (`app.json` or `app.config.js`):
 
 ```json
 {
@@ -30,92 +39,18 @@ Add plugin in app config:
 }
 ```
 
-### Required tokens(place in .env)
+Set these environment variables:
 
-- `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN`: Mapbox public token (`pk...`)
-- `MAPBOX_DOWNLOADS_TOKEN`: Mapbox downloads token (`sk...`) with `DOWNLOADS:READ`
+- `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN` (Mapbox public token)
+- `MAPBOX_DOWNLOADS_TOKEN` (Mapbox downloads token)
 
-Then regenerate native projects:
+Regenerate native projects:
 
 ```bash
 npx expo prebuild --clean
 ```
 
-## React Native CLI (Without Expo)
-
-This package also works in bare React Native apps, but you must configure native files manually (the Expo config plugin is not used).
-
-### 1. Install dependencies
-
-```bash
-npm install @atomiqlab/react-native-mapbox-navigation
-```
-
-### 2. Android manual setup
-
-In `android/build.gradle`, add the Mapbox Maven repo in `allprojects.repositories`:
-
-```gradle
-def mapboxDownloadsToken = (findProperty("MAPBOX_DOWNLOADS_TOKEN") ?: System.getenv("MAPBOX_DOWNLOADS_TOKEN") ?: "")
-  .toString()
-  .replace('"', '')
-  .trim()
-
-allprojects {
-  repositories {
-    google()
-    mavenCentral()
-    maven {
-      url 'https://api.mapbox.com/downloads/v2/releases/maven'
-      authentication {
-        basic(BasicAuthentication)
-      }
-      credentials {
-        username = "mapbox"
-        password = mapboxDownloadsToken
-      }
-    }
-  }
-}
-```
-
-In `android/app/build.gradle`, add:
-
-```gradle
-def mapboxPublicToken = project.findProperty("MAPBOX_PUBLIC_TOKEN") ?: System.getenv("EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN") ?: ""
-resValue "string", "mapbox_access_token", mapboxPublicToken
-```
-
-In `android/app/src/main/AndroidManifest.xml`, ensure these permissions exist:
-
-- `android.permission.ACCESS_COARSE_LOCATION`
-- `android.permission.ACCESS_FINE_LOCATION`
-- `android.permission.ACCESS_BACKGROUND_LOCATION`
-- `android.permission.FOREGROUND_SERVICE`
-- `android.permission.FOREGROUND_SERVICE_LOCATION`
-- `android.permission.POST_NOTIFICATIONS`
-
-### 3. iOS manual setup
-
-In `ios/<YourApp>/Info.plist`, add:
-
-- `MBXAccessToken` = your Mapbox public token (`pk...`)
-- `NSLocationWhenInUseUsageDescription`
-- `NSLocationAlwaysAndWhenInUseUsageDescription`
-- `UIBackgroundModes` includes `location` and `audio`
-
-Then run:
-
-```bash
-cd ios && pod install
-```
-
-### 4. Required tokens (place in .env)
-
-- `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN`: Mapbox public token (`pk...`)
-- `MAPBOX_DOWNLOADS_TOKEN`: Mapbox downloads token (`sk...`) with `DOWNLOADS:READ`
-
-## Quick Usage
+## Quick Start
 
 ```ts
 import {
@@ -133,11 +68,14 @@ await startNavigation({
   destination: { latitude: 37.7847, longitude: -122.4073, name: "Downtown" },
   startOrigin: { latitude: 37.7749, longitude: -122.4194 },
   shouldSimulateRoute: true,
+  routeAlternatives: true,
   cameraMode: "following",
   uiTheme: "system",
+  distanceUnit: "metric",
+  language: "en",
 });
 
-const subs = [
+const subscriptions = [
   addLocationChangeListener((location) => console.log(location)),
   addRouteProgressChangeListener((progress) => console.log(progress)),
   addBannerInstructionListener((instruction) => console.log(instruction.primaryText)),
@@ -147,11 +85,11 @@ const subs = [
 ];
 
 // Cleanup
-subs.forEach((sub) => sub.remove());
+subscriptions.forEach((sub) => sub.remove());
 await stopNavigation();
 ```
 
-## Embedded View
+## Embedded Navigation View
 
 ```tsx
 import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation";
@@ -162,13 +100,16 @@ import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation"
   startOrigin={{ latitude: 37.7749, longitude: -122.4194 }}
   shouldSimulateRoute
   cameraMode="following"
+  showsTripProgress
   onBannerInstruction={(instruction) => console.log(instruction.primaryText)}
+  onRouteProgressChange={(progress) => console.log(progress.fractionTraveled)}
+  onError={(error) => console.warn(error.message)}
 />;
 ```
 
-## API Surface
+## API Overview
 
-### Core functions
+Core functions:
 
 - `startNavigation(options)`
 - `stopNavigation()`
@@ -179,7 +120,7 @@ import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation"
 - `setDistanceUnit(unit)`
 - `setLanguage(language)`
 
-### Listener helpers
+Event listeners:
 
 - `addLocationChangeListener(listener)`
 - `addRouteProgressChangeListener(listener)`
@@ -188,17 +129,17 @@ import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation"
 - `addCancelNavigationListener(listener)`
 - `addErrorListener(listener)`
 
-### Key navigation options
+Main `NavigationOptions` fields:
 
-- Routing: `destination`, `startOrigin`, `waypoints`, `routeAlternatives`, `shouldSimulateRoute`
+- Route: `destination`, `startOrigin`, `waypoints`, `routeAlternatives`, `shouldSimulateRoute`
 - Camera: `cameraMode`, `cameraPitch`, `cameraZoom`
 - Theme/style: `uiTheme`, `mapStyleUri`, `mapStyleUriDay`, `mapStyleUriNight`
-- Guidance/UI: `distanceUnit`, `language`, `mute`, `voiceVolume`
-- Visibility toggles: `showsSpeedLimits`, `showsWayNameLabel`, `showsTripProgress`, `showsManeuverView`, `showsActionButtons`
+- Guidance: `distanceUnit`, `language`, `mute`, `voiceVolume`
+- UI toggles: `showsSpeedLimits`, `showsWayNameLabel`, `showsTripProgress`, `showsManeuverView`, `showsActionButtons`
 
-Full type reference: `src/MapboxNavigation.types.ts`
+Full types: `src/MapboxNavigation.types.ts`
 
-## Platform behavior
+## Platform Notes
 
-- Android: `startOrigin` optional; current location start is supported.
-- iOS: `startOrigin` optional; when omitted, the module resolves current device location (requires location permission).
+- Android: `startOrigin` is optional (current location is supported).
+- iOS: `startOrigin` is optional (current location is resolved at runtime with location permission).
