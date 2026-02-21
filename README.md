@@ -34,9 +34,9 @@ Native Mapbox turn-by-turn navigation for Expo apps on iOS and Android.
 # Support Us
 
 <p align="center">
-  <a href="https://ko-fi.com/atomiqlab" target="_blank">
+  <a href="https://ko-fi.com/atomiqlabs" target="_blank">
     <img 
-      src="https://storage.ko-fi.com/cdn/kofi6.png?v=3" 
+      src="docs/imgs/support_me_on_kofi_badge_red.png" 
       alt="Support on Ko-fi"
       width="260"
     />
