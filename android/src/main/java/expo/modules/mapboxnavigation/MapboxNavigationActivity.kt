@@ -8,7 +8,10 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Gravity
+import android.view.ViewGroup
+import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.appcompat.app.AppCompatActivity
@@ -95,7 +98,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
       result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
 
     if (!granted) {
-      showErrorAndStay("Location permission is required to start navigation.", null)
+      showErrorScreen("Location permission is required to start navigation.", null)
       return@registerForActivityResult
     }
 
@@ -120,7 +123,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
           "message" to message
         )
       )
-      showErrorAndStay(message, null)
+      showErrorScreen(message, null)
     }
 
     override fun onRouteFetchSuccessful(routes: List<NavigationRoute>) {
@@ -182,7 +185,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
         Log.w(TAG, "No valid destination extras provided, starting without preview")
       }
     } catch (throwable: Throwable) {
-      showErrorAndStay("Navigation init failed: ${throwable.message}", throwable)
+      showErrorScreen("Navigation init failed: ${throwable.message}", throwable)
       return
     }
 
@@ -272,7 +275,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
       }
 
     } catch (throwable: Throwable) {
-      showErrorAndStay("Failed to create NavigationView: ${throwable.message}", throwable)
+      showErrorScreen("Failed to create NavigationView: ${throwable.message}", throwable)
     }
   }
 
@@ -350,7 +353,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
     return fineGranted || coarseGranted
   }
 
-  private fun showErrorAndStay(message: String, throwable: Throwable?) {
+  private fun showErrorScreen(message: String, throwable: Throwable?) {
     if (throwable != null) {
       Log.e(TAG, message, throwable)
     } else {
@@ -365,16 +368,58 @@ class MapboxNavigationActivity : AppCompatActivity() {
       )
     )
 
-    val errorView = TextView(this).apply {
-      text = message
+    val titleView = TextView(this).apply {
+      text = "Navigation Error"
+      textSize = 22f
+      setTextColor(0xFFFFFFFF.toInt())
       gravity = Gravity.CENTER
-      textSize = 16f
-      setPadding(32, 32, 32, 32)
     }
+
+    val messageView = TextView(this).apply {
+      text = message
+      textSize = 15f
+      setTextColor(0xFFD6E4FF.toInt())
+      gravity = Gravity.CENTER
+      setPadding(0, 24, 0, 32)
+    }
+
+    val closeButton = Button(this).apply {
+      text = "Back"
+      setOnClickListener { finish() }
+    }
+
+    val content = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      gravity = Gravity.CENTER
+      setBackgroundColor(0xFF0B1020.toInt())
+      setPadding(48, 48, 48, 48)
+      addView(
+        titleView,
+        LinearLayout.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,
+          ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+      )
+      addView(
+        messageView,
+        LinearLayout.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,
+          ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+      )
+      addView(
+        closeButton,
+        LinearLayout.LayoutParams(
+          ViewGroup.LayoutParams.MATCH_PARENT,
+          ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+      )
+    }
+
     setContentView(
       FrameLayout(this).apply {
         addView(
-          errorView,
+          content,
           FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT

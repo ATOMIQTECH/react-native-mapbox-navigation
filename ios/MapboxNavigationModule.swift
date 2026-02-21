@@ -157,9 +157,20 @@ public class MapboxNavigationModule: Module {
     }
   }
   
+  private func configuredMapboxPublicToken() -> String? {
+    guard let raw = Bundle.main.object(forInfoDictionaryKey: "MBXAccessToken") as? String else {
+      return nil
+    }
+    let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard token.hasPrefix("pk."), token.count > 20 else {
+      return nil
+    }
+    return token
+  }
+
   private func startNavigation(options: NavigationStartOptions, promise: Promise) {
     guard let destination = options.destination.toCLLocationCoordinate2D() else {
-      self.sendEvent("onError", [
+      self.emitErrorAndShowScreen([
         "code": "INVALID_COORDINATES",
         "message": "Invalid coordinates provided"
       ])
@@ -188,7 +199,7 @@ public class MapboxNavigationModule: Module {
           promise: promise
         )
       case .failure(let error):
-        self.sendEvent("onError", [
+        self.emitErrorAndShowScreen([
           "code": "CURRENT_LOCATION_UNAVAILABLE",
           "message": error.localizedDescription
         ])
@@ -203,7 +214,16 @@ public class MapboxNavigationModule: Module {
     options: NavigationStartOptions,
     promise: Promise
   ) {
-    
+    guard configuredMapboxPublicToken() != nil else {
+      let message = "Missing or invalid MBXAccessToken. Add the package plugin to app.json and set EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN before prebuild."
+      self.emitErrorAndShowScreen([
+        "code": "MISSING_ACCESS_TOKEN",
+        "message": message
+      ])
+      promise.reject("MISSING_ACCESS_TOKEN", message)
+      return
+    }
+
     var waypoints = [Waypoint(coordinate: origin)]
     
     // Add intermediate waypoints if provided
@@ -233,7 +253,7 @@ public class MapboxNavigationModule: Module {
       switch result {
       case .success(let response):
         guard response.routes?.first != nil else {
-          self.sendEvent("onError", [
+          self.emitErrorAndShowScreen([
             "code": "NO_ROUTE",
             "message": "No route found"
           ])
@@ -284,12 +304,16 @@ public class MapboxNavigationModule: Module {
             promise.resolve(nil)
           }
         } else {
+          self.emitErrorAndShowScreen([
+            "code": "NO_ROOT_VC",
+            "message": "Could not find root view controller"
+          ])
           promise.reject("NO_ROOT_VC", "Could not find root view controller")
         }
         
       case .failure(let error):
         let (code, message) = self.mapDirectionsError(error)
-        self.sendEvent("onError", [
+        self.emitErrorAndShowScreen([
           "code": code,
           "message": message
         ])
@@ -309,6 +333,25 @@ public class MapboxNavigationModule: Module {
     }
   }
   
+  private func emitErrorAndShowScreen(_ payload: [String: Any]) {
+    sendEvent("onError", payload)
+
+    guard let navVC = navigationViewController else {
+      return
+    }
+
+    if navVC.presentingViewController == nil {
+      navigationViewController = nil
+      isCurrentlyNavigating = false
+      return
+    }
+
+    navVC.dismiss(animated: true) {
+      self.navigationViewController = nil
+      self.isCurrentlyNavigating = false
+    }
+  }
+
   private func mapDirectionsError(_ error: Error) -> (String, String) {
     let message = error.localizedDescription
     let lowered = message.lowercased()
@@ -643,5 +686,69 @@ private final class CurrentLocationResolver: NSObject, CLLocationManagerDelegate
     self.completion = nil
     locationManager.delegate = nil
     completion(result)
+  }
+}
+
+private final class NavigationErrorViewController: UIViewController {
+  private let message: String
+
+  init(message: String) {
+    self.message = message
+    super.init(nibName: nil, bundle: nil)
+  }
+
+  required init?(coder: NSCoder) {
+    nil
+  }
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+
+    view.backgroundColor = UIColor(red: 11 / 255, green: 16 / 255, blue: 32 / 255, alpha: 1)
+
+    let titleLabel = UILabel()
+    titleLabel.translatesAutoresizingMaskIntoConstraints = false
+    titleLabel.text = "Navigation Error"
+    titleLabel.textColor = .white
+    titleLabel.font = UIFont.systemFont(ofSize: 28, weight: .bold)
+    titleLabel.textAlignment = .center
+    titleLabel.numberOfLines = 0
+
+    let messageLabel = UILabel()
+    messageLabel.translatesAutoresizingMaskIntoConstraints = false
+    messageLabel.text = message
+    messageLabel.textColor = UIColor(red: 214 / 255, green: 228 / 255, blue: 255 / 255, alpha: 1)
+    messageLabel.font = UIFont.systemFont(ofSize: 16, weight: .regular)
+    messageLabel.textAlignment = .center
+    messageLabel.numberOfLines = 0
+
+    let closeButton = UIButton(type: .system)
+    closeButton.translatesAutoresizingMaskIntoConstraints = false
+    closeButton.setTitle("Back", for: .normal)
+    closeButton.titleLabel?.font = UIFont.systemFont(ofSize: 17, weight: .semibold)
+    closeButton.backgroundColor = UIColor.white.withAlphaComponent(0.15)
+    closeButton.setTitleColor(.white, for: .normal)
+    closeButton.layer.cornerRadius = 10
+    closeButton.contentEdgeInsets = UIEdgeInsets(top: 12, left: 16, bottom: 12, right: 16)
+    closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+
+    let stack = UIStackView(arrangedSubviews: [titleLabel, messageLabel, closeButton])
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    stack.axis = .vertical
+    stack.alignment = .fill
+    stack.spacing = 20
+
+    view.addSubview(stack)
+
+    NSLayoutConstraint.activate([
+      stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+      stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+      stack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+    ])
+  }
+
+  @objc
+  private func closeTapped() {
+    dismiss(animated: true)
   }
 }
