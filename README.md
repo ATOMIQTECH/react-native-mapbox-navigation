@@ -18,18 +18,20 @@ Native Mapbox turn-by-turn navigation for Expo apps on iOS and Android.
 # Screenshots
 
 <p align="center">
-  <img src="docs/screenshots/android.png" alt="Android Navigation Screenshot" width="850" />
+  <strong>iOS</strong>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <strong>Android</strong>
 </p>
 
-<br/>
-
 <p align="center">
-  <img src="docs/screenshots/ios.png" alt="iOS Navigation Screenshot" width="850" />
+  <img src="docs/screenshots/ios.png" alt="iOS Navigation Screenshot" width="320" />
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="docs/screenshots/android.png" alt="Android Navigation Screenshot" width="320" />
 </p>
 
 ---
 
-# ❤️ Support Us
+# Support Us
 
 <p align="center">
   <a href="https://ko-fi.com/atomiqlab" target="_blank">
@@ -48,7 +50,7 @@ Native Mapbox turn-by-turn navigation for Expo apps on iOS and Android.
 
 ---
 
-## 📦 Requirements
+## Requirements
 
 - Expo SDK `>=50`
 - iOS `14+`
@@ -58,7 +60,7 @@ Native Mapbox turn-by-turn navigation for Expo apps on iOS and Android.
 
 ---
 
-## 📥 Installation
+## Installation
 
 ```bash
 npm install @atomiqlab/react-native-mapbox-navigation
@@ -66,7 +68,7 @@ npm install @atomiqlab/react-native-mapbox-navigation
 
 ---
 
-## ⚙️ Expo Setup
+## Expo Setup
 
 Add the plugin in your app config (`app.json` or `app.config.js`):
 
@@ -91,7 +93,7 @@ npx expo prebuild --clean
 
 ---
 
-### 🔐 Token Validation Behavior
+### Token Validation Behavior
 
 The config plugin fails fast during prebuild/build when tokens are missing or malformed:
 
@@ -102,7 +104,7 @@ This prevents silent runtime failures and surfaces setup issues early.
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ```ts
 import {
