@@ -11,6 +11,18 @@ Native Mapbox turn-by-turn navigation for Expo apps on iOS and Android.
 - Navigation customization: camera mode/pitch/zoom, theme, map style, and UI visibility toggles.
 - Expo config plugin that applies required Android and iOS native setup.
 
+## Screenshots
+
+![Android](docs/screenshots/android.png)
+![iOS](docs/screenshots/ios.png)
+![Navigation Error Screen](docs/screenshots/navigation-error.png)
+
+## Support Us
+
+[![Support on Ko-fi](docs/imgs/support_me_on_kofi_badge_red.png)](https://ko-fi.com/atomiqlab)
+
+If this package helps your work, support development on Ko-fi.
+
 ## Requirements
 
 - Expo SDK `>=50`
