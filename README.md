@@ -15,7 +15,6 @@ Native Mapbox turn-by-turn navigation for Expo apps on iOS and Android.
 
 ![Android](docs/screenshots/android.png)
 ![iOS](docs/screenshots/ios.png)
-![Navigation Error Screen](docs/screenshots/navigation-error.png)
 
 ## Support Us
 
