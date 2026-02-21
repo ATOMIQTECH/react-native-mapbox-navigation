@@ -2,27 +2,53 @@
 
 Native Mapbox turn-by-turn navigation for Expo apps on iOS and Android.
 
+---
+
 ## Features
 
-- Full-screen native navigation via `startNavigation`.
-- Embedded native navigation UI via `MapboxNavigationView`.
-- Real-time events: location, route progress, banner instruction, arrival, cancel, and error.
-- Runtime controls for mute, voice volume, distance unit, and language.
-- Navigation customization: camera mode/pitch/zoom, theme, map style, and UI visibility toggles.
-- Expo config plugin that applies required Android and iOS native setup.
+- Full-screen native navigation via `startNavigation`
+- Embedded native navigation UI via `MapboxNavigationView`
+- Real-time events: location, route progress, banner instruction, arrival, cancel, and error
+- Runtime controls for mute, voice volume, distance unit, and language
+- Navigation customization: camera mode/pitch/zoom, theme, map style, and UI visibility toggles
+- Expo config plugin that applies required Android and iOS native setup
 
-## Screenshots
+---
 
-![Android](docs/screenshots/android.png)
-![iOS](docs/screenshots/ios.png)
+# Screenshots
 
-## Support Us
+<p align="center">
+  <img src="docs/screenshots/android.png" alt="Android Navigation Screenshot" width="850" />
+</p>
 
-[![Support on Ko-fi](docs/imgs/support_me_on_kofi_badge_red.png)](https://ko-fi.com/atomiqlab)
+<br/>
 
-If this package helps your work, support development on Ko-fi.
+<p align="center">
+  <img src="docs/screenshots/ios.png" alt="iOS Navigation Screenshot" width="850" />
+</p>
 
-## Requirements
+---
+
+# ❤️ Support Us
+
+<p align="center">
+  <a href="https://ko-fi.com/atomiqlab" target="_blank">
+    <img 
+      src="https://storage.ko-fi.com/cdn/kofi6.png?v=3" 
+      alt="Support on Ko-fi"
+      width="260"
+    />
+  </a>
+</p>
+
+<p align="center">
+  If this package helps your work, consider supporting its development.  
+  Your support helps maintain, improve, and expand this project.
+</p>
+
+---
+
+## 📦 Requirements
 
 - Expo SDK `>=50`
 - iOS `14+`
@@ -30,30 +56,32 @@ If this package helps your work, support development on Ko-fi.
   - Public token (`pk...`)
   - Downloads token (`sk...`) with `DOWNLOADS:READ`
 
-## Installation
+---
+
+## 📥 Installation
 
 ```bash
 npm install @atomiqlab/react-native-mapbox-navigation
 ```
 
-## Expo Setup
+---
+
+## ⚙️ Expo Setup
 
 Add the plugin in your app config (`app.json` or `app.config.js`):
 
 ```json
 {
   "expo": {
-    "plugins": [
-      "@atomiqlab/react-native-mapbox-navigation"
-    ]
+    "plugins": ["@atomiqlab/react-native-mapbox-navigation"]
   }
 }
 ```
 
 Set these environment variables:
 
-- `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN` (Mapbox public token)
-- `MAPBOX_DOWNLOADS_TOKEN` (Mapbox downloads token)
+- `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN`
+- `MAPBOX_DOWNLOADS_TOKEN`
 
 Regenerate native projects:
 
@@ -61,17 +89,20 @@ Regenerate native projects:
 npx expo prebuild --clean
 ```
 
-### Token validation behavior
+---
 
-The config plugin now fails fast during prebuild/build when tokens are missing or malformed:
+### 🔐 Token Validation Behavior
+
+The config plugin fails fast during prebuild/build when tokens are missing or malformed:
 
 - Missing/invalid public token (`pk...`)
 - Missing/invalid downloads token (`sk...`)
 
 This prevents silent runtime failures and surfaces setup issues early.
 
+---
 
-## Quick Start
+## 🚀 Quick Start
 
 ```ts
 import {
@@ -99,7 +130,9 @@ await startNavigation({
 const subscriptions = [
   addLocationChangeListener((location) => console.log(location)),
   addRouteProgressChangeListener((progress) => console.log(progress)),
-  addBannerInstructionListener((instruction) => console.log(instruction.primaryText)),
+  addBannerInstructionListener((instruction) =>
+    console.log(instruction.primaryText),
+  ),
   addArriveListener((arrival) => console.log(arrival)),
   addCancelNavigationListener(() => console.log("cancelled")),
   addErrorListener((error) => console.warn(error)),
@@ -109,6 +142,8 @@ const subscriptions = [
 subscriptions.forEach((sub) => sub.remove());
 await stopNavigation();
 ```
+
+---
 
 ## Embedded Navigation View
 
@@ -127,6 +162,10 @@ import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation"
   onError={(error) => console.warn(error.message)}
 />;
 ```
+
+---
+
+## Example
 
 ```tsx
 import React, { useEffect, useMemo, useState } from "react";
@@ -475,9 +514,11 @@ const styles = StyleSheet.create({
 });
 ```
 
+---
+
 ## API Overview
 
-Core functions:
+### Core Functions
 
 - `startNavigation(options)`
 - `stopNavigation()`
@@ -488,7 +529,7 @@ Core functions:
 - `setDistanceUnit(unit)`
 - `setLanguage(language)`
 
-Event listeners:
+### Event Listeners
 
 - `addLocationChangeListener(listener)`
 - `addRouteProgressChangeListener(listener)`
@@ -497,28 +538,22 @@ Event listeners:
 - `addCancelNavigationListener(listener)`
 - `addErrorListener(listener)`
 
-Main `NavigationOptions` fields:
+---
 
-- Route: `destination`, `startOrigin`, `waypoints`, `routeAlternatives`, `shouldSimulateRoute`
-- Camera: `cameraMode`, `cameraPitch`, `cameraZoom`
-- Theme/style: `uiTheme`, `mapStyleUri`, `mapStyleUriDay`, `mapStyleUriNight`
-- Guidance: `distanceUnit`, `language`, `mute`, `voiceVolume`
-- UI toggles: `showsSpeedLimits`, `showsWayNameLabel`, `showsTripProgress`, `showsManeuverView`, `showsActionButtons`
+## ⚠️ Common Error Codes
 
-Full types: `src/MapboxNavigation.types.ts`
+- `MAPBOX_TOKEN_INVALID`
+- `MAPBOX_TOKEN_FORBIDDEN`
+- `MAPBOX_RATE_LIMITED`
+- `ROUTE_FETCH_FAILED`
+- `CURRENT_LOCATION_UNAVAILABLE`
+- `INVALID_COORDINATES`
 
-## Common Error Codes
+Subscribe via `addErrorListener` or `onError` to surface these during development and production diagnostics.
 
-- `MAPBOX_TOKEN_INVALID`: invalid/expired token or unauthorized access
-- `MAPBOX_TOKEN_FORBIDDEN`: token lacks required scopes/permissions
-- `MAPBOX_RATE_LIMITED`: Mapbox rate limit reached
-- `ROUTE_FETCH_FAILED`: route request failed with native details
-- `CURRENT_LOCATION_UNAVAILABLE`: unable to resolve device location
-- `INVALID_COORDINATES`: invalid origin/destination coordinates
-
-Subscribe via `addErrorListener` or `onError` to surface these to developers during testing and production diagnostics.
+---
 
 ## Platform Notes
 
-- Android: `startOrigin` is optional (current location is supported).
-- iOS: `startOrigin` is optional (current location is resolved at runtime with location permission).
+- Android: `startOrigin` optional (current location supported)
+- iOS: `startOrigin` optional (resolved at runtime with location permission)
