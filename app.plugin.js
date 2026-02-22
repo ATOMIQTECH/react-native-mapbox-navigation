@@ -1,6 +1,7 @@
 const {
   withProjectBuildGradle,
   withAppBuildGradle,
+  withSettingsGradle,
   withAndroidManifest,
   withInfoPlist,
   createRunOncePlugin,
@@ -19,6 +20,17 @@ const MAPBOX_REPO_BLOCK = `    maven {
 
 const MAPBOX_TOKEN_LINES = `        def mapboxPublicToken = project.findProperty("MAPBOX_PUBLIC_TOKEN") ?: System.getenv("EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN") ?: ""
         resValue "string", "mapbox_access_token", mapboxPublicToken`;
+
+const MAPBOX_SETTINGS_REPO_BLOCK = `        maven {
+          url = uri("https://api.mapbox.com/downloads/v2/releases/maven")
+          credentials {
+            username = "mapbox"
+            password = providers.gradleProperty("MAPBOX_DOWNLOADS_TOKEN").orElse(System.getenv("MAPBOX_DOWNLOADS_TOKEN") ?: "").get()
+          }
+          authentication {
+            basic(BasicAuthentication)
+          }
+        }`;
 
 const REQUIRED_ANDROID_PERMISSIONS = [
   "android.permission.ACCESS_COARSE_LOCATION",
@@ -115,6 +127,27 @@ function ensureAndroidPermissions(androidManifest) {
   return androidManifest;
 }
 
+function ensureSettingsGradle(src) {
+  let out = src;
+  if (out.includes("https://api.mapbox.com/downloads/v2/releases/maven")) {
+    return out;
+  }
+
+  const drmReposMatch = /dependencyResolutionManagement[\s\S]*?repositories\s*\{/m.exec(
+    out
+  );
+  if (drmReposMatch) {
+    const marker = drmReposMatch[0];
+    out = out.replace(marker, `${marker}\n${MAPBOX_SETTINGS_REPO_BLOCK}\n`);
+    return out;
+  }
+
+  // Fallback for uncommon settings.gradle shapes: append a full block.
+  out += `\n\ndependencyResolutionManagement {\n  repositories {\n${MAPBOX_SETTINGS_REPO_BLOCK}\n  }\n}\n`;
+
+  return out;
+}
+
 function ensureProjectBuildGradle(src) {
   let out = src;
 
@@ -149,6 +182,11 @@ function ensureAppBuildGradle(src) {
 }
 
 function withMapboxNavigationAndroid(config) {
+  config = withSettingsGradle(config, (config) => {
+    config.modResults.contents = ensureSettingsGradle(config.modResults.contents);
+    return config;
+  });
+
   config = withProjectBuildGradle(config, (config) => {
     config.modResults.contents = ensureProjectBuildGradle(
       config.modResults.contents
@@ -210,5 +248,5 @@ const withMapboxNavigation = (config) => {
 module.exports = createRunOncePlugin(
   withMapboxNavigation,
   "react-native-mapbox-navigation-plugin",
-  "1.1.1"
+  "1.1.12"
 );

@@ -6,7 +6,7 @@ import CoreLocation
 import UIKit
 
 class MapboxNavigationView: ExpoView {
-  var startOrigin: [String: Double]? {
+  var startOrigin: [String: Any]? {
     didSet { startNavigationIfReady() }
   }
   var destination: [String: Any]? {
@@ -25,15 +25,28 @@ class MapboxNavigationView: ExpoView {
   var cameraZoom: Double?
   var cameraMode: String = "following"
   var mapStyleUri: String?
+  var mapStyleUriDay: String?
+  var mapStyleUriNight: String?
+  var uiTheme: String = "system"
   var routeAlternatives: Bool = false
   var showsSpeedLimits: Bool = true
   var showsWayNameLabel: Bool = true
+  var showsTripProgress: Bool = true
+  var showsManeuverView: Bool = true
+  var showsActionButtons: Bool = true
+  var showsReportFeedback: Bool = true
+  var showsEndOfRouteFeedback: Bool = true
+  var showsContinuousAlternatives: Bool = true
+  var usesNightStyleWhileInTunnel: Bool = true
+  var routeLineTracksTraversal: Bool = false
+  var annotatesIntersectionsAlongRoute: Bool = false
   var distanceUnit: String = "metric"
   var language: String = "en"
   
   private var navigationViewController: NavigationViewController?
   private var hostViewController: UIViewController?
   private var isRouteCalculationInProgress = false
+  private var warnedUnsupportedOptions = Set<String>()
   
   let onLocationChange = EventDispatcher()
   let onRouteProgressChange = EventDispatcher()
@@ -68,10 +81,10 @@ class MapboxNavigationView: ExpoView {
     }
     guard let origin = startOrigin,
           let dest = destination,
-          let originLat = origin["latitude"],
-          let originLng = origin["longitude"],
-          let destLat = dest["latitude"] as? Double,
-          let destLng = dest["longitude"] as? Double else {
+          let originLat = (origin["latitude"] as? NSNumber)?.doubleValue,
+          let originLng = (origin["longitude"] as? NSNumber)?.doubleValue,
+          let destLat = (dest["latitude"] as? NSNumber)?.doubleValue,
+          let destLng = (dest["longitude"] as? NSNumber)?.doubleValue else {
       return
     }
     
@@ -83,8 +96,8 @@ class MapboxNavigationView: ExpoView {
     // Add intermediate waypoints
     if let intermediateWaypoints = waypoints {
       for wp in intermediateWaypoints {
-        if let lat = wp["latitude"] as? Double,
-           let lng = wp["longitude"] as? Double {
+        if let lat = (wp["latitude"] as? NSNumber)?.doubleValue,
+           let lng = (wp["longitude"] as? NSNumber)?.doubleValue {
           let coord = CLLocationCoordinate2D(latitude: lat, longitude: lng)
           let waypoint = Waypoint(coordinate: coord)
           waypoint.name = wp["name"] as? String
@@ -152,6 +165,73 @@ class MapboxNavigationView: ExpoView {
     NavigationSettings.shared.voiceMuted = mute
     NavigationSettings.shared.voiceVolume = Float(max(0, min(voiceVolume, 1)))
     viewController.showsSpeedLimits = showsSpeedLimits
+    if !showsManeuverView {
+      warnUnsupportedOptionOnce(
+        key: "showsManeuverView",
+        message: "showsManeuverView is currently not supported on embedded iOS navigation and will be ignored."
+      )
+    }
+    if !showsTripProgress {
+      warnUnsupportedOptionOnce(
+        key: "showsTripProgress",
+        message: "showsTripProgress is currently not supported on embedded iOS navigation and will be ignored."
+      )
+    }
+    if !showsActionButtons {
+      warnUnsupportedOptionOnce(
+        key: "showsActionButtons",
+        message: "showsActionButtons is currently not supported on embedded iOS navigation and will be ignored."
+      )
+    }
+    if !showsReportFeedback {
+      warnUnsupportedOptionOnce(
+        key: "showsReportFeedback",
+        message: "showsReportFeedback is currently not supported on embedded iOS navigation and will be ignored."
+      )
+    }
+    if !showsEndOfRouteFeedback {
+      warnUnsupportedOptionOnce(
+        key: "showsEndOfRouteFeedback",
+        message: "showsEndOfRouteFeedback is currently not supported on embedded iOS navigation and will be ignored."
+      )
+    }
+    if !showsContinuousAlternatives {
+      warnUnsupportedOptionOnce(
+        key: "showsContinuousAlternatives",
+        message: "showsContinuousAlternatives is currently not supported on embedded iOS navigation and will be ignored."
+      )
+    }
+    if !usesNightStyleWhileInTunnel {
+      warnUnsupportedOptionOnce(
+        key: "usesNightStyleWhileInTunnel",
+        message: "usesNightStyleWhileInTunnel is currently not supported on embedded iOS navigation and will be ignored."
+      )
+    }
+    if routeLineTracksTraversal {
+      warnUnsupportedOptionOnce(
+        key: "routeLineTracksTraversal",
+        message: "routeLineTracksTraversal is currently not supported on embedded iOS navigation and will be ignored."
+      )
+    }
+    if annotatesIntersectionsAlongRoute {
+      warnUnsupportedOptionOnce(
+        key: "annotatesIntersectionsAlongRoute",
+        message: "annotatesIntersectionsAlongRoute is currently not supported on embedded iOS navigation and will be ignored."
+      )
+    }
+    if !showCancelButton {
+      warnUnsupportedOptionOnce(
+        key: "showCancelButton",
+        message: "showCancelButton is currently not supported for embedded iOS navigation and will be ignored."
+      )
+    }
+    if !showsWayNameLabel {
+      warnUnsupportedOptionOnce(
+        key: "showsWayNameLabel",
+        message: "showsWayNameLabel is currently not supported on embedded iOS navigation and will be ignored."
+      )
+    }
+    applyInterfaceStyle(to: viewController)
     applyCameraConfiguration(to: viewController)
     
     // Find the parent view controller
@@ -224,21 +304,63 @@ class MapboxNavigationView: ExpoView {
   }
 
   private func buildNavigationOptions(navigationService: NavigationService) -> NavigationOptions {
-    guard
-      let styleUri = mapStyleUri?.trimmingCharacters(in: .whitespacesAndNewlines),
-      !styleUri.isEmpty,
-      let styleURL = URL(string: styleUri)
-    else {
+    let dayStyleURL = normalizedStyleURL(
+      primary: mapStyleUriDay,
+      fallback: mapStyleUri
+    )
+    let nightStyleURL = normalizedStyleURL(
+      primary: mapStyleUriNight,
+      fallback: mapStyleUriDay ?? mapStyleUri
+    )
+
+    guard dayStyleURL != nil || nightStyleURL != nil else {
       return NavigationOptions(navigationService: navigationService)
     }
 
     let dayStyle = DayStyle()
-    dayStyle.mapStyleURL = styleURL
+    if let dayStyleURL {
+      dayStyle.mapStyleURL = dayStyleURL
+    }
 
     let nightStyle = NightStyle()
-    nightStyle.mapStyleURL = styleURL
+    if let nightStyleURL {
+      nightStyle.mapStyleURL = nightStyleURL
+    } else if let dayStyleURL {
+      nightStyle.mapStyleURL = dayStyleURL
+    }
 
     return NavigationOptions(styles: [dayStyle, nightStyle], navigationService: navigationService)
+  }
+
+  private func normalizedStyleURL(primary: String?, fallback: String?) -> URL? {
+    let normalizedPrimary = primary?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let normalizedFallback = fallback?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let raw = (normalizedPrimary?.isEmpty == false ? normalizedPrimary : nil)
+      ?? (normalizedFallback?.isEmpty == false ? normalizedFallback : nil)
+
+    guard let raw, let url = URL(string: raw) else {
+      return nil
+    }
+    return url
+  }
+
+  private func applyInterfaceStyle(to viewController: UIViewController) {
+    switch uiTheme.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "light", "day":
+      viewController.overrideUserInterfaceStyle = .light
+    case "dark", "night":
+      viewController.overrideUserInterfaceStyle = .dark
+    default:
+      viewController.overrideUserInterfaceStyle = .unspecified
+    }
+  }
+
+  private func warnUnsupportedOptionOnce(key: String, message: String) {
+    guard !warnedUnsupportedOptions.contains(key) else {
+      return
+    }
+    warnedUnsupportedOptions.insert(key)
+    NSLog("[MapboxNavigationView] \(message)")
   }
 }
 
