@@ -51,6 +51,19 @@ class MapboxNavigationActivity : AppCompatActivity() {
   private var showsTripProgress: Boolean = true
   private var showsManeuverView: Boolean = true
   private var showsActionButtons: Boolean = true
+  private var showsReportFeedback: Boolean = true
+  private var showsEndOfRouteFeedback: Boolean = true
+  private var showEmergencyCallButton: Boolean? = null
+  private var showCancelRouteButton: Boolean? = null
+  private var showRefreshRouteButton: Boolean? = null
+  private var showReportFeedbackButton: Boolean? = null
+  private var showToggleAudioButton: Boolean? = null
+  private var showSearchAlongRouteButton: Boolean? = null
+  private var showStartNavigationButton: Boolean? = null
+  private var showEndNavigationButton: Boolean? = null
+  private var showAlternativeRoutesButton: Boolean? = null
+  private var showStartNavigationFeedbackButton: Boolean? = null
+  private var showEndNavigationFeedbackButton: Boolean? = null
   private var mapStyleUriDay: String? = null
   private var mapStyleUriNight: String? = null
   private var uiTheme: String = "system"
@@ -107,10 +120,23 @@ class MapboxNavigationActivity : AppCompatActivity() {
   private val navigationViewListener = object : NavigationViewListener() {
     override fun onDestinationChanged(destination: Point?) {
       Log.d(TAG, "Destination changed: $destination")
+      destination?.let { point ->
+        MapboxNavigationEventBridge.emit(
+          "onDestinationChanged",
+          mapOf(
+            "latitude" to point.latitude(),
+            "longitude" to point.longitude()
+          )
+        )
+      }
     }
 
     override fun onDestinationPreview() {
       Log.d(TAG, "NavigationView entered destination preview")
+      MapboxNavigationEventBridge.emit(
+        "onDestinationPreview",
+        mapOf("active" to true)
+      )
     }
 
     override fun onRouteFetchFailed(reasons: List<RouterFailure>, routeOptions: RouteOptions) {
@@ -165,6 +191,20 @@ class MapboxNavigationActivity : AppCompatActivity() {
       showsTripProgress = intent.getBooleanExtra("showsTripProgress", true)
       showsManeuverView = intent.getBooleanExtra("showsManeuverView", true)
       showsActionButtons = intent.getBooleanExtra("showsActionButtons", true)
+      showsReportFeedback = intent.getBooleanExtra("showsReportFeedback", true)
+      showsEndOfRouteFeedback = intent.getBooleanExtra("showsEndOfRouteFeedback", true)
+      showEmergencyCallButton = intent.getBooleanExtraOrNull("showEmergencyCallButton")
+      showCancelRouteButton = intent.getBooleanExtraOrNull("showCancelRouteButton")
+      showRefreshRouteButton = intent.getBooleanExtraOrNull("showRefreshRouteButton")
+      showReportFeedbackButton = intent.getBooleanExtraOrNull("showReportFeedbackButton")
+      showToggleAudioButton = intent.getBooleanExtraOrNull("showToggleAudioButton")
+      showSearchAlongRouteButton = intent.getBooleanExtraOrNull("showSearchAlongRouteButton")
+      showStartNavigationButton = intent.getBooleanExtraOrNull("showStartNavigationButton")
+      showEndNavigationButton = intent.getBooleanExtraOrNull("showEndNavigationButton")
+      showAlternativeRoutesButton = intent.getBooleanExtraOrNull("showAlternativeRoutesButton")
+      showStartNavigationFeedbackButton = intent.getBooleanExtraOrNull("showStartNavigationFeedbackButton")
+      showEndNavigationFeedbackButton = intent.getBooleanExtraOrNull("showEndNavigationFeedbackButton")
+      logUnsupportedActionButtonOptionsIfRequested()
       mapStyleUriDay = intent.getStringExtra("mapStyleUriDay")?.trim()?.takeIf { it.isNotEmpty() }
       mapStyleUriNight = intent.getStringExtra("mapStyleUriNight")?.trim()?.takeIf { it.isNotEmpty() }
       uiTheme = intent.getStringExtra("uiTheme")?.trim()?.lowercase() ?: "system"
@@ -300,6 +340,57 @@ class MapboxNavigationActivity : AppCompatActivity() {
     return fromResources
   }
 
+  private fun logUnsupportedActionButtonOptionsIfRequested() {
+    val unsupportedKeys = mutableListOf<String>()
+
+    if (intent.hasExtra("showsReportFeedback")) {
+      unsupportedKeys.add("showsReportFeedback")
+    }
+    if (intent.hasExtra("showsEndOfRouteFeedback")) {
+      unsupportedKeys.add("showsEndOfRouteFeedback")
+    }
+    if (intent.hasExtra("showEmergencyCallButton")) {
+      unsupportedKeys.add("androidActionButtons.showEmergencyCallButton")
+    }
+    if (intent.hasExtra("showCancelRouteButton")) {
+      unsupportedKeys.add("androidActionButtons.showCancelRouteButton")
+    }
+    if (intent.hasExtra("showRefreshRouteButton")) {
+      unsupportedKeys.add("androidActionButtons.showRefreshRouteButton")
+    }
+    if (intent.hasExtra("showReportFeedbackButton")) {
+      unsupportedKeys.add("androidActionButtons.showReportFeedbackButton")
+    }
+    if (intent.hasExtra("showToggleAudioButton")) {
+      unsupportedKeys.add("androidActionButtons.showToggleAudioButton")
+    }
+    if (intent.hasExtra("showSearchAlongRouteButton")) {
+      unsupportedKeys.add("androidActionButtons.showSearchAlongRouteButton")
+    }
+    if (intent.hasExtra("showStartNavigationButton")) {
+      unsupportedKeys.add("androidActionButtons.showStartNavigationButton")
+    }
+    if (intent.hasExtra("showEndNavigationButton")) {
+      unsupportedKeys.add("androidActionButtons.showEndNavigationButton")
+    }
+    if (intent.hasExtra("showAlternativeRoutesButton")) {
+      unsupportedKeys.add("androidActionButtons.showAlternativeRoutesButton")
+    }
+    if (intent.hasExtra("showStartNavigationFeedbackButton")) {
+      unsupportedKeys.add("androidActionButtons.showStartNavigationFeedbackButton")
+    }
+    if (intent.hasExtra("showEndNavigationFeedbackButton")) {
+      unsupportedKeys.add("androidActionButtons.showEndNavigationFeedbackButton")
+    }
+
+    if (unsupportedKeys.isNotEmpty()) {
+      Log.w(
+        TAG,
+        "Ignoring unsupported Android Drop-In options for current SDK surface: ${unsupportedKeys.joinToString(", ")}"
+      )
+    }
+  }
+
   private fun Intent.getDoubleExtraOrNull(key: String): Double? {
     if (!hasExtra(key)) {
       return null
@@ -309,6 +400,13 @@ class MapboxNavigationActivity : AppCompatActivity() {
       return null
     }
     return value
+  }
+
+  private fun Intent.getBooleanExtraOrNull(key: String): Boolean? {
+    if (!hasExtra(key)) {
+      return null
+    }
+    return getBooleanExtra(key, false)
   }
 
   private fun validateLatLng(latitude: Double, longitude: Double, label: String) {

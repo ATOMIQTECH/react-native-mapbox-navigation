@@ -16,8 +16,11 @@ class MapboxNavigationModule : Module() {
       "onRouteProgressChange",
       "onBannerInstruction",
       "onArrive",
+      "onDestinationPreview",
+      "onDestinationChanged",
       "onCancelNavigation",
-      "onError"
+      "onError",
+      "onBottomSheetActionPress"
     )
 
     OnCreate {
@@ -77,11 +80,14 @@ class MapboxNavigationModule : Module() {
         "onRouteProgressChange",
         "onBannerInstruction",
         "onArrive",
+        "onDestinationPreview",
+        "onDestinationChanged",
         "onCancelNavigation",
-        "onError"
+        "onError",
+        "onBottomSheetActionPress"
       )
 
-      Prop("startOrigin") { view: MapboxNavigationView, origin: Map<String, Double> ->
+      Prop("startOrigin") { view: MapboxNavigationView, origin: Map<String, Any>? ->
         view.setStartOrigin(origin)
       }
 
@@ -161,6 +167,34 @@ class MapboxNavigationModule : Module() {
         view.setShowsActionButtons(showsActionButtons)
       }
 
+      Prop("showsReportFeedback") { view: MapboxNavigationView, showsReportFeedback: Boolean ->
+        view.setShowsReportFeedback(showsReportFeedback)
+      }
+
+      Prop("showsEndOfRouteFeedback") { view: MapboxNavigationView, showsEndOfRouteFeedback: Boolean ->
+        view.setShowsEndOfRouteFeedback(showsEndOfRouteFeedback)
+      }
+
+      Prop("showsContinuousAlternatives") { view: MapboxNavigationView, showsContinuousAlternatives: Boolean ->
+        view.setShowsContinuousAlternatives(showsContinuousAlternatives)
+      }
+
+      Prop("usesNightStyleWhileInTunnel") { view: MapboxNavigationView, usesNightStyleWhileInTunnel: Boolean ->
+        view.setUsesNightStyleWhileInTunnel(usesNightStyleWhileInTunnel)
+      }
+
+      Prop("routeLineTracksTraversal") { view: MapboxNavigationView, routeLineTracksTraversal: Boolean ->
+        view.setRouteLineTracksTraversal(routeLineTracksTraversal)
+      }
+
+      Prop("annotatesIntersectionsAlongRoute") { view: MapboxNavigationView, annotatesIntersectionsAlongRoute: Boolean ->
+        view.setAnnotatesIntersectionsAlongRoute(annotatesIntersectionsAlongRoute)
+      }
+
+      Prop("androidActionButtons") { view: MapboxNavigationView, androidActionButtons: Map<String, Any>? ->
+        view.setAndroidActionButtons(androidActionButtons)
+      }
+
       Prop("distanceUnit") { view: MapboxNavigationView, unit: String ->
         view.setDistanceUnit(unit)
       }
@@ -200,12 +234,29 @@ class MapboxNavigationModule : Module() {
     val mapStyleUriDay = (options["mapStyleUriDay"] as? String) ?: ""
     val mapStyleUriNight = (options["mapStyleUriNight"] as? String) ?: ""
     val uiTheme = (options["uiTheme"] as? String) ?: "system"
-    val routeAlternatives = (options["routeAlternatives"] as? Boolean) ?: false
+    val showsContinuousAlternatives = options["showsContinuousAlternatives"] as? Boolean
+    val routeAlternatives = (options["routeAlternatives"] as? Boolean)
+      ?: showsContinuousAlternatives
+      ?: false
     val showsSpeedLimits = (options["showsSpeedLimits"] as? Boolean) ?: true
     val showsWayNameLabel = (options["showsWayNameLabel"] as? Boolean) ?: true
     val showsTripProgress = (options["showsTripProgress"] as? Boolean) ?: true
     val showsManeuverView = (options["showsManeuverView"] as? Boolean) ?: true
     val showsActionButtons = (options["showsActionButtons"] as? Boolean) ?: true
+    val showsReportFeedback = options["showsReportFeedback"] as? Boolean
+    val showsEndOfRouteFeedback = options["showsEndOfRouteFeedback"] as? Boolean
+    val androidActionButtons = options["androidActionButtons"] as? Map<*, *>
+    val showEmergencyCallButton = androidActionButtons?.get("showEmergencyCallButton") as? Boolean
+    val showCancelRouteButton = androidActionButtons?.get("showCancelRouteButton") as? Boolean
+    val showRefreshRouteButton = androidActionButtons?.get("showRefreshRouteButton") as? Boolean
+    val showReportFeedbackButton = androidActionButtons?.get("showReportFeedbackButton") as? Boolean
+    val showToggleAudioButton = androidActionButtons?.get("showToggleAudioButton") as? Boolean
+    val showSearchAlongRouteButton = androidActionButtons?.get("showSearchAlongRouteButton") as? Boolean
+    val showStartNavigationButton = androidActionButtons?.get("showStartNavigationButton") as? Boolean
+    val showEndNavigationButton = androidActionButtons?.get("showEndNavigationButton") as? Boolean
+    val showAlternativeRoutesButton = androidActionButtons?.get("showAlternativeRoutesButton") as? Boolean
+    val showStartNavigationFeedbackButton = androidActionButtons?.get("showStartNavigationFeedbackButton") as? Boolean
+    val showEndNavigationFeedbackButton = androidActionButtons?.get("showEndNavigationFeedbackButton") as? Boolean
     val waypoints = parseCoordinatesList(options["waypoints"] as? List<*>)
 
     activity.runOnUiThread {
@@ -239,6 +290,19 @@ class MapboxNavigationModule : Module() {
         putExtra("showsTripProgress", showsTripProgress)
         putExtra("showsManeuverView", showsManeuverView)
         putExtra("showsActionButtons", showsActionButtons)
+        showsReportFeedback?.let { putExtra("showsReportFeedback", it) }
+        showsEndOfRouteFeedback?.let { putExtra("showsEndOfRouteFeedback", it) }
+        showEmergencyCallButton?.let { putExtra("showEmergencyCallButton", it) }
+        showCancelRouteButton?.let { putExtra("showCancelRouteButton", it) }
+        showRefreshRouteButton?.let { putExtra("showRefreshRouteButton", it) }
+        showReportFeedbackButton?.let { putExtra("showReportFeedbackButton", it) }
+        showToggleAudioButton?.let { putExtra("showToggleAudioButton", it) }
+        showSearchAlongRouteButton?.let { putExtra("showSearchAlongRouteButton", it) }
+        showStartNavigationButton?.let { putExtra("showStartNavigationButton", it) }
+        showEndNavigationButton?.let { putExtra("showEndNavigationButton", it) }
+        showAlternativeRoutesButton?.let { putExtra("showAlternativeRoutesButton", it) }
+        showStartNavigationFeedbackButton?.let { putExtra("showStartNavigationFeedbackButton", it) }
+        showEndNavigationFeedbackButton?.let { putExtra("showEndNavigationFeedbackButton", it) }
         if (waypoints.isNotEmpty()) {
           putExtra("waypointLats", waypoints.map { it.first }.toDoubleArray())
           putExtra("waypointLngs", waypoints.map { it.second }.toDoubleArray())
