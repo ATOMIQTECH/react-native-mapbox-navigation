@@ -248,5 +248,5 @@ const withMapboxNavigation = (config) => {
 module.exports = createRunOncePlugin(
   withMapboxNavigation,
   "react-native-mapbox-navigation-plugin",
-  "1.1.12"
+  "1.1.6"
 );

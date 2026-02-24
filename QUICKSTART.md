@@ -1,5 +1,7 @@
 # Quick Start
 
+Current package version: `1.1.6`
+
 ## 1. Install
 
 ```bash

@@ -1,5 +1,4 @@
-import { MapboxNavigationView } from '@atomiqlab/react-native-mapbox-navigation';
-import { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Platform,
   Pressable,
@@ -7,216 +6,545 @@ import {
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  addArriveListener,
+  addBannerInstructionListener,
+  addBottomSheetActionPressListener,
+  addCancelNavigationListener,
+  addDestinationChangedListener,
+  addDestinationPreviewListener,
+  addErrorListener,
+  addJourneyDataChangeListener,
+  addLocationChangeListener,
+  addRouteProgressChangeListener,
+  getNavigationSettings,
+  isNavigating,
+  setDistanceUnit,
+  setLanguage,
+  setMuted,
+  setVoiceVolume,
+  startNavigation,
+  stopNavigation,
+  type BottomSheetOptions,
+  type Waypoint,
+} from "@atomiqlab/react-native-mapbox-navigation";
 
-type EventLog = {
-  id: number;
-  message: string;
-};
-
-const START_ORIGIN = {
+const START: Waypoint = {
   latitude: 37.7749,
   longitude: -122.4194,
+  name: "San Francisco",
 };
-
-const DESTINATION = {
+const DEST: Waypoint = {
   latitude: 37.7847,
   longitude: -122.4073,
-  name: 'Destination',
+  name: "Downtown",
 };
+const WAYPOINTS: Waypoint[] = [
+  { latitude: 37.7793, longitude: -122.4129, name: "WP1" },
+];
 
-const WAYPOINTS = [{ latitude: 37.7793, longitude: -122.4129 }];
+function coord(value: unknown): string {
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toFixed(5) : "n/a";
+}
 
 export default function NavigationTestScreen() {
-  const [sessionKey, setSessionKey] = useState(0);
-  const [simulateRoute, setSimulateRoute] = useState(true);
-  const [mute, setMute] = useState(false);
-  const [logs, setLogs] = useState<EventLog[]>([]);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [navigating, setNavigating] = useState(false);
 
-  const canRenderNavigation = Platform.OS === 'ios' || Platform.OS === 'android';
+  const [simulate, setSimulate] = useState(true);
+  const [mute, setMuteState] = useState(false);
+  const [unit, setUnit] = useState<"metric" | "imperial">("metric");
+  const [language, setLanguageState] = useState("en");
+  const [voiceVolume, setVoiceVolumeState] = useState("1");
 
-  const addLog = (message: string) => {
-    setLogs((prev) => [{ id: Date.now(), message }, ...prev].slice(0, 12));
+  const [showsTripProgress, setShowsTripProgress] = useState(true);
+  const [showsManeuverView, setShowsManeuverView] = useState(true);
+  const [showsActionButtons, setShowsActionButtons] = useState(true);
+  const [bottomSheetEnabled, setBottomSheetEnabled] = useState(true);
+  const [routeAlternatives, setRouteAlternatives] = useState(true);
+  const [showCurrentStreet, setShowCurrentStreet] = useState(true);
+  const [showRemainingDistance, setShowRemainingDistance] = useState(true);
+  const [showRemainingDuration, setShowRemainingDuration] = useState(true);
+  const [showETA, setShowETA] = useState(true);
+  const [showCompletionPercent, setShowCompletionPercent] = useState(true);
+  const [startInFlight, setStartInFlight] = useState(false);
+  const lastLogRef = useRef({
+    location: 0,
+    progress: 0,
+    journey: 0,
+    conflict: 0,
+  });
+
+  const pushLog = (line: string) => {
+    setLogs((prev) =>
+      [`${new Date().toLocaleTimeString()}  ${line}`, ...prev].slice(0, 160),
+    );
   };
 
-  const locationDebugText = useMemo(() => {
-    return logs.find((entry) => entry.message.startsWith('location:'))?.message ?? 'No location updates yet.';
-  }, [logs]);
+  useEffect(() => {
+    const s1 = addLocationChangeListener((e) => {
+      const now = Date.now();
+      if (now - lastLogRef.current.location < 1200) {
+        return;
+      }
+      lastLogRef.current.location = now;
+      pushLog(`location: ${coord(e.latitude)}, ${coord(e.longitude)}`);
+    });
+    const s2 = addRouteProgressChangeListener((e) => {
+      const now = Date.now();
+      if (now - lastLogRef.current.progress < 1200) {
+        return;
+      }
+      lastLogRef.current.progress = now;
+      const pct = Number(((e?.fractionTraveled ?? 0) * 100).toFixed(1));
+      pushLog(
+        `progress: ${pct}% rem=${Math.round(e?.distanceRemaining ?? 0)}m`,
+      );
+    });
+    const s3 = addJourneyDataChangeListener((e) => {
+      const now = Date.now();
+      if (now - lastLogRef.current.journey < 1200) {
+        return;
+      }
+      lastLogRef.current.journey = now;
+      if (e?.currentStreet) {
+        pushLog(`journey: street=${e.currentStreet}`);
+      }
+    });
+    const s4 = addBannerInstructionListener((e) =>
+      pushLog(`banner: ${e?.primaryText ?? "n/a"}`),
+    );
+    const s5 = addArriveListener((e) =>
+      pushLog(`arrive: ${e?.name ?? "destination"}`),
+    );
+    const s6 = addCancelNavigationListener(() => pushLog("cancelled"));
+    const s7 = addDestinationPreviewListener(() =>
+      pushLog("destination preview (android)"),
+    );
+    const s8 = addDestinationChangedListener((e) =>
+      pushLog(
+        `destination changed: ${coord(e.latitude)}, ${coord(e.longitude)}`,
+      ),
+    );
+    const s9 = addBottomSheetActionPressListener((e) =>
+      pushLog(`sheet action: ${e?.actionId}`),
+    );
+    const s10 = addErrorListener((e) =>
+      {
+        if (e?.code === "NAVIGATION_SESSION_CONFLICT") {
+          const now = Date.now();
+          if (now - lastLogRef.current.conflict < 2500) {
+            return;
+          }
+          lastLogRef.current.conflict = now;
+        }
+        pushLog(`error: [${e?.code ?? "UNKNOWN"}] ${e?.message ?? "unknown"}`);
+      },
+    );
 
-  if (!canRenderNavigation) {
+    (async () => {
+      try {
+        setNavigating(await isNavigating());
+      } catch {
+        setNavigating(false);
+      }
+    })();
+
+    return () => {
+      s1.remove();
+      s2.remove();
+      s3.remove();
+      s4.remove();
+      s5.remove();
+      s6.remove();
+      s7.remove();
+      s8.remove();
+      s9.remove();
+      s10.remove();
+    };
+  }, []);
+
+  const canRun = useMemo(
+    () => Platform.OS === "ios" || Platform.OS === "android",
+    [],
+  );
+  if (!canRun) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.infoCard}>
-          <Text style={styles.title}>Mapbox Navigation Test</Text>
-          <Text style={styles.subtitle}>
-            This screen is native-only. Run on iOS or Android to test our custom Mapbox Navigation module.
-          </Text>
-        </View>
+      <SafeAreaView style={styles.center}>
+        <Text style={styles.title}>Run this on iOS/Android.</Text>
       </SafeAreaView>
     );
   }
 
+  const fullScreenBottomSheet: BottomSheetOptions = {
+    enabled: bottomSheetEnabled,
+    mode: "customNative",
+    initialState: "hidden",
+    revealOnNativeBannerGesture: true,
+    revealGestureHotzoneHeight: 100,
+    revealGestureRightExclusionWidth: 80,
+    collapsedHeight: 118,
+    expandedHeight: 340,
+    showsTripProgress,
+    showsManeuverView,
+    showsActionButtons,
+    showCurrentStreet,
+    showRemainingDistance,
+    showRemainingDuration,
+    showETA,
+    showCompletionPercent,
+    overlayLocationUpdateIntervalMs: 350,
+    overlayProgressUpdateIntervalMs: 350,
+    showHandle: true,
+    enableTapToToggle: true,
+    showDefaultContent: true,
+    backgroundColor: "#0f172a",
+    handleColor: "#93c5fd",
+    primaryTextColor: "#ffffff",
+    secondaryTextColor: "#bfdbfe",
+    actionButtonBackgroundColor: "#2563eb",
+    actionButtonTextColor: "#ffffff",
+    actionButtonCornerRadius: 12,
+    actionButtonBorderColor: "#1d4ed8",
+    actionButtonBorderWidth: 1,
+    secondaryActionButtonBackgroundColor: "#1e293b",
+    secondaryActionButtonTextColor: "#bfdbfe",
+    actionButtonTitle: "End Navigation",
+    secondaryActionButtonTitle: "Support",
+    primaryActionButtonBehavior: "stopNavigation",
+    secondaryActionButtonBehavior: "emitEvent",
+    actionButtonsBottomPadding: 2,
+    quickActions: [
+      { id: "overview", label: "Overview", variant: "secondary" },
+      { id: "recenter", label: "Recenter", variant: "ghost" },
+    ],
+    quickActionBackgroundColor: "#1d4ed8",
+    quickActionTextColor: "#ffffff",
+    quickActionSecondaryBackgroundColor: "#0f172a",
+    quickActionSecondaryTextColor: "#bfdbfe",
+    quickActionGhostTextColor: "#93c5fd",
+    quickActionBorderColor: "#334155",
+    quickActionBorderWidth: 1,
+    quickActionCornerRadius: 12,
+    builtInQuickActions: ["overview", "recenter", "toggleMute", "stop"],
+    headerTitle: "Trip",
+    headerSubtitle: "Hidden until upward swipe from bottom-zone",
+    headerBadgeText: Platform.OS.toUpperCase(),
+  };
+
+  const fullScreenOptions = {
+    startOrigin: START,
+    destination: DEST,
+    waypoints: WAYPOINTS,
+    shouldSimulateRoute: simulate,
+    routeAlternatives,
+    mute,
+    voiceVolume: Math.max(0, Math.min(Number(voiceVolume) || 1, 1)),
+    distanceUnit: unit,
+    language: language.trim() || "en",
+    bottomSheet: fullScreenBottomSheet,
+    showsTripProgress,
+    showsManeuverView,
+    showsActionButtons,
+    showsSpeedLimits: true,
+    showsWayNameLabel: true,
+  } as const;
+
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.topControls}>
-        <Text style={styles.title}>Mapbox Navigation Test</Text>
-        <Text style={styles.subtitle}>Custom Native Module</Text>
-        <Text style={styles.subtitle}>
-          Start: {START_ORIGIN.latitude.toFixed(4)}, {START_ORIGIN.longitude.toFixed(4)}
+      <ScrollView contentContainerStyle={styles.content}>
+        <Text style={styles.title}>Navigation Full Feature Test</Text>
+        <Text style={styles.status}>Platform: {Platform.OS}</Text>
+        <Text style={styles.status}>
+          Status: {navigating ? "Full-screen active" : "Idle"}
         </Text>
-        <Text style={styles.subtitle}>
-          End: {DESTINATION.latitude.toFixed(4)}, {DESTINATION.longitude.toFixed(4)}
+        <Text style={styles.status}>
+          Embedded mode removed. This screen now tests full-screen navigation only.
         </Text>
-        <View style={styles.switchRow}>
-          <Text style={styles.switchLabel}>Simulate route</Text>
-          <Switch value={simulateRoute} onValueChange={setSimulateRoute} />
-        </View>
-        <View style={styles.switchRow}>
-          <Text style={styles.switchLabel}>Mute voice</Text>
-          <Switch value={mute} onValueChange={setMute} />
-        </View>
-        <Pressable
-          style={styles.restartButton}
-          onPress={() => {
-            setSessionKey((value) => value + 1);
-            addLog('session restarted');
-          }}
-        >
-          <Text style={styles.restartButtonText}>Restart Navigation Session</Text>
-        </Pressable>
-      </View>
 
-      <View style={styles.navigationContainer}>
-        <MapboxNavigationView
-          key={sessionKey}
-          style={styles.navigation}
-          startOrigin={START_ORIGIN}
-          destination={DESTINATION}
-          waypoints={WAYPOINTS}
-          shouldSimulateRoute={simulateRoute}
-          showCancelButton={true}
-          distanceUnit="metric"
-          language="en"
-          mute={mute}
-          onLocationChange={(location) => {
-            addLog(`location: ${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}`);
-          }}
-          onRouteProgressChange={(progress) => {
-            addLog(`progress: ${(progress.fractionTraveled * 100).toFixed(1)}%`);
-          }}
-          onArrive={(point) => {
-            addLog(`arrived: ${point.name ?? `index ${point.index ?? '-'}`}`);
-          }}
-          onCancelNavigation={() => {
-            addLog('navigation canceled');
-          }}
-          onError={(error) => {
-            addLog(`error: ${error.message ?? 'unknown error'}`);
-          }}
-        />
-      </View>
+        <View style={styles.row}>
+          <Pressable
+            style={styles.btn}
+            onPress={async () => {
+              if (startInFlight) {
+                pushLog("startNavigation skipped: start already in progress");
+                return;
+              }
+              try {
+                if (await isNavigating()) {
+                  pushLog("startNavigation skipped: a session is already active");
+                  setNavigating(true);
+                  return;
+                }
+                setStartInFlight(true);
+                await startNavigation(fullScreenOptions);
+                setNavigating(true);
+                pushLog("startNavigation ok");
+              } catch (e: any) {
+                pushLog(`startNavigation failed: ${e?.message ?? "unknown"}`);
+              } finally {
+                setStartInFlight(false);
+              }
+            }}
+          >
+            <Text style={styles.btnText}>Start Full-screen</Text>
+          </Pressable>
+          <Pressable
+            style={styles.btn}
+            onPress={async () => {
+              try {
+                await stopNavigation();
+                setNavigating(false);
+                pushLog("stopNavigation ok");
+              } catch (e: any) {
+                pushLog(`stopNavigation failed: ${e?.message ?? "unknown"}`);
+              }
+            }}
+          >
+            <Text style={styles.btnText}>Stop Full-screen</Text>
+          </Pressable>
+        </View>
 
-      <View style={styles.logContainer}>
-        <Text style={styles.logTitle}>Latest location</Text>
-        <Text style={styles.logText}>{locationDebugText}</Text>
-        <Text style={styles.logTitle}>Event log</Text>
-        <ScrollView contentContainerStyle={styles.logList}>
-          {logs.length === 0 ? <Text style={styles.logText}>No events yet.</Text> : null}
-          {logs.map((entry) => (
-            <Text key={entry.id} style={styles.logText}>
-              {entry.message}
+        <View style={styles.row}>
+          <Pressable
+            style={styles.btn}
+            onPress={async () =>
+              pushLog(`isNavigating: ${await isNavigating()}`)
+            }
+          >
+            <Text style={styles.btnText}>isNavigating</Text>
+          </Pressable>
+          <Pressable
+            style={styles.btn}
+            onPress={async () =>
+              pushLog(JSON.stringify(await getNavigationSettings()))
+            }
+          >
+            <Text style={styles.btnText}>getNavigationSettings</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.card}>
+          <Row
+            label="Simulate route"
+            value={simulate}
+            onValueChange={setSimulate}
+          />
+          <Row label="Mute" value={mute} onValueChange={setMuteState} />
+          <Row
+            label="Bottom sheet enabled"
+            value={bottomSheetEnabled}
+            onValueChange={setBottomSheetEnabled}
+          />
+          <Row
+            label="Route alternatives"
+            value={routeAlternatives}
+            onValueChange={setRouteAlternatives}
+          />
+          <Row
+            label="Trip progress"
+            value={showsTripProgress}
+            onValueChange={setShowsTripProgress}
+          />
+          <Row
+            label="Maneuver view"
+            value={showsManeuverView}
+            onValueChange={setShowsManeuverView}
+          />
+          <Row
+            label="Action buttons"
+            value={showsActionButtons}
+            onValueChange={setShowsActionButtons}
+          />
+          <Row
+            label="Current street"
+            value={showCurrentStreet}
+            onValueChange={setShowCurrentStreet}
+          />
+          <Row
+            label="Remaining distance"
+            value={showRemainingDistance}
+            onValueChange={setShowRemainingDistance}
+          />
+          <Row
+            label="Remaining duration"
+            value={showRemainingDuration}
+            onValueChange={setShowRemainingDuration}
+          />
+          <Row label="ETA" value={showETA} onValueChange={setShowETA} />
+          <Row
+            label="Completion percent"
+            value={showCompletionPercent}
+            onValueChange={setShowCompletionPercent}
+          />
+        </View>
+
+        <View style={styles.card}>
+          <LabelInput
+            label="Language"
+            value={language}
+            onChangeText={setLanguageState}
+          />
+          <LabelInput
+            label="Voice volume (0..1)"
+            value={voiceVolume}
+            onChangeText={setVoiceVolumeState}
+            keyboardType="decimal-pad"
+          />
+          <View style={styles.row}>
+            <Pressable
+              style={styles.btn}
+              onPress={async () => {
+                const next = !mute;
+                await setMuted(next);
+                setMuteState(next);
+                pushLog(`setMuted(${next})`);
+              }}
+            >
+              <Text style={styles.btnText}>setMuted</Text>
+            </Pressable>
+            <Pressable
+              style={styles.btn}
+              onPress={async () => {
+                const vol = Math.max(0, Math.min(Number(voiceVolume) || 1, 1));
+                await setVoiceVolume(vol);
+                pushLog(`setVoiceVolume(${vol})`);
+              }}
+            >
+              <Text style={styles.btnText}>setVoiceVolume</Text>
+            </Pressable>
+          </View>
+          <View style={styles.row}>
+            <Pressable
+              style={styles.btn}
+              onPress={async () => {
+                await setDistanceUnit("metric");
+                setUnit("metric");
+                pushLog("setDistanceUnit(metric)");
+              }}
+            >
+              <Text style={styles.btnText}>Metric</Text>
+            </Pressable>
+            <Pressable
+              style={styles.btn}
+              onPress={async () => {
+                await setDistanceUnit("imperial");
+                setUnit("imperial");
+                pushLog("setDistanceUnit(imperial)");
+              }}
+            >
+              <Text style={styles.btnText}>Imperial</Text>
+            </Pressable>
+            <Pressable
+              style={styles.btn}
+              onPress={async () => {
+                await setLanguage(language.trim() || "en");
+                pushLog(`setLanguage(${language.trim() || "en"})`);
+              }}
+            >
+              <Text style={styles.btnText}>setLanguage</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.logTitle}>Logs</Text>
+          {logs.map((line, i) => (
+            <Text key={`${line}-${i}`} style={styles.logText}>
+              {line}
             </Text>
           ))}
-        </ScrollView>
-      </View>
+        </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
+function Row({
+  label,
+  value,
+  onValueChange,
+}: {
+  label: string;
+  value: boolean;
+  onValueChange: (v: boolean) => void;
+}) {
+  return (
+    <View style={styles.rowBetween}>
+      <Text style={styles.label}>{label}</Text>
+      <Switch value={value} onValueChange={onValueChange} />
+    </View>
+  );
+}
+
+function LabelInput({
+  label,
+  value,
+  onChangeText,
+  keyboardType,
+}: {
+  label: string;
+  value: string;
+  onChangeText: (v: string) => void;
+  keyboardType?: "default" | "decimal-pad";
+}) {
+  return (
+    <View style={styles.inputWrap}>
+      <Text style={styles.label}>{label}</Text>
+      <TextInput
+        style={styles.input}
+        value={value}
+        onChangeText={onChangeText}
+        keyboardType={keyboardType}
+      />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: {
+  container: { flex: 1, backgroundColor: "#0b1020" },
+  center: {
     flex: 1,
-    backgroundColor: '#0f172a',
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0b1020",
   },
-  topControls: {
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 10,
-    gap: 6,
+  content: { padding: 12, gap: 10, paddingBottom: 28 },
+  title: { color: "#fff", fontSize: 20, fontWeight: "800" },
+  status: { color: "#9cc7ff", fontSize: 12 },
+  card: { backgroundColor: "#131a2d", borderRadius: 10, padding: 10, gap: 8 },
+  row: { flexDirection: "row", gap: 8, alignItems: "center" },
+  rowBetween: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
-  title: {
-    color: '#f8fafc',
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  subtitle: {
-    color: '#cbd5e1',
-    fontSize: 12,
-  },
-  switchRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 2,
-  },
-  switchLabel: {
-    color: '#f1f5f9',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  restartButton: {
-    alignItems: 'center',
-    backgroundColor: '#0ea5e9',
+  btn: {
+    flex: 1,
+    backgroundColor: "#2563eb",
     borderRadius: 10,
-    marginTop: 4,
-    paddingHorizontal: 14,
     paddingVertical: 10,
+    paddingHorizontal: 10,
+    alignItems: "center",
   },
-  restartButtonText: {
-    color: '#082f49',
-    fontWeight: '700',
-  },
-  navigationContainer: {
-    flex: 1,
-    marginHorizontal: 12,
-    overflow: 'hidden',
-    borderRadius: 12,
-  },
-  navigation: {
-    flex: 1,
-  },
-  logContainer: {
-    backgroundColor: '#111827',
-    borderTopColor: '#1f2937',
-    borderTopWidth: 1,
-    gap: 4,
-    maxHeight: 190,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  logList: {
-    gap: 4,
-    paddingBottom: 8,
-  },
-  logTitle: {
-    color: '#93c5fd',
-    fontSize: 12,
-    fontWeight: '700',
-    marginTop: 2,
-    textTransform: 'uppercase',
-  },
-  logText: {
-    color: '#e5e7eb',
-    fontSize: 12,
-  },
-  infoCard: {
-    backgroundColor: '#111827',
-    borderColor: '#1f2937',
+  btnText: { color: "#fff", fontSize: 12, fontWeight: "700" },
+  label: { color: "#dbeafe", fontSize: 12, fontWeight: "600" },
+  inputWrap: { gap: 4 },
+  input: {
+    backgroundColor: "#0e1426",
+    borderColor: "#2b3a5d",
     borderWidth: 1,
-    borderRadius: 12,
-    margin: 16,
-    padding: 16,
+    borderRadius: 8,
+    color: "#fff",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 12,
   },
+  logTitle: { color: "#93c5fd", fontSize: 12, fontWeight: "700" },
+  logText: { color: "#e5e7eb", fontSize: 11 },
 });

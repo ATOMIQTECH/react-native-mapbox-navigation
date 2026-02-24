@@ -1,5 +1,5 @@
 import { requireNativeModule, requireNativeViewManager } from "expo-modules-core";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View, ViewProps } from "react-native";
 
 import type {
@@ -8,6 +8,7 @@ import type {
   BottomSheetActionEvent,
   DestinationChangedEvent,
   DestinationPreviewEvent,
+  JourneyData,
   LocationUpdate,
   MapboxNavigationModule as MapboxNavigationModuleType,
   MapboxNavigationViewProps,
@@ -139,6 +140,17 @@ function normalizeNavigationOptions(options: NavigationOptions): NavigationOptio
     }
   }
 
+  let normalizedBottomSheet = options.bottomSheet;
+  if (Platform.OS === "ios" && normalizedBottomSheet?.mode === "overlay") {
+    console.warn(
+      "[react-native-mapbox-navigation] iOS full-screen startNavigation() does not support React overlay mode. Mapping bottomSheet.mode='overlay' to 'customNative'.",
+    );
+    normalizedBottomSheet = {
+      ...normalizedBottomSheet,
+      mode: "customNative",
+    };
+  }
+
   return {
     ...options,
     startOrigin: options.startOrigin
@@ -155,6 +167,7 @@ function normalizeNavigationOptions(options: NavigationOptions): NavigationOptio
     mapStyleUri: options.mapStyleUri?.trim() || options.mapStyleUri,
     mapStyleUriDay: options.mapStyleUriDay?.trim() || options.mapStyleUriDay,
     mapStyleUriNight: options.mapStyleUriNight?.trim() || options.mapStyleUriNight,
+    bottomSheet: normalizedBottomSheet,
   };
 }
 
@@ -229,6 +242,14 @@ function normalizeViewProps(
         }
       }
     : undefined;
+  const wrappedOnJourneyDataChange = props.onJourneyDataChange
+    ? (event: unknown) => {
+        const payload = unwrapNativeEventPayload<JourneyData>(event);
+        if (payload) {
+          props.onJourneyDataChange?.(payload);
+        }
+      }
+    : undefined;
   const wrappedOnBannerInstruction = props.onBannerInstruction
     ? (event: unknown) => {
         const payload = unwrapNativeEventPayload<BannerInstruction>(event);
@@ -293,6 +314,7 @@ function normalizeViewProps(
     bottomSheet: undefined,
     onLocationChange: wrappedOnLocationChange,
     onRouteProgressChange: wrappedOnRouteProgressChange,
+    onJourneyDataChange: wrappedOnJourneyDataChange,
     onBannerInstruction: wrappedOnBannerInstruction,
     onArrive: wrappedOnArrive,
     onDestinationPreview: wrappedOnDestinationPreview,
@@ -427,6 +449,20 @@ export function addRouteProgressChangeListener(
 }
 
 /**
+ * Subscribe to aggregated journey data (location + progress + instruction) for custom UI.
+ */
+export function addJourneyDataChangeListener(
+  listener: (data: JourneyData) => void,
+): Subscription {
+  return emitter.addListener("onJourneyDataChange", (event: unknown) => {
+    const payload = unwrapNativeEventPayload<JourneyData>(event);
+    if (payload) {
+      listener(payload);
+    }
+  });
+}
+
+/**
  * Subscribe to arrival events.
  */
 export function addArriveListener(listener: (point: ArrivalEvent) => void): Subscription {
@@ -516,16 +552,26 @@ export function addBottomSheetActionPressListener(
 }
 
 /**
- * Embedded native navigation component.
- *
- * Use this when you need navigation inside your own screen layout instead of full-screen modal navigation.
+ * @deprecated Embedded runtime support has been removed. Use `startNavigation()` full-screen flow.
  */
 export function MapboxNavigationView(
   props: MapboxNavigationViewProps & ViewProps,
 ) {
+  throw new Error(
+    "MapboxNavigationView (embedded mode) has been removed due session-conflict instability. Use startNavigation() full-screen flow.",
+  );
+
   const bottomSheet = props.bottomSheet;
   const useOverlayBottomSheet = !!bottomSheet?.enabled &&
-    (bottomSheet.mode === "overlay" || Platform.OS === "ios");
+    bottomSheet?.mode === "overlay";
+  const overlayLocationMinIntervalMs = Math.max(
+    0,
+    Math.min(bottomSheet?.overlayLocationUpdateIntervalMs ?? 300, 3000),
+  );
+  const overlayProgressMinIntervalMs = Math.max(
+    0,
+    Math.min(bottomSheet?.overlayProgressUpdateIntervalMs ?? 300, 3000),
+  );
   const collapsedHeight = Math.max(56, Math.min(bottomSheet?.collapsedHeight ?? 112, 400));
   const expandedHeight = Math.max(collapsedHeight, Math.min(bottomSheet?.expandedHeight ?? 280, 700));
   const initialExpanded = bottomSheet?.initialState === "expanded";
@@ -535,6 +581,11 @@ export function MapboxNavigationView(
   const [overlayLocation, setOverlayLocation] = useState<LocationUpdate | undefined>(undefined);
   const [overlayMuted, setOverlayMuted] = useState(!!props.mute);
   const [overlayCameraMode, setOverlayCameraMode] = useState<"following" | "overview" | undefined>(undefined);
+  const overlayThrottleRef = useRef({
+    locationAtMs: 0,
+    progressAtMs: 0,
+    bannerKey: "",
+  });
 
   useEffect(() => {
     setExpanded(bottomSheet?.initialState === "expanded");
@@ -550,24 +601,44 @@ export function MapboxNavigationView(
 
   const nativeProps = useMemo(() => normalizeViewProps(props), [props]);
   const nativePropsWithOverlay = useMemo(() => {
+    if (!useOverlayBottomSheet) {
+      return nativeProps;
+    }
+
     const onLocationChange = (event: unknown) => {
       const payload = unwrapNativeEventPayload<LocationUpdate>(event);
       if (payload) {
-        setOverlayLocation(payload);
+        const now = Date.now();
+        if (now - overlayThrottleRef.current.locationAtMs >= overlayLocationMinIntervalMs) {
+          overlayThrottleRef.current.locationAtMs = now;
+          setOverlayLocation(payload);
+        }
       }
       nativeProps.onLocationChange?.(event as any);
     };
     const onRouteProgressChange = (event: unknown) => {
       const payload = unwrapNativeEventPayload<RouteProgress>(event);
       if (payload) {
-        setOverlayProgress(payload);
+        const now = Date.now();
+        if (now - overlayThrottleRef.current.progressAtMs >= overlayProgressMinIntervalMs) {
+          overlayThrottleRef.current.progressAtMs = now;
+          setOverlayProgress(payload);
+        }
       }
       nativeProps.onRouteProgressChange?.(event as any);
     };
     const onBannerInstruction = (event: unknown) => {
       const payload = unwrapNativeEventPayload<BannerInstruction>(event);
       if (payload) {
-        setOverlayBanner(payload);
+        const bannerKey = [
+          payload.primaryText ?? "",
+          payload.secondaryText ?? "",
+          Math.round(payload.stepDistanceRemaining ?? -1),
+        ].join("|");
+        if (bannerKey !== overlayThrottleRef.current.bannerKey) {
+          overlayThrottleRef.current.bannerKey = bannerKey;
+          setOverlayBanner(payload);
+        }
       }
       nativeProps.onBannerInstruction?.(event as any);
     };
@@ -578,23 +649,14 @@ export function MapboxNavigationView(
       onRouteProgressChange,
       onBannerInstruction,
     };
-  }, [nativeProps, overlayCameraMode]);
-  const NativeView = (() => {
-    if (Platform.OS !== "android") {
-      return requireNativeViewManager("MapboxNavigationView");
-    }
-
-    // Expo Modules on Android Fabric may register the view under the module name.
-    try {
-      return requireNativeViewManager("MapboxNavigationModule");
-    } catch {
-      try {
-        return requireNativeViewManager("MapboxNavigationModule_MapboxNavigationView");
-      } catch {
-        return requireNativeViewManager("MapboxNavigationView");
-      }
-    }
-  })();
+  }, [
+    nativeProps,
+    overlayCameraMode,
+    useOverlayBottomSheet,
+    overlayLocationMinIntervalMs,
+    overlayProgressMinIntervalMs,
+  ]);
+  const NativeView = requireNativeViewManager("MapboxNavigationModule");
   const renderOverlaySheet = () => {
     if (!useOverlayBottomSheet) {
       return null;
@@ -723,6 +785,28 @@ export function MapboxNavigationView(
     const durationText = overlayProgress?.durationRemaining != null
       ? formatDuration(overlayProgress.durationRemaining)
       : undefined;
+    const showCurrentStreet = bottomSheet?.showCurrentStreet !== false;
+    const showRemainingDistance = bottomSheet?.showRemainingDistance !== false;
+    const showRemainingDuration = bottomSheet?.showRemainingDuration !== false;
+    const showETA = bottomSheet?.showETA !== false;
+    const showCompletionPercent = bottomSheet?.showCompletionPercent !== false;
+    const tripPrimaryParts: string[] = [];
+    if (overlayProgress && showRemainingDistance) {
+      tripPrimaryParts.push(`${Math.round(overlayProgress.distanceRemaining)} m`);
+    }
+    if (overlayProgress && showRemainingDuration && durationText) {
+      tripPrimaryParts.push(durationText);
+    }
+    if (overlayProgress && showETA && etaText) {
+      tripPrimaryParts.push(etaText);
+    }
+    const tripSecondaryParts: string[] = [];
+    if (showCurrentStreet && overlayBanner?.secondaryText) {
+      tripSecondaryParts.push(overlayBanner.secondaryText);
+    }
+    if (overlayProgress && showCompletionPercent) {
+      tripSecondaryParts.push(`${Math.round((overlayProgress.fractionTraveled || 0) * 100)}% completed`);
+    }
     const defaultSheet = (
       <View style={styles.defaultSheet}>
         {nativeProps.showsManeuverView !== false ? (
@@ -743,12 +827,12 @@ export function MapboxNavigationView(
             <Text style={styles.defaultLabel}>{bottomSheet?.defaultTripProgressTitle ?? "Trip Progress"}</Text>
             <Text style={styles.defaultPrimary}>
               {overlayProgress
-                ? `${Math.round(overlayProgress.distanceRemaining)} m remaining`
+                ? (tripPrimaryParts.length > 0 ? tripPrimaryParts.join(" • ") : "Progress available")
                 : "Waiting for progress..."}
             </Text>
             <Text style={styles.defaultSecondary}>
               {overlayProgress
-                ? `${etaText ? `${etaText} • ` : ""}${durationText ? `${durationText} left • ` : ""}${Math.round((overlayProgress.fractionTraveled || 0) * 100)}% completed`
+                ? (tripSecondaryParts.length > 0 ? tripSecondaryParts.join(" • ") : "On route")
                 : (overlayLocation
                   ? `${overlayLocation.latitude.toFixed(5)}, ${overlayLocation.longitude.toFixed(5)}`
                   : "Location not available")}
@@ -953,6 +1037,7 @@ export default {
   getNavigationSettings,
   addLocationChangeListener,
   addRouteProgressChangeListener,
+  addJourneyDataChangeListener,
   addArriveListener,
   addDestinationPreviewListener,
   addDestinationChangedListener,

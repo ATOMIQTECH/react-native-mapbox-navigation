@@ -6,7 +6,9 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
 class MapboxNavigationModule : Module() {
+  private val sessionOwner = "fullscreen"
   private var isNavigating = false
+  private var isStartInProgress = false
 
   override fun definition() = ModuleDefinition {
     Name("MapboxNavigationModule")
@@ -14,6 +16,7 @@ class MapboxNavigationModule : Module() {
     Events(
       "onLocationChange",
       "onRouteProgressChange",
+      "onJourneyDataChange",
       "onBannerInstruction",
       "onArrive",
       "onDestinationPreview",
@@ -59,6 +62,7 @@ class MapboxNavigationModule : Module() {
     }
 
     AsyncFunction("isNavigating") { promise: Promise ->
+      isNavigating = MapboxNavigationActivity.hasActiveSession()
       promise.resolve(isNavigating)
     }
 
@@ -78,6 +82,7 @@ class MapboxNavigationModule : Module() {
       Events(
         "onLocationChange",
         "onRouteProgressChange",
+        "onJourneyDataChange",
         "onBannerInstruction",
         "onArrive",
         "onDestinationPreview",
@@ -206,8 +211,37 @@ class MapboxNavigationModule : Module() {
   }
 
   private fun startNavigation(options: Map<String, Any?>, promise: Promise) {
+    synchronized(this) {
+      val activeSession = MapboxNavigationActivity.hasActiveSession()
+      if (!activeSession && isNavigating) {
+        isNavigating = false
+      }
+      if (isStartInProgress || isNavigating || activeSession) {
+        isNavigating = activeSession || isNavigating
+        promise.reject(
+          "NAVIGATION_ALREADY_ACTIVE",
+          "A navigation session is already starting or active.",
+          null
+        )
+        return
+      }
+      if (!NavigationSessionRegistry.acquire(sessionOwner)) {
+        promise.reject(
+          "NAVIGATION_SESSION_CONFLICT",
+          "Another navigation session is already active. Stop embedded/full-screen navigation before starting a new one.",
+          null
+        )
+        return
+      }
+      isStartInProgress = true
+    }
+
     val activity = appContext.currentActivity
     if (activity == null) {
+      synchronized(this) {
+        isStartInProgress = false
+      }
+      NavigationSessionRegistry.release(sessionOwner)
       promise.reject("NO_ACTIVITY", "No current activity", null)
       return
     }
@@ -219,8 +253,13 @@ class MapboxNavigationModule : Module() {
     val originLng = (origin?.get("longitude") as? Number)?.toDouble()
     val destLat = (destination?.get("latitude") as? Number)?.toDouble()
     val destLng = (destination?.get("longitude") as? Number)?.toDouble()
+    val destinationName = destination?.get("name") as? String
 
     if (destLat == null || destLng == null) {
+      synchronized(this) {
+        isStartInProgress = false
+      }
+      NavigationSessionRegistry.release(sessionOwner)
       promise.reject("INVALID_COORDINATES", "Missing or invalid coordinates", null)
       return
     }
@@ -245,6 +284,67 @@ class MapboxNavigationModule : Module() {
     val showsActionButtons = (options["showsActionButtons"] as? Boolean) ?: true
     val showsReportFeedback = options["showsReportFeedback"] as? Boolean
     val showsEndOfRouteFeedback = options["showsEndOfRouteFeedback"] as? Boolean
+    val bottomSheet = options["bottomSheet"] as? Map<*, *>
+    val bottomSheetMode = (bottomSheet?.get("mode") as? String)?.trim()?.lowercase() ?: "native"
+    val bottomSheetCollapsedHeight = (bottomSheet?.get("collapsedHeight") as? Number)?.toDouble()
+    val bottomSheetExpandedHeight = (bottomSheet?.get("expandedHeight") as? Number)?.toDouble()
+    val bottomSheetInitialState = (bottomSheet?.get("initialState") as? String)?.trim()?.lowercase()
+    val bottomSheetRevealOnNativeBannerGesture = bottomSheet?.get("revealOnNativeBannerGesture") as? Boolean
+    val bottomSheetEnableTapToToggle = bottomSheet?.get("enableTapToToggle") as? Boolean
+    val bottomSheetShowHandle = bottomSheet?.get("showHandle") as? Boolean
+    val bottomSheetRevealGestureHotzoneHeight = (bottomSheet?.get("revealGestureHotzoneHeight") as? Number)?.toDouble()
+    val bottomSheetRevealGestureRightExclusionWidth = (bottomSheet?.get("revealGestureRightExclusionWidth") as? Number)?.toDouble()
+    val bottomSheetCornerRadius = (bottomSheet?.get("cornerRadius") as? Number)?.toDouble()
+    val bottomSheetBackgroundColor = bottomSheet?.get("backgroundColor") as? String
+    val bottomSheetHandleColor = bottomSheet?.get("handleColor") as? String
+    val bottomSheetPrimaryTextColor = bottomSheet?.get("primaryTextColor") as? String
+    val bottomSheetSecondaryTextColor = bottomSheet?.get("secondaryTextColor") as? String
+    val bottomSheetActionButtonBackgroundColor = bottomSheet?.get("actionButtonBackgroundColor") as? String
+    val bottomSheetActionButtonTextColor = bottomSheet?.get("actionButtonTextColor") as? String
+    val bottomSheetActionButtonTitle = bottomSheet?.get("actionButtonTitle") as? String
+    val bottomSheetSecondaryActionButtonTitle = bottomSheet?.get("secondaryActionButtonTitle") as? String
+    val bottomSheetActionButtonBorderColor = bottomSheet?.get("actionButtonBorderColor") as? String
+    val bottomSheetActionButtonBorderWidth = (bottomSheet?.get("actionButtonBorderWidth") as? Number)?.toDouble()
+    val bottomSheetActionButtonCornerRadius = (bottomSheet?.get("actionButtonCornerRadius") as? Number)?.toDouble()
+    val bottomSheetSecondaryActionButtonBackgroundColor = bottomSheet?.get("secondaryActionButtonBackgroundColor") as? String
+    val bottomSheetSecondaryActionButtonTextColor = bottomSheet?.get("secondaryActionButtonTextColor") as? String
+    val bottomSheetPrimaryTextFontSize = (bottomSheet?.get("primaryTextFontSize") as? Number)?.toDouble()
+    val bottomSheetSecondaryTextFontSize = (bottomSheet?.get("secondaryTextFontSize") as? Number)?.toDouble()
+    val bottomSheetActionButtonFontSize = (bottomSheet?.get("actionButtonFontSize") as? Number)?.toDouble()
+    val bottomSheetActionButtonHeight = (bottomSheet?.get("actionButtonHeight") as? Number)?.toDouble()
+    val bottomSheetActionButtonsBottomPadding = (bottomSheet?.get("actionButtonsBottomPadding") as? Number)?.toDouble()
+    val bottomSheetQuickActionBackgroundColor = bottomSheet?.get("quickActionBackgroundColor") as? String
+    val bottomSheetQuickActionTextColor = bottomSheet?.get("quickActionTextColor") as? String
+    val bottomSheetQuickActionSecondaryBackgroundColor = bottomSheet?.get("quickActionSecondaryBackgroundColor") as? String
+    val bottomSheetQuickActionSecondaryTextColor = bottomSheet?.get("quickActionSecondaryTextColor") as? String
+    val bottomSheetQuickActionGhostTextColor = bottomSheet?.get("quickActionGhostTextColor") as? String
+    val bottomSheetQuickActionBorderColor = bottomSheet?.get("quickActionBorderColor") as? String
+    val bottomSheetQuickActionBorderWidth = (bottomSheet?.get("quickActionBorderWidth") as? Number)?.toDouble()
+    val bottomSheetQuickActionCornerRadius = (bottomSheet?.get("quickActionCornerRadius") as? Number)?.toDouble()
+    val bottomSheetShowCurrentStreet = bottomSheet?.get("showCurrentStreet") as? Boolean
+    val bottomSheetShowRemainingDistance = bottomSheet?.get("showRemainingDistance") as? Boolean
+    val bottomSheetShowRemainingDuration = bottomSheet?.get("showRemainingDuration") as? Boolean
+    val bottomSheetShowETA = bottomSheet?.get("showETA") as? Boolean
+    val bottomSheetShowCompletionPercent = bottomSheet?.get("showCompletionPercent") as? Boolean
+    val bottomSheetHeaderTitle = bottomSheet?.get("headerTitle") as? String
+    val bottomSheetHeaderSubtitle = bottomSheet?.get("headerSubtitle") as? String
+    val bottomSheetHeaderBadgeText = bottomSheet?.get("headerBadgeText") as? String
+    val bottomSheetHeaderBadgeBackgroundColor = bottomSheet?.get("headerBadgeBackgroundColor") as? String
+    val bottomSheetHeaderBadgeTextColor = bottomSheet?.get("headerBadgeTextColor") as? String
+    val quickActions = bottomSheet?.get("quickActions") as? List<*>
+    val quickActionIds = quickActions?.mapNotNull { (it as? Map<*, *>)?.get("id") as? String } ?: emptyList()
+    val quickActionLabels = quickActions?.mapNotNull { (it as? Map<*, *>)?.get("label") as? String } ?: emptyList()
+    val quickActionVariants = quickActions?.mapNotNull { (it as? Map<*, *>)?.get("variant") as? String } ?: emptyList()
+    val customRows = bottomSheet?.get("customRows") as? List<*>
+    val customRowIds = customRows?.mapNotNull { (it as? Map<*, *>)?.get("id") as? String } ?: emptyList()
+    val customRowTitles = customRows?.mapNotNull { (it as? Map<*, *>)?.get("title") as? String } ?: emptyList()
+    val customRowValues = customRows?.map { (it as? Map<*, *>)?.get("value") as? String ?: "" } ?: emptyList()
+    val customRowSubtitles = customRows?.map { (it as? Map<*, *>)?.get("subtitle") as? String ?: "" } ?: emptyList()
+    val customRowIconSystemNames = customRows?.map { (it as? Map<*, *>)?.get("iconSystemName") as? String ?: "" } ?: emptyList()
+    val customRowIconTexts = customRows?.map { (it as? Map<*, *>)?.get("iconText") as? String ?: "" } ?: emptyList()
+    val customRowEmphasis = customRows?.map {
+      ((it as? Map<*, *>)?.get("emphasis") as? Boolean) == true
+    } ?: emptyList()
     val androidActionButtons = options["androidActionButtons"] as? Map<*, *>
     val showEmergencyCallButton = androidActionButtons?.get("showEmergencyCallButton") as? Boolean
     val showCancelRouteButton = androidActionButtons?.get("showCancelRouteButton") as? Boolean
@@ -263,6 +363,10 @@ class MapboxNavigationModule : Module() {
       val accessToken = try {
         getMapboxAccessToken(activity.packageName)
       } catch (e: IllegalStateException) {
+        synchronized(this) {
+          isStartInProgress = false
+        }
+        NavigationSessionRegistry.release(sessionOwner)
         promise.reject("MISSING_ACCESS_TOKEN", e.message ?: "Missing mapbox_access_token", e)
         return@runOnUiThread
       }
@@ -275,6 +379,7 @@ class MapboxNavigationModule : Module() {
         }
         putExtra("destLat", destLat)
         putExtra("destLng", destLng)
+        destinationName?.takeIf { it.isNotBlank() }?.let { putExtra("destinationName", it) }
         putExtra("shouldSimulate", shouldSimulate)
         putExtra("mute", mute)
         putExtra("cameraPitch", cameraPitch)
@@ -290,6 +395,66 @@ class MapboxNavigationModule : Module() {
         putExtra("showsTripProgress", showsTripProgress)
         putExtra("showsManeuverView", showsManeuverView)
         putExtra("showsActionButtons", showsActionButtons)
+        putExtra("bottomSheetMode", bottomSheetMode)
+        bottomSheetCollapsedHeight?.let { putExtra("bottomSheetCollapsedHeight", it) }
+        bottomSheetExpandedHeight?.let { putExtra("bottomSheetExpandedHeight", it) }
+        bottomSheetInitialState?.let { putExtra("bottomSheetInitialState", it) }
+        bottomSheetRevealOnNativeBannerGesture?.let { putExtra("bottomSheetRevealOnNativeBannerGesture", it) }
+        bottomSheetEnableTapToToggle?.let { putExtra("bottomSheetEnableTapToToggle", it) }
+        bottomSheetShowHandle?.let { putExtra("bottomSheetShowHandle", it) }
+        bottomSheetRevealGestureHotzoneHeight?.let { putExtra("bottomSheetRevealGestureHotzoneHeight", it) }
+        bottomSheetRevealGestureRightExclusionWidth?.let { putExtra("bottomSheetRevealGestureRightExclusionWidth", it) }
+        bottomSheetCornerRadius?.let { putExtra("bottomSheetCornerRadius", it) }
+        bottomSheetBackgroundColor?.let { putExtra("bottomSheetBackgroundColor", it) }
+        bottomSheetHandleColor?.let { putExtra("bottomSheetHandleColor", it) }
+        bottomSheetPrimaryTextColor?.let { putExtra("bottomSheetPrimaryTextColor", it) }
+        bottomSheetSecondaryTextColor?.let { putExtra("bottomSheetSecondaryTextColor", it) }
+        bottomSheetActionButtonBackgroundColor?.let { putExtra("bottomSheetActionButtonBackgroundColor", it) }
+        bottomSheetActionButtonTextColor?.let { putExtra("bottomSheetActionButtonTextColor", it) }
+        bottomSheetActionButtonTitle?.let { putExtra("bottomSheetActionButtonTitle", it) }
+        bottomSheetSecondaryActionButtonTitle?.let { putExtra("bottomSheetSecondaryActionButtonTitle", it) }
+        bottomSheetActionButtonBorderColor?.let { putExtra("bottomSheetActionButtonBorderColor", it) }
+        bottomSheetActionButtonBorderWidth?.let { putExtra("bottomSheetActionButtonBorderWidth", it) }
+        bottomSheetActionButtonCornerRadius?.let { putExtra("bottomSheetActionButtonCornerRadius", it) }
+        bottomSheetSecondaryActionButtonBackgroundColor?.let { putExtra("bottomSheetSecondaryActionButtonBackgroundColor", it) }
+        bottomSheetSecondaryActionButtonTextColor?.let { putExtra("bottomSheetSecondaryActionButtonTextColor", it) }
+        bottomSheetPrimaryTextFontSize?.let { putExtra("bottomSheetPrimaryTextFontSize", it) }
+        bottomSheetSecondaryTextFontSize?.let { putExtra("bottomSheetSecondaryTextFontSize", it) }
+        bottomSheetActionButtonFontSize?.let { putExtra("bottomSheetActionButtonFontSize", it) }
+        bottomSheetActionButtonHeight?.let { putExtra("bottomSheetActionButtonHeight", it) }
+        bottomSheetActionButtonsBottomPadding?.let { putExtra("bottomSheetActionButtonsBottomPadding", it) }
+        bottomSheetQuickActionBackgroundColor?.let { putExtra("bottomSheetQuickActionBackgroundColor", it) }
+        bottomSheetQuickActionTextColor?.let { putExtra("bottomSheetQuickActionTextColor", it) }
+        bottomSheetQuickActionSecondaryBackgroundColor?.let { putExtra("bottomSheetQuickActionSecondaryBackgroundColor", it) }
+        bottomSheetQuickActionSecondaryTextColor?.let { putExtra("bottomSheetQuickActionSecondaryTextColor", it) }
+        bottomSheetQuickActionGhostTextColor?.let { putExtra("bottomSheetQuickActionGhostTextColor", it) }
+        bottomSheetQuickActionBorderColor?.let { putExtra("bottomSheetQuickActionBorderColor", it) }
+        bottomSheetQuickActionBorderWidth?.let { putExtra("bottomSheetQuickActionBorderWidth", it) }
+        bottomSheetQuickActionCornerRadius?.let { putExtra("bottomSheetQuickActionCornerRadius", it) }
+        bottomSheetShowCurrentStreet?.let { putExtra("bottomSheetShowCurrentStreet", it) }
+        bottomSheetShowRemainingDistance?.let { putExtra("bottomSheetShowRemainingDistance", it) }
+        bottomSheetShowRemainingDuration?.let { putExtra("bottomSheetShowRemainingDuration", it) }
+        bottomSheetShowETA?.let { putExtra("bottomSheetShowETA", it) }
+        bottomSheetShowCompletionPercent?.let { putExtra("bottomSheetShowCompletionPercent", it) }
+        bottomSheetHeaderTitle?.let { putExtra("bottomSheetHeaderTitle", it) }
+        bottomSheetHeaderSubtitle?.let { putExtra("bottomSheetHeaderSubtitle", it) }
+        bottomSheetHeaderBadgeText?.let { putExtra("bottomSheetHeaderBadgeText", it) }
+        bottomSheetHeaderBadgeBackgroundColor?.let { putExtra("bottomSheetHeaderBadgeBackgroundColor", it) }
+        bottomSheetHeaderBadgeTextColor?.let { putExtra("bottomSheetHeaderBadgeTextColor", it) }
+        if (quickActionIds.isNotEmpty() && quickActionLabels.size == quickActionIds.size) {
+          putExtra("bottomSheetQuickActionIds", quickActionIds.toTypedArray())
+          putExtra("bottomSheetQuickActionLabels", quickActionLabels.toTypedArray())
+          putExtra("bottomSheetQuickActionVariants", quickActionVariants.toTypedArray())
+        }
+        if (customRowIds.isNotEmpty() && customRowTitles.size == customRowIds.size) {
+          putExtra("bottomSheetCustomRowIds", customRowIds.toTypedArray())
+          putExtra("bottomSheetCustomRowTitles", customRowTitles.toTypedArray())
+          putExtra("bottomSheetCustomRowValues", customRowValues.toTypedArray())
+          putExtra("bottomSheetCustomRowSubtitles", customRowSubtitles.toTypedArray())
+          putExtra("bottomSheetCustomRowIconSystemNames", customRowIconSystemNames.toTypedArray())
+          putExtra("bottomSheetCustomRowIconTexts", customRowIconTexts.toTypedArray())
+          putExtra("bottomSheetCustomRowEmphasis", customRowEmphasis.toBooleanArray())
+        }
         showsReportFeedback?.let { putExtra("showsReportFeedback", it) }
         showsEndOfRouteFeedback?.let { putExtra("showsEndOfRouteFeedback", it) }
         showEmergencyCallButton?.let { putExtra("showEmergencyCallButton", it) }
@@ -309,9 +474,19 @@ class MapboxNavigationModule : Module() {
         }
       }
 
-      activity.startActivity(intent)
-      isNavigating = true
-      promise.resolve(null)
+      try {
+        activity.startActivity(intent)
+        isNavigating = true
+        promise.resolve(null)
+      } catch (error: Throwable) {
+        isNavigating = false
+        NavigationSessionRegistry.release(sessionOwner)
+        promise.reject("START_NAVIGATION_FAILED", error.message ?: "Unable to start navigation", error)
+      } finally {
+        synchronized(this) {
+          isStartInProgress = false
+        }
+      }
     }
   }
 
@@ -336,9 +511,10 @@ class MapboxNavigationModule : Module() {
   }
 
   private fun stopNavigation(promise: Promise) {
-    val activity = appContext.currentActivity
-    activity?.finish()
+    MapboxNavigationActivity.finishActiveSession()
+    isStartInProgress = false
     isNavigating = false
+    NavigationSessionRegistry.release(sessionOwner)
     promise.resolve(null)
   }
 

@@ -1,6 +1,8 @@
 package expo.modules.mapboxnavigation
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -21,9 +23,11 @@ import com.mapbox.navigation.core.trip.session.RouteProgressObserver
 import com.mapbox.navigation.dropin.NavigationView
 import com.mapbox.navigation.dropin.RouteOptionsInterceptor
 import com.mapbox.navigation.dropin.navigationview.NavigationViewListener
+import androidx.core.content.ContextCompat
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
+import java.util.UUID
 
 class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
   companion object {
@@ -31,6 +35,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   }
 
   private var startOrigin: Map<String, Any>? = null
+  private val sessionOwner = "embedded-${UUID.randomUUID()}"
+  private var ownsNavigationSession = false
   private var destination: Map<String, Any>? = null
   private var waypoints: List<Map<String, Any>>? = null
   private var shouldSimulateRoute = false
@@ -75,10 +81,21 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private val mainHandler = Handler(Looper.getMainLooper())
   private var hasStartedGuidance = false
   private var hasEmittedArrival = false
+  private var hasPendingSessionConflict = false
   private val warnedUnsupportedKeys = mutableSetOf<String>()
+  private var latestLatitude: Double? = null
+  private var latestLongitude: Double? = null
+  private var latestBearing: Double? = null
+  private var latestSpeed: Double? = null
+  private var latestAltitude: Double? = null
+  private var latestAccuracy: Double? = null
+  private var latestPrimaryInstruction: String? = null
+  private var latestSecondaryInstruction: String? = null
+  private var latestStepDistanceRemaining: Double? = null
 
   val onLocationChange by EventDispatcher()
   val onRouteProgressChange by EventDispatcher()
+  val onJourneyDataChange by EventDispatcher()
   val onBannerInstruction by EventDispatcher()
   val onArrive by EventDispatcher()
   val onDestinationPreview by EventDispatcher()
@@ -91,6 +108,12 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
     override fun onNewLocationMatcherResult(locationMatcherResult: LocationMatcherResult) {
       val location = locationMatcherResult.enhancedLocation
+      latestLatitude = location.latitude
+      latestLongitude = location.longitude
+      latestBearing = location.bearing.toDouble()
+      latestSpeed = location.speed.toDouble()
+      latestAltitude = location.altitude
+      latestAccuracy = location.accuracy.toDouble()
       onLocationChange(
         mapOf(
           "latitude" to location.latitude,
@@ -101,6 +124,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
           "accuracy" to location.accuracy.toDouble()
         )
       )
+      emitJourneyData(progress = null)
     }
   }
 
@@ -125,6 +149,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
 
     emitBannerInstruction(routeProgress.bannerInstructions)
+    emitJourneyData(progress = routeProgress)
   }
 
   private val bannerInstructionsObserver = BannerInstructionsObserver { bannerInstructions ->
@@ -155,6 +180,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
           "message" to message
         )
       )
+      releaseNavigationSession()
     }
 
     override fun onRouteFetchSuccessful(routes: List<NavigationRoute>) {
@@ -172,11 +198,21 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
           "message" to "Route fetch canceled (origin: $routerOrigin)."
         )
       )
+      releaseNavigationSession()
     }
   }
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
+    if (!hasLocationPermission()) {
+      onError(
+        mapOf(
+          "code" to "LOCATION_PERMISSION_REQUIRED",
+          "message" to "Embedded navigation requires location permission. Request ACCESS_FINE_LOCATION before mounting MapboxNavigationView."
+        )
+      )
+      return
+    }
     createNavigationViewIfNeeded()
     startNavigationIfReady()
     attachNavigationObserversWithRetry()
@@ -188,6 +224,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     navigationView?.removeListener(navigationViewListener)
     removeAllViews()
     navigationView = null
+    releaseNavigationSession()
     super.onDetachedFromWindow()
   }
 
@@ -394,6 +431,24 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private fun startNavigationIfReady() {
     val view = navigationView ?: return
     val destinationPoint = destination.toAnyPointOrNull() ?: return
+
+    if (!ownsNavigationSession) {
+      if (!NavigationSessionRegistry.acquire(sessionOwner)) {
+        if (!hasPendingSessionConflict) {
+          hasPendingSessionConflict = true
+          onError(
+            mapOf(
+              "code" to "NAVIGATION_SESSION_CONFLICT",
+              "message" to "Another navigation session is already active. Stop full-screen or other embedded navigation before mounting this view."
+            )
+          )
+        }
+        return
+      }
+      ownsNavigationSession = true
+      hasPendingSessionConflict = false
+    }
+
     hasStartedGuidance = false
     hasEmittedArrival = false
 
@@ -409,7 +464,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
           coordinates.add(destinationPoint)
           builder.coordinatesList(coordinates)
           // Keep optional arrays aligned with coordinates to avoid route-option validation mismatch.
-          builder.layersList(MutableList<String?>(coordinates.size) { null })
+          // Use concrete layer values because null placeholders can be dropped by the API serializer.
+          builder.layersList(MutableList(coordinates.size) { 0 })
           builder.alternatives(routeAlternatives || showsContinuousAlternatives)
         }
       )
@@ -420,6 +476,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
           "message" to "waypoints require startOrigin when using embedded Android navigation."
         )
       )
+      releaseNavigationSession()
       return
     }
 
@@ -483,6 +540,9 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     if (primary.isEmpty()) {
       return
     }
+    latestPrimaryInstruction = primary
+    latestSecondaryInstruction = instruction?.secondary()?.text()?.trim()?.takeIf { it.isNotEmpty() }
+    latestStepDistanceRemaining = instruction?.distanceAlongGeometry()
 
     val payload = mutableMapOf<String, Any>("primaryText" to primary)
     val secondary = instruction?.secondary()?.text()?.trim().orEmpty()
@@ -491,6 +551,37 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
     payload["stepDistanceRemaining"] = instruction?.distanceAlongGeometry() ?: 0.0
     onBannerInstruction(payload)
+    emitJourneyData(progress = null)
+  }
+
+  private fun emitJourneyData(progress: RouteProgress?) {
+    val payload = mutableMapOf<String, Any>()
+    latestLatitude?.let { payload["latitude"] = it }
+    latestLongitude?.let { payload["longitude"] = it }
+    latestBearing?.let { payload["bearing"] = it }
+    latestSpeed?.let { payload["speed"] = it }
+    latestAltitude?.let { payload["altitude"] = it }
+    latestAccuracy?.let { payload["accuracy"] = it }
+    latestPrimaryInstruction?.let { payload["primaryInstruction"] = it }
+    latestSecondaryInstruction?.let { payload["secondaryInstruction"] = it }
+    latestStepDistanceRemaining?.let { payload["stepDistanceRemaining"] = it }
+    latestSecondaryInstruction?.let { payload["currentStreet"] = it }
+
+    if (progress != null) {
+      val distanceRemaining = progress.distanceRemaining.toDouble()
+      val durationRemaining = progress.durationRemaining
+      val fraction = progress.fractionTraveled.toDouble().coerceIn(0.0, 1.0)
+      payload["distanceRemaining"] = distanceRemaining
+      payload["durationRemaining"] = durationRemaining
+      payload["fractionTraveled"] = fraction
+      payload["completionPercent"] = Math.round(fraction * 100.0).toInt()
+      val etaMillis = System.currentTimeMillis() + (durationRemaining * 1000.0).toLong()
+      payload["etaIso8601"] = formatIsoUtc(etaMillis)
+    }
+
+    if (payload.isNotEmpty()) {
+      onJourneyDataChange(payload)
+    }
   }
 
   private fun mapRouteFetchFailure(reasons: List<RouterFailure>): Pair<String, String> {
@@ -511,6 +602,12 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       (if (details.isNotEmpty()) "Route fetch failed: $details" else "Route fetch failed for unknown reason.")
   }
 
+  private fun formatIsoUtc(timestampMillis: Long): String {
+    val formatter = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+    formatter.timeZone = java.util.TimeZone.getTimeZone("UTC")
+    return formatter.format(java.util.Date(timestampMillis))
+  }
+
   private fun getMapboxAccessToken(): String {
     val resourceId = context.resources.getIdentifier(
       "mapbox_access_token",
@@ -529,11 +626,32 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     return token
   }
 
+  private fun releaseNavigationSession() {
+    if (!ownsNavigationSession) {
+      return
+    }
+    NavigationSessionRegistry.release(sessionOwner)
+    ownsNavigationSession = false
+    hasPendingSessionConflict = false
+  }
+
   private fun warnUnsupportedOption(key: String, message: String) {
     if (!warnedUnsupportedKeys.add(key)) {
       return
     }
     Log.w(TAG, message)
+  }
+
+  private fun hasLocationPermission(): Boolean {
+    val fine = ContextCompat.checkSelfPermission(
+      context,
+      Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+    val coarse = ContextCompat.checkSelfPermission(
+      context,
+      Manifest.permission.ACCESS_COARSE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+    return fine || coarse
   }
 
   private fun resolveDayStyleUri(normalizedTheme: String): String? {

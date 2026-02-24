@@ -1,6 +1,8 @@
 # Usage Guide
 
-## Start Full-Screen Navigation
+Applies to package version: `1.1.6`.
+
+## Full-Screen Navigation
 
 ```ts
 import { startNavigation } from "@atomiqlab/react-native-mapbox-navigation";
@@ -27,43 +29,80 @@ await startNavigation({
   showsActionButtons: true,
   bottomSheet: {
     enabled: true,
+    mode: "customNative",
+    initialState: "hidden",
+    revealOnNativeBannerGesture: true,
+    revealGestureHotzoneHeight: 100,
+    revealGestureRightExclusionWidth: 80,
+    collapsedHeight: 118,
+    expandedHeight: 340,
+
     showsTripProgress: true,
     showsManeuverView: true,
     showsActionButtons: true,
-    initialState: "collapsed",
-    collapsedHeight: 120,
-    expandedHeight: 280,
+    showCurrentStreet: true,
+    showRemainingDistance: true,
+    showRemainingDuration: true,
+    showETA: true,
+    showCompletionPercent: true,
+
     showHandle: true,
     enableTapToToggle: true,
-    contentHorizontalPadding: 16,
-    contentBottomPadding: 14,
-    contentTopSpacing: 4,
+
     backgroundColor: "#0f172a",
     handleColor: "#93c5fd",
     primaryTextColor: "#ffffff",
     secondaryTextColor: "#bfdbfe",
-    primaryTextFontSize: 16,
-    secondaryTextFontSize: 13,
+    cornerRadius: 16,
+
+    actionButtonTitle: "End Navigation",
+    secondaryActionButtonTitle: "Support",
+    primaryActionButtonBehavior: "stopNavigation",
+    secondaryActionButtonBehavior: "emitEvent",
     actionButtonBackgroundColor: "#2563eb",
     actionButtonTextColor: "#ffffff",
     secondaryActionButtonBackgroundColor: "#1e293b",
     secondaryActionButtonTextColor: "#bfdbfe",
-    actionButtonTitle: "End Navigation",
-    secondaryActionButtonTitle: "More",
-    primaryActionButtonBehavior: "stopNavigation",
-    secondaryActionButtonBehavior: "emitEvent",
-    actionButtonBorderColor: "#60a5fa",
+    actionButtonBorderColor: "#1d4ed8",
     actionButtonBorderWidth: 1,
-    actionButtonCornerRadius: 10,
+    actionButtonCornerRadius: 12,
     actionButtonFontSize: 14,
     actionButtonHeight: 42,
+    actionButtonsBottomPadding: 2,
+
     quickActions: [
       { id: "overview", label: "Overview", variant: "secondary" },
-      { id: "mute", label: "Mute", variant: "ghost" },
+      { id: "recenter", label: "Recenter", variant: "ghost" },
     ],
     builtInQuickActions: ["overview", "recenter", "toggleMute", "stop"],
-    cornerRadius: 18,
+    quickActionBackgroundColor: "#1d4ed8",
+    quickActionTextColor: "#ffffff",
+    quickActionSecondaryBackgroundColor: "#0f172a",
+    quickActionSecondaryTextColor: "#bfdbfe",
+    quickActionGhostTextColor: "#93c5fd",
+    quickActionBorderColor: "#334155",
+    quickActionBorderWidth: 1,
+    quickActionCornerRadius: 12,
+
+    headerTitle: "Trip",
+    headerSubtitle: "Swipe up from bottom zone",
+    headerBadgeText: "PRO",
+    headerBadgeBackgroundColor: "#2563eb",
+    headerBadgeTextColor: "#ffffff",
+
+    customRows: [
+      {
+        id: "driver",
+        iconSystemName: "person.crop.circle.fill",
+        title: "Driver",
+        value: "Alex",
+        subtitle: "Toyota Prius",
+        emphasis: true,
+      },
+      { id: "ride", iconText: "ID", title: "Ride ID", value: "RX-2048" },
+    ],
   },
+
   showsReportFeedback: true,
   showsEndOfRouteFeedback: true,
   showsContinuousAlternatives: true,
@@ -79,15 +118,16 @@ await startNavigation({
 });
 ```
 
-Note:
-- `showsReportFeedback`, `showsEndOfRouteFeedback`, `usesNightStyleWhileInTunnel`, `routeLineTracksTraversal`, and `annotatesIntersectionsAlongRoute` are currently accepted but no-op in this package version.
-- `androidActionButtons.*` is currently accepted but no-op in this package version.
-- Unsupported options are ignored and logged as native warnings.
-- `bottomSheet` in `startNavigation` enables package-managed native overlay controls on iOS full-screen and Drop-In controls on Android.
-- iOS full-screen supports bottom sheet style fields: `backgroundColor`, `handleColor`, `primaryTextColor`, `secondaryTextColor`, `actionButtonBackgroundColor`, `actionButtonTextColor`, `actionButtonTitle`, `secondaryActionButtonTitle`, `actionButtonBorderColor`, `actionButtonBorderWidth`, `actionButtonCornerRadius`, `cornerRadius`.
-- iOS full-screen supports action behavior fields: `primaryActionButtonBehavior`, `secondaryActionButtonBehavior`.
-- Typography/layout fields: `primaryTextFontSize`, `secondaryTextFontSize`, `actionButtonFontSize`, `actionButtonHeight`, `contentHorizontalPadding`, `contentBottomPadding`, `contentTopSpacing`.
-- Overlay behavior fields: `showHandle`, `enableTapToToggle`, `showDefaultContent`, `defaultManeuverTitle`, `defaultTripProgressTitle`, `quickActions`, `builtInQuickActions`.
+## Notes on Accepted No-op Options
+
+These options are currently accepted for API compatibility but no-op in this version:
+
+- `showsReportFeedback`
+- `showsEndOfRouteFeedback`
+- `usesNightStyleWhileInTunnel`
+- `routeLineTracksTraversal`
+- `annotatesIntersectionsAlongRoute`
+- `androidActionButtons.*`
 
 ## Stop Navigation
 
@@ -97,12 +137,39 @@ import { stopNavigation } from "@atomiqlab/react-native-mapbox-navigation";
 await stopNavigation();
 ```
 
-## Listen to Events
+## Session Lifecycle Safety
+
+Use one active session at a time.
+
+```ts
+import { isNavigating, startNavigation, stopNavigation } from "@atomiqlab/react-native-mapbox-navigation";
+
+let starting = false;
+
+async function safeStart(options: Parameters<typeof startNavigation>[0]) {
+  if (starting || (await isNavigating())) return;
+  starting = true;
+  try {
+    await startNavigation(options);
+  } finally {
+    starting = false;
+  }
+}
+
+useEffect(() => {
+  return () => {
+    stopNavigation().catch(() => {});
+  };
+}, []);
+```
+
+## Event Listeners
 
 ```ts
 import {
   addLocationChangeListener,
   addRouteProgressChangeListener,
+  addJourneyDataChangeListener,
   addBannerInstructionListener,
   addBottomSheetActionPressListener,
   addArriveListener,
@@ -117,6 +184,9 @@ const subscriptions = [
   addRouteProgressChangeListener((progress) => {
     console.log("progress", progress.fractionTraveled);
   }),
+  addJourneyDataChangeListener((data) => {
+    console.log("journey", data);
+  }),
   addBannerInstructionListener((instruction) => {
     console.log("banner", instruction.primaryText);
   }),
@@ -124,10 +194,10 @@ const subscriptions = [
     console.log("arrive", arrival.name);
   }),
   addBottomSheetActionPressListener((event) => {
-    console.log("bottom sheet action", event.actionId);
+    console.log("sheet action", event.actionId);
   }),
   addCancelNavigationListener(() => {
-    console.log("cancel");
+    console.log("cancelled");
   }),
   addErrorListener((error) => {
     console.warn("navigation error", error.code, error.message);
@@ -135,37 +205,18 @@ const subscriptions = [
 ];
 
 // cleanup
-subscriptions.forEach((sub) => sub.remove());
+subscriptions.forEach((s) => s.remove());
 ```
-
-## Embedded Navigation View
-
-```tsx
-import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation";
-
-export function EmbeddedNavigationScreen() {
-  return (
-    <MapboxNavigationView
-      style={{ flex: 1 }}
-      destination={{ latitude: 37.7847, longitude: -122.4073, name: "Downtown" }}
-      startOrigin={{ latitude: 37.7749, longitude: -122.4194 }}
-      shouldSimulateRoute
-      cameraMode="following"
-      onBannerInstruction={(instruction) => console.log(instruction.primaryText)}
-      onError={(error) => console.warn(error.message)}
-    />
-  );
-}
-```
-
-Tip:
-- For fully custom bottom sheet UI (custom React components/styles), use `MapboxNavigationView` with `bottomSheet={{ mode: "overlay" }}` and `renderBottomSheet` / `bottomSheetContent`.
-- Use `onOverlayBottomSheetActionPress` to react to `quickActions`/`builtInQuickActions` taps from the package default overlay sheet.
 
 ## Platform Notes
 
-- Android supports omitting `startOrigin` to start from current location.
-- iOS supports omitting `startOrigin`; current location is resolved at runtime (with permission).
-- Both platforms support embedded navigation view and camera/style customization.
-- Android embedded now uses native Drop-In `NavigationView` (not a placeholder).
-- Cross-platform no-op options in current package version: `showsReportFeedback`, `showsEndOfRouteFeedback`, `usesNightStyleWhileInTunnel`, `routeLineTracksTraversal`, `annotatesIntersectionsAlongRoute`, `androidActionButtons.*`.
+- Full-screen navigation is supported on iOS + Android.
+- `bottomSheet.mode` full-screen support:
+  - `native`
+  - `customNative`
+- `onDestinationPreview` and `onDestinationChanged` are Android-only.
+- iOS `customRows.iconSystemName` supports SF Symbols.
+
+## Embedded View
+
+`MapboxNavigationView` embedded runtime usage is removed in this version due to session-conflict instability. Use full-screen `startNavigation()`.
