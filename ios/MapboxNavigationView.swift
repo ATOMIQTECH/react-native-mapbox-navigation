@@ -6,6 +6,7 @@ import CoreLocation
 import UIKit
 
 class MapboxNavigationView: ExpoView {
+  private let sessionOwner = "embedded-\(UUID().uuidString)"
   var startOrigin: [String: Any]? {
     didSet { startNavigationIfReady() }
   }
@@ -46,14 +47,17 @@ class MapboxNavigationView: ExpoView {
   private var navigationViewController: NavigationViewController?
   private var hostViewController: UIViewController?
   private var isRouteCalculationInProgress = false
+  private var hasPendingSessionConflict = false
   private var warnedUnsupportedOptions = Set<String>()
   
   let onLocationChange = EventDispatcher()
   let onRouteProgressChange = EventDispatcher()
+  let onJourneyDataChange = EventDispatcher()
   let onBannerInstruction = EventDispatcher()
   let onArrive = EventDispatcher()
   let onCancelNavigation = EventDispatcher()
   let onError = EventDispatcher()
+  let onBottomSheetActionPress = EventDispatcher()
   
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -69,6 +73,8 @@ class MapboxNavigationView: ExpoView {
     
     if window != nil {
       startNavigationIfReady()
+    } else {
+      cleanupNavigation()
     }
   }
   
@@ -87,6 +93,18 @@ class MapboxNavigationView: ExpoView {
           let destLng = (dest["longitude"] as? NSNumber)?.doubleValue else {
       return
     }
+
+    guard NavigationSessionRegistry.shared.acquire(owner: sessionOwner) else {
+      if !hasPendingSessionConflict {
+        hasPendingSessionConflict = true
+        onError([
+          "code": "NAVIGATION_SESSION_CONFLICT",
+          "message": "Another navigation session is already active. Stop full-screen or other embedded navigation before mounting this view."
+        ])
+      }
+      return
+    }
+    hasPendingSessionConflict = false
     
     let originCoord = CLLocationCoordinate2D(latitude: originLat, longitude: originLng)
     let destCoord = CLLocationCoordinate2D(latitude: destLat, longitude: destLng)
@@ -124,6 +142,7 @@ class MapboxNavigationView: ExpoView {
       switch result {
       case .success(let response):
         guard response.routes?.first != nil else {
+          NavigationSessionRegistry.shared.release(owner: self.sessionOwner)
           self.onError([
             "code": "NO_ROUTE",
             "message": "No route found"
@@ -136,6 +155,7 @@ class MapboxNavigationView: ExpoView {
         }
         
       case .failure(let error):
+        NavigationSessionRegistry.shared.release(owner: self.sessionOwner)
         self.onError([
           "code": "ROUTE_ERROR",
           "message": error.localizedDescription
@@ -234,13 +254,8 @@ class MapboxNavigationView: ExpoView {
     applyInterfaceStyle(to: viewController)
     applyCameraConfiguration(to: viewController)
     
-    // Find the parent view controller
-    var parentVC: UIViewController? = self.window?.rootViewController
-    while let presented = parentVC?.presentedViewController {
-      parentVC = presented
-    }
-    
-    if let parent = parentVC {
+    // Attach to the nearest owning view controller in the current RN hierarchy.
+    if let parent = nearestViewController() {
       // Add as child view controller
       parent.addChild(viewController)
       addSubview(viewController.view)
@@ -250,6 +265,12 @@ class MapboxNavigationView: ExpoView {
       
       navigationViewController = viewController
       hostViewController = parent
+    } else {
+      NavigationSessionRegistry.shared.release(owner: sessionOwner)
+      onError([
+        "code": "NO_HOST_VIEW_CONTROLLER",
+        "message": "Unable to attach embedded navigation to a host view controller."
+      ])
     }
   }
   
@@ -267,6 +288,8 @@ class MapboxNavigationView: ExpoView {
     navigationViewController?.view.removeFromSuperview()
     navigationViewController?.removeFromParent()
     navigationViewController = nil
+    NavigationSessionRegistry.shared.release(owner: sessionOwner)
+    hasPendingSessionConflict = false
   }
 
   private func applyCameraConfiguration(to viewController: NavigationViewController) {
@@ -362,6 +385,17 @@ class MapboxNavigationView: ExpoView {
     warnedUnsupportedOptions.insert(key)
     NSLog("[MapboxNavigationView] \(message)")
   }
+
+  private func nearestViewController() -> UIViewController? {
+    var responder: UIResponder? = self
+    while let current = responder {
+      if let vc = current as? UIViewController {
+        return vc
+      }
+      responder = current.next
+    }
+    return window?.rootViewController
+  }
 }
 
 // MARK: - NavigationViewControllerDelegate
@@ -395,6 +429,27 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
     onBannerInstruction([
       "primaryText": progress.currentLegProgress.currentStep.instructions,
       "stepDistanceRemaining": progress.currentLegProgress.currentStepProgress.distanceRemaining
+    ])
+
+    let secondaryInstruction = progress.currentLegProgress.currentStep.names?.first
+      ?? progress.currentLegProgress.currentStep.description
+    let durationRemaining = progress.durationRemaining
+    onJourneyDataChange([
+      "latitude": location.coordinate.latitude,
+      "longitude": location.coordinate.longitude,
+      "bearing": location.course,
+      "speed": location.speed,
+      "altitude": location.altitude,
+      "accuracy": location.horizontalAccuracy,
+      "primaryInstruction": progress.currentLegProgress.currentStep.instructions,
+      "secondaryInstruction": secondaryInstruction,
+      "currentStreet": secondaryInstruction,
+      "stepDistanceRemaining": progress.currentLegProgress.currentStepProgress.distanceRemaining,
+      "distanceRemaining": progress.distanceRemaining,
+      "durationRemaining": durationRemaining,
+      "fractionTraveled": progress.fractionTraveled,
+      "completionPercent": Int((max(0, min(progress.fractionTraveled, 1)) * 100).rounded()),
+      "etaIso8601": ISO8601DateFormatter().string(from: Date().addingTimeInterval(durationRemaining))
     ])
   }
   

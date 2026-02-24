@@ -2,40 +2,56 @@
 
 Native Mapbox turn-by-turn navigation for Expo + React Native on iOS and Android.
 
-A production-focused wrapper around Mapbox Navigation SDK with:
-- full-screen native navigation
-- embedded native navigation view
-- rich bottom-sheet customization
-- cross-platform event stream + runtime controls
+Current package version: `1.1.6`.
+
+This package now focuses on **full-screen native navigation** (`startNavigation`) for stability and production UX consistency.
 
 ---
 
 ## Why This Package
 
-- Expo-friendly setup through config plugin
-- Works in full-screen flow and embedded flow
-- Strong customization surface for app-specific UX
-- Error-first behavior with normalized codes and events
+- Expo-friendly setup via config plugin
+- Full-screen native UX on iOS + Android
+- Strong bottom banner customization (`native` and `customNative`)
+- Runtime controls and event listeners
+- Session-guarded flow to prevent overlapping navigation sessions
 
 ---
 
 ## Feature Highlights
 
-- `startNavigation(options)` for full-screen native experience
-- `MapboxNavigationView` for embedded navigation in your own screens
-- Runtime controls:
+- `startNavigation(options)` full-screen navigation
+- `stopNavigation()` and `isNavigating()` session controls
+- Runtime updates:
   - `setMuted`
   - `setVoiceVolume`
   - `setDistanceUnit`
   - `setLanguage`
 - Event listeners:
-  - location/progress/banner/arrival/cancel/error
+  - location/progress/journey/banner/arrival/cancel/error
   - Android destination preview/changed
-  - iOS full-screen bottom-sheet action events
-- Bottom-sheet flexibility:
-  - built-in defaults
-  - custom React overlay content
-  - style/typography/action behavior controls
+  - bottom-sheet action press
+- Bottom sheet modes:
+  - `native` (Mapbox SDK bottom banner)
+  - `customNative` (package expandable native sheet)
+
+---
+
+## Support Us
+
+<p align="center">
+  <a href="https://ko-fi.com/atomiqlabs" target="_blank">
+    <img src="docs/imgs/support_me_on_kofi_badge_red.png" alt="Support on Ko-fi" width="260" />
+  </a>
+</p>
+
+---
+
+## Embedded View Status
+
+`MapboxNavigationView` (embedded mode) has been removed from supported runtime usage due to session-conflict instability.
+
+Use full-screen flow with `startNavigation()`.
 
 ---
 
@@ -79,15 +95,9 @@ Regenerate native projects:
 npx expo prebuild --clean
 ```
 
-### Token Validation (Fail Fast)
-
-Prebuild/build fails early when tokens are missing or malformed:
-- invalid/missing public token (`pk...`)
-- invalid/missing downloads token (`sk...`)
-
 ---
 
-## Quick Start (Full-Screen)
+## Quick Start
 
 ```ts
 import {
@@ -95,11 +105,11 @@ import {
   stopNavigation,
   addLocationChangeListener,
   addRouteProgressChangeListener,
+  addJourneyDataChangeListener,
   addBannerInstructionListener,
   addArriveListener,
   addCancelNavigationListener,
   addErrorListener,
-  addBottomSheetActionPressListener,
 } from "@atomiqlab/react-native-mapbox-navigation";
 
 await startNavigation({
@@ -113,51 +123,39 @@ await startNavigation({
   language: "en",
   bottomSheet: {
     enabled: true,
+    mode: "customNative",
+    initialState: "hidden",
+    revealOnNativeBannerGesture: true,
+    revealGestureHotzoneHeight: 100,
+    revealGestureRightExclusionWidth: 80,
+    collapsedHeight: 120,
+    expandedHeight: 340,
     showsTripProgress: true,
     showsManeuverView: true,
     showsActionButtons: true,
-    initialState: "collapsed",
-    collapsedHeight: 120,
-    expandedHeight: 280,
-    showHandle: true,
-    enableTapToToggle: true,
-    contentHorizontalPadding: 16,
-    contentBottomPadding: 14,
-    contentTopSpacing: 4,
-    backgroundColor: "#0f172a",
-    handleColor: "#93c5fd",
-    primaryTextColor: "#ffffff",
-    secondaryTextColor: "#bfdbfe",
-    primaryTextFontSize: 16,
-    secondaryTextFontSize: 13,
-    actionButtonBackgroundColor: "#2563eb",
-    actionButtonTextColor: "#ffffff",
-    secondaryActionButtonBackgroundColor: "#1e293b",
-    secondaryActionButtonTextColor: "#bfdbfe",
+    showCurrentStreet: true,
+    showRemainingDistance: true,
+    showRemainingDuration: true,
+    showETA: true,
+    showCompletionPercent: true,
     actionButtonTitle: "End Navigation",
-    secondaryActionButtonTitle: "More",
+    secondaryActionButtonTitle: "Support",
     primaryActionButtonBehavior: "stopNavigation",
     secondaryActionButtonBehavior: "emitEvent",
-    actionButtonBorderColor: "#60a5fa",
-    actionButtonBorderWidth: 1,
-    actionButtonCornerRadius: 10,
-    actionButtonFontSize: 14,
-    actionButtonHeight: 42,
     quickActions: [
-      { id: "support", label: "Support", variant: "secondary" },
-      { id: "share_eta", label: "Share ETA", variant: "ghost" },
+      { id: "overview", label: "Overview", variant: "secondary" },
+      { id: "recenter", label: "Recenter", variant: "ghost" },
     ],
     builtInQuickActions: ["overview", "recenter", "toggleMute", "stop"],
-    cornerRadius: 18,
   },
 });
 
 const subscriptions = [
   addLocationChangeListener((e) => console.log(e)),
   addRouteProgressChangeListener((e) => console.log(e)),
+  addJourneyDataChangeListener((e) => console.log("journey", e)),
   addBannerInstructionListener((e) => console.log(e.primaryText)),
   addArriveListener((e) => console.log(e)),
-  addBottomSheetActionPressListener((e) => console.log(e.actionId)),
   addCancelNavigationListener(() => console.log("cancelled")),
   addErrorListener((e) => console.warn(e)),
 ];
@@ -169,56 +167,9 @@ await stopNavigation();
 
 ---
 
-## Embedded Navigation View
-
-```tsx
-import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation";
-
-<MapboxNavigationView
-  style={{ flex: 1 }}
-  destination={{ latitude: 37.7847, longitude: -122.4073, name: "Downtown" }}
-  startOrigin={{ latitude: 37.7749, longitude: -122.4194 }}
-  shouldSimulateRoute
-  cameraMode="following"
-  bottomSheet={{
-    enabled: true,
-    mode: "overlay",
-    builtInQuickActions: ["overview", "toggleMute", "stop"],
-  }}
-  onOverlayBottomSheetActionPress={(e) => {
-    console.log("overlay action", e.actionId, e.source);
-  }}
-/>
-```
-
-### Custom Overlay Content (iOS + Android)
-
-```tsx
-<MapboxNavigationView
-  style={{ flex: 1 }}
-  destination={{ latitude: 37.7847, longitude: -122.4073 }}
-  startOrigin={{ latitude: 37.7749, longitude: -122.4194 }}
-  bottomSheet={{ enabled: true, mode: "overlay" }}
-  renderBottomSheet={({ expanded, toggle, routeProgress, emitAction }) => (
-    <Pressable
-      onPress={() => {
-        emitAction("custom_toggle");
-        toggle();
-      }}
-    >
-      <Text style={{ color: "white" }}>
-        {expanded ? "Collapse" : "Expand"} · {Math.round(routeProgress?.distanceRemaining ?? 0)}m left
-      </Text>
-    </Pressable>
-  )}
-/>
-```
-
----
-
 ## API Overview
 
-### Core
+### Core Methods
 
 - `startNavigation(options)`
 - `stopNavigation()`
@@ -233,64 +184,133 @@ import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation"
 
 - `addLocationChangeListener(listener)`
 - `addRouteProgressChangeListener(listener)`
+- `addJourneyDataChangeListener(listener)`
 - `addBannerInstructionListener(listener)`
 - `addArriveListener(listener)`
-- `addDestinationPreviewListener(listener)` (Android)
-- `addDestinationChangedListener(listener)` (Android)
 - `addCancelNavigationListener(listener)`
 - `addErrorListener(listener)`
-- `addBottomSheetActionPressListener(listener)` (iOS full-screen)
+- `addBottomSheetActionPressListener(listener)`
+- `addDestinationPreviewListener(listener)` (Android)
+- `addDestinationChangedListener(listener)` (Android)
 
 ---
 
-## Bottom Sheet Customization Surface
+## NavigationOptions
 
-`bottomSheet` supports:
-- structure:
-  - `enabled`
-  - `showsTripProgress`
-  - `showsManeuverView`
-  - `showsActionButtons`
-  - `mode`
-  - `initialState`
-  - `collapsedHeight`
-  - `expandedHeight`
-- overlay behavior:
-  - `showHandle`
-  - `enableTapToToggle`
-  - `showDefaultContent`
-  - `defaultManeuverTitle`
-  - `defaultTripProgressTitle`
-  - `quickActions`
-  - `builtInQuickActions`
-- layout + typography:
-  - `contentHorizontalPadding`
-  - `contentBottomPadding`
-  - `contentTopSpacing`
-  - `primaryTextFontSize`
-  - `secondaryTextFontSize`
-  - `actionButtonFontSize`
-  - `actionButtonHeight`
-- color + button style:
-  - `backgroundColor`
-  - `handleColor`
-  - `primaryTextColor`
-  - `secondaryTextColor`
-  - `actionButtonBackgroundColor`
-  - `actionButtonTextColor`
-  - `secondaryActionButtonBackgroundColor`
-  - `secondaryActionButtonTextColor`
-  - `actionButtonBorderColor`
-  - `actionButtonBorderWidth`
-  - `actionButtonCornerRadius`
-  - `cornerRadius`
-- action behavior:
-  - `actionButtonTitle`
-  - `secondaryActionButtonTitle`
-  - `primaryActionButtonBehavior`
-  - `secondaryActionButtonBehavior`
+Top-level options:
 
-Built-in quick actions:
+- `destination` (required)
+- `startOrigin` (optional)
+- `waypoints`
+- `shouldSimulateRoute`
+- `mute`
+- `voiceVolume`
+- `distanceUnit`
+- `language`
+- `cameraMode`
+- `cameraPitch`
+- `cameraZoom`
+- `mapStyleUri`
+- `mapStyleUriDay`
+- `mapStyleUriNight`
+- `uiTheme`
+- `routeAlternatives`
+- `showsSpeedLimits`
+- `showsWayNameLabel`
+- `showsTripProgress`
+- `showsManeuverView`
+- `showsActionButtons`
+- `showsReportFeedback`
+- `showsEndOfRouteFeedback`
+- `showsContinuousAlternatives`
+- `usesNightStyleWhileInTunnel`
+- `routeLineTracksTraversal`
+- `annotatesIntersectionsAlongRoute`
+- `androidActionButtons`
+- `bottomSheet`
+
+---
+
+## Bottom Sheet Options (`bottomSheet`)
+
+Behavior and structure:
+
+- `enabled`
+- `mode`: `"native" | "customNative"`
+- `showsTripProgress`
+- `showsManeuverView`
+- `showsActionButtons`
+- `initialState`: `"hidden" | "collapsed" | "expanded"`
+- `collapsedHeight`
+- `expandedHeight`
+- `contentHorizontalPadding`
+- `contentBottomPadding`
+- `contentTopSpacing`
+- `showHandle`
+- `enableTapToToggle`
+- `revealOnNativeBannerGesture`
+- `revealGestureHotzoneHeight`
+- `revealGestureRightExclusionWidth`
+
+Visibility content flags:
+
+- `showCurrentStreet`
+- `showRemainingDistance`
+- `showRemainingDuration`
+- `showETA`
+- `showCompletionPercent`
+
+Main style fields:
+
+- `backgroundColor`
+- `handleColor`
+- `primaryTextColor`
+- `secondaryTextColor`
+- `primaryTextFontSize`
+- `secondaryTextFontSize`
+- `cornerRadius`
+
+Action button fields:
+
+- `actionButtonTitle`
+- `secondaryActionButtonTitle`
+- `primaryActionButtonBehavior`: `"stopNavigation" | "emitEvent"`
+- `secondaryActionButtonBehavior`: `"none" | "stopNavigation" | "emitEvent"`
+- `actionButtonBackgroundColor`
+- `actionButtonTextColor`
+- `secondaryActionButtonBackgroundColor`
+- `secondaryActionButtonTextColor`
+- `actionButtonBorderColor`
+- `actionButtonBorderWidth`
+- `actionButtonCornerRadius`
+- `actionButtonFontSize`
+- `actionButtonHeight`
+- `actionButtonsBottomPadding`
+
+Quick action fields:
+
+- `quickActions`
+- `builtInQuickActions`
+- `quickActionBackgroundColor`
+- `quickActionTextColor`
+- `quickActionSecondaryBackgroundColor`
+- `quickActionSecondaryTextColor`
+- `quickActionGhostTextColor`
+- `quickActionBorderColor`
+- `quickActionBorderWidth`
+- `quickActionCornerRadius`
+
+Custom native additions:
+
+- `customRows`
+- `headerTitle`
+- `headerSubtitle`
+- `headerBadgeText`
+- `headerBadgeBackgroundColor`
+- `headerBadgeTextColor`
+
+Built-in quick action IDs:
+
 - `overview`
 - `recenter`
 - `mute`
@@ -300,26 +320,61 @@ Built-in quick actions:
 
 ---
 
+## Session Lifecycle Rules
+
+- Keep only one active navigation session at a time.
+- Guard rapid repeated starts.
+- Always call `stopNavigation()` on screen teardown.
+
+```ts
+useEffect(() => {
+  return () => {
+    stopNavigation().catch(() => {});
+  };
+}, []);
+```
+
+Safe start guard:
+
+```ts
+let starting = false;
+
+async function safeStartNavigation(options: Parameters<typeof startNavigation>[0]) {
+  if (starting || (await isNavigating())) return;
+  starting = true;
+  try {
+    await startNavigation(options);
+  } finally {
+    starting = false;
+  }
+}
+```
+
+---
+
 ## Platform Notes
 
-- Android: `startOrigin` optional for full-screen flow
-- iOS: `startOrigin` optional for full-screen flow (resolved via location permission)
-- Embedded flow currently expects explicit `startOrigin`
-- iOS full-screen uses package-native overlay sheet
-- Embedded flow supports full custom React sheet content
+- Full-screen `startNavigation`: iOS + Android
+- Bottom sheet `mode = "native"`: iOS + Android
+- Bottom sheet `mode = "customNative"`: iOS + Android
+- `startOrigin` optional in full-screen (both platforms)
+- `onDestinationPreview` / `onDestinationChanged`: Android only
+- iOS custom row icon supports `iconSystemName` (SF Symbols)
 
 ---
 
 ## Common Error Codes
 
+- `NAVIGATION_SESSION_CONFLICT`
 - `MAPBOX_TOKEN_INVALID`
 - `MAPBOX_TOKEN_FORBIDDEN`
 - `MAPBOX_RATE_LIMITED`
 - `ROUTE_FETCH_FAILED`
+- `ROUTE_FETCH_CANCELED`
 - `CURRENT_LOCATION_UNAVAILABLE`
 - `INVALID_COORDINATES`
 
-Use `addErrorListener` / `onError` to surface and log these.
+Use `addErrorListener` to surface and log these.
 
 ---
 

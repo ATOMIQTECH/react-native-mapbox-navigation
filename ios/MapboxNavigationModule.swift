@@ -5,24 +5,61 @@ import MapboxCoreNavigation
 import CoreLocation
 import UIKit
 
+private final class NativeBannerGestureDelegate: NSObject, UIGestureRecognizerDelegate {
+  func gestureRecognizer(
+    _ gestureRecognizer: UIGestureRecognizer,
+    shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+  ) -> Bool {
+    return true
+  }
+}
+
 public class MapboxNavigationModule: Module {
+  private let sessionOwner = "fullscreen"
   private var navigationViewController: NavigationViewController?
   private var isCurrentlyNavigating = false
   private var currentLanguage = Locale.preferredLanguages.first ?? "en"
   private var currentCameraMode = "following"
   private var currentLocationResolver: CurrentLocationResolver?
   private var warnedUnsupportedOptions = Set<String>()
+  private var isStartInProgress = false
+  private weak var nativeBottomBannerCancelButton: UIButton?
   private weak var fullScreenBottomSheetView: UIView?
+  private weak var fullScreenBottomSheetBackdropView: UIView?
   private weak var fullScreenBottomSheetPrimaryLabel: UILabel?
   private weak var fullScreenBottomSheetSecondaryLabel: UILabel?
   private weak var fullScreenBottomSheetPrimaryActionButton: UIButton?
   private weak var fullScreenBottomSheetSecondaryActionButton: UIButton?
   private var fullScreenBottomSheetCollapsedHeight: CGFloat = 120
   private var fullScreenBottomSheetExpandedHeight: CGFloat = 250
+  private var fullScreenBottomSheetHiddenHeight: CGFloat = 0
   private var fullScreenBottomSheetExpanded = false
+  private var fullScreenBottomSheetHidden = false
   private var fullScreenBottomSheetTopConstraint: NSLayoutConstraint?
+  private weak var fullScreenBottomSheetHandleView: UIView?
+  private var revealCustomSheetFromNativeBannerGesture = false
+  private weak var nativeBottomBannerGestureTargetView: UIView?
+  private weak var nativeBottomBannerRevealHotzoneView: UIView?
+  private var nativeBottomBannerTapGesture: UITapGestureRecognizer?
+  private var nativeBottomBannerPanGesture: UIPanGestureRecognizer?
+  private let nativeBannerGestureDelegate = NativeBannerGestureDelegate()
   private var fullScreenPrimaryActionBehavior = "stopNavigation"
   private var fullScreenSecondaryActionBehavior = "emitEvent"
+  private var fullScreenCustomActionByTag: [Int: String] = [:]
+  private var fullScreenCustomActionTagSeed = 5_000
+  private var isUsingCustomNativeBottomSheet = false
+  private var latestJourneyLocation: CLLocation?
+  private var latestJourneyInstructionPrimary: String?
+  private var latestJourneyInstructionSecondary: String?
+  private var latestJourneyStepDistanceRemaining: CLLocationDistance?
+  private var latestJourneyProgressDistanceRemaining: CLLocationDistance?
+  private var latestJourneyProgressDurationRemaining: TimeInterval?
+  private var latestJourneyProgressFractionTraveled: Double?
+  private var bottomSheetShowCurrentStreet = true
+  private var bottomSheetShowRemainingDistance = true
+  private var bottomSheetShowRemainingDuration = true
+  private var bottomSheetShowETA = true
+  private var bottomSheetShowCompletionPercent = true
   
   public func definition() -> ModuleDefinition {
     Name("MapboxNavigationModule")
@@ -31,6 +68,7 @@ public class MapboxNavigationModule: Module {
     Events(
       "onLocationChange",
       "onRouteProgressChange",
+      "onJourneyDataChange",
       "onBannerInstruction",
       "onArrive",
       "onCancelNavigation",
@@ -98,6 +136,7 @@ public class MapboxNavigationModule: Module {
       Events(
         "onLocationChange",
         "onRouteProgressChange",
+        "onJourneyDataChange",
         "onBannerInstruction",
         "onArrive",
         "onCancelNavigation",
@@ -276,6 +315,12 @@ public class MapboxNavigationModule: Module {
     options: NavigationStartOptions,
     promise: Promise
   ) {
+    guard !isStartInProgress, navigationViewController == nil, !isCurrentlyNavigating else {
+      let message = "A navigation session is already starting or active."
+      promise.reject("NAVIGATION_ALREADY_ACTIVE", message)
+      return
+    }
+
     guard configuredMapboxPublicToken() != nil else {
       let message = "Missing or invalid MBXAccessToken. Add the package plugin to app.json and set EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN before prebuild."
       self.emitErrorAndShowScreen([
@@ -285,6 +330,18 @@ public class MapboxNavigationModule: Module {
       promise.reject("MISSING_ACCESS_TOKEN", message)
       return
     }
+
+    guard NavigationSessionRegistry.shared.acquire(owner: sessionOwner) else {
+      let message = "Another navigation session is already active. Stop embedded/full-screen navigation before starting a new one."
+      self.emitErrorAndShowScreen([
+        "code": "NAVIGATION_SESSION_CONFLICT",
+        "message": message
+      ])
+      promise.reject("NAVIGATION_SESSION_CONFLICT", message)
+      return
+    }
+
+    isStartInProgress = true
 
     var waypoints = [Waypoint(coordinate: origin)]
     
@@ -314,7 +371,9 @@ public class MapboxNavigationModule: Module {
       
       switch result {
       case .success(let response):
+        self.isStartInProgress = false
         guard response.routes?.first != nil else {
+          NavigationSessionRegistry.shared.release(owner: self.sessionOwner)
           self.emitErrorAndShowScreen([
             "code": "NO_ROUTE",
             "message": "No route found"
@@ -360,24 +419,25 @@ public class MapboxNavigationModule: Module {
         self.applyInterfaceStyle(to: viewController, theme: options.uiTheme)
         self.currentCameraMode = options.cameraMode ?? "following"
         viewController.showsSpeedLimits = options.showsSpeedLimits ?? true
-        let hasBottomSheetConfig = options.bottomSheet != nil
-        if options.showsManeuverView != nil && !hasBottomSheetConfig {
-          self.warnUnsupportedOptionOnce(
-            key: "showsManeuverView",
-            message: "showsManeuverView is currently not supported on iOS full-screen navigation and will be ignored."
-          )
-        }
-        if options.showsTripProgress != nil && !hasBottomSheetConfig {
-          self.warnUnsupportedOptionOnce(
-            key: "showsTripProgress",
-            message: "showsTripProgress is currently not supported on iOS full-screen navigation and will be ignored."
-          )
-        }
-        if options.showsActionButtons != nil && !hasBottomSheetConfig {
-          self.warnUnsupportedOptionOnce(
-            key: "showsActionButtons",
-            message: "showsActionButtons is currently not supported on iOS full-screen navigation and will be ignored."
-          )
+        let requestedBottomSheetMode = options.bottomSheet?.mode?
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+          .lowercased()
+        let useCustomNativeBottomSheet = requestedBottomSheetMode == "customnative"
+          || requestedBottomSheetMode == "overlay"
+        let shouldRenderCustomNativeBottomSheet =
+          useCustomNativeBottomSheet && options.bottomSheet?.enabled != false
+        let revealFromNativeBannerGesture =
+          shouldRenderCustomNativeBottomSheet && (options.bottomSheet?.revealOnNativeBannerGesture ?? true)
+        self.isUsingCustomNativeBottomSheet = shouldRenderCustomNativeBottomSheet
+        self.revealCustomSheetFromNativeBannerGesture = revealFromNativeBannerGesture
+        self.setNativeBottomBannerHidden(shouldRenderCustomNativeBottomSheet, in: viewController)
+        if shouldRenderCustomNativeBottomSheet {
+          self.configureFullScreenBottomSheetIfNeeded(on: viewController, options: options)
+          self.configureNativeBannerGestureRevealIfNeeded(on: viewController, options: options)
+        } else {
+          self.clearNativeBannerGestureRevealIfNeeded()
+          self.applyNativeBottomBannerCustomization(to: viewController, options: options)
+          self.detachFullScreenBottomSheet()
         }
         if options.showsReportFeedback != nil {
           self.warnUnsupportedOptionOnce(
@@ -421,10 +481,12 @@ public class MapboxNavigationModule: Module {
             message: "showsWayNameLabel is currently not supported on iOS NavigationViewController and will be ignored."
           )
         }
-        self.configureFullScreenBottomSheetIfNeeded(
-          on: viewController,
-          options: options
-        )
+        if options.bottomSheet?.mode == "overlay" {
+          self.warnUnsupportedOptionOnce(
+            key: "bottomSheet.mode.overlay.fullscreen",
+            message: "bottomSheet.mode='overlay' is treated as bottomSheet.mode='customNative' for iOS full-screen navigation."
+          )
+        }
         
         self.navigationViewController = viewController
         self.isCurrentlyNavigating = true
@@ -434,6 +496,7 @@ public class MapboxNavigationModule: Module {
             promise.resolve(nil)
           }
         } else {
+          NavigationSessionRegistry.shared.release(owner: self.sessionOwner)
           self.emitErrorAndShowScreen([
             "code": "NO_ROOT_VC",
             "message": "Could not find root view controller"
@@ -442,6 +505,8 @@ public class MapboxNavigationModule: Module {
         }
         
       case .failure(let error):
+        self.isStartInProgress = false
+        NavigationSessionRegistry.shared.release(owner: self.sessionOwner)
         let (code, message) = self.mapDirectionsError(error)
         self.emitErrorAndShowScreen([
           "code": code,
@@ -465,6 +530,8 @@ public class MapboxNavigationModule: Module {
   
   private func emitErrorAndShowScreen(_ payload: [String: Any]) {
     sendEvent("onError", payload)
+    isStartInProgress = false
+    NavigationSessionRegistry.shared.release(owner: sessionOwner)
 
     guard let navVC = navigationViewController else {
       return
@@ -473,6 +540,7 @@ public class MapboxNavigationModule: Module {
     if navVC.presentingViewController == nil {
       navigationViewController = nil
       isCurrentlyNavigating = false
+      isUsingCustomNativeBottomSheet = false
       detachFullScreenBottomSheet()
       return
     }
@@ -480,6 +548,7 @@ public class MapboxNavigationModule: Module {
     navVC.dismiss(animated: true) {
       self.navigationViewController = nil
       self.isCurrentlyNavigating = false
+      self.isUsingCustomNativeBottomSheet = false
       self.detachFullScreenBottomSheet()
     }
   }
@@ -502,17 +571,41 @@ public class MapboxNavigationModule: Module {
   }
 
   private func stopNavigation(promise: Promise) {
-    guard let navVC = navigationViewController else {
-      detachFullScreenBottomSheet()
+    dismissActiveNavigation(emitCancelEvent: false) {
       promise.resolve(nil)
-      return
     }
-    
-    navVC.dismiss(animated: true) {
+  }
+
+  private func dismissActiveNavigation(
+    emitCancelEvent: Bool,
+    completion: (() -> Void)? = nil
+  ) {
+    isStartInProgress = false
+
+    let finalize = {
       self.navigationViewController = nil
       self.isCurrentlyNavigating = false
+      self.isUsingCustomNativeBottomSheet = false
+      NavigationSessionRegistry.shared.release(owner: self.sessionOwner)
       self.detachFullScreenBottomSheet()
-      promise.resolve(nil)
+      if emitCancelEvent {
+        self.sendEvent("onCancelNavigation", [:])
+      }
+      completion?()
+    }
+
+    guard let navVC = navigationViewController else {
+      finalize()
+      return
+    }
+
+    if navVC.presentingViewController == nil {
+      finalize()
+      return
+    }
+
+    navVC.dismiss(animated: true) {
+      finalize()
     }
   }
   
@@ -641,6 +734,174 @@ public class MapboxNavigationModule: Module {
     }
   }
 
+  private func applyNativeBottomBannerCustomization(
+    to viewController: NavigationViewController,
+    options: NavigationStartOptions
+  ) {
+    guard let banner = resolveBottomBannerController(from: viewController) else {
+      warnUnsupportedOptionOnce(
+        key: "ios.nativeBottomBanner.missing",
+        message: "Unable to access iOS native BottomBannerViewController for customization on this SDK build."
+      )
+      return
+    }
+
+    let bottomSheet = options.bottomSheet
+    let showTripProgress = options.showsTripProgress != false && bottomSheet?.showsTripProgress != false
+    let showActionButtons = options.showsActionButtons != false && bottomSheet?.showsActionButtons != false
+
+    if let backgroundColor = colorFromHex(bottomSheet?.backgroundColor) {
+      banner.view.backgroundColor = backgroundColor
+      banner.bottomBannerView.backgroundColor = backgroundColor
+    }
+
+    if let cornerRadius = bottomSheet?.cornerRadius {
+      banner.bottomBannerView.clipsToBounds = true
+      banner.bottomBannerView.layer.cornerRadius = CGFloat(max(0, min(cornerRadius, 28)))
+      banner.bottomBannerView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+    }
+
+    if let primaryColor = colorFromHex(bottomSheet?.primaryTextColor) {
+      banner.arrivalTimeLabel?.textColor = primaryColor
+    }
+    if let secondaryColor = colorFromHex(bottomSheet?.secondaryTextColor) {
+      banner.distanceRemainingLabel?.textColor = secondaryColor
+      banner.timeRemainingLabel?.textColor = secondaryColor
+    }
+
+    if let primaryFontSize = bottomSheet?.primaryTextFontSize {
+      banner.arrivalTimeLabel?.font = .systemFont(
+        ofSize: CGFloat(max(10, min(primaryFontSize, 34))),
+        weight: .semibold
+      )
+    }
+    if let secondaryFontSize = bottomSheet?.secondaryTextFontSize {
+      let size = CGFloat(max(10, min(secondaryFontSize, 28)))
+      banner.distanceRemainingLabel?.font = .systemFont(ofSize: size, weight: .medium)
+      banner.timeRemainingLabel?.font = .systemFont(ofSize: size, weight: .medium)
+    }
+
+    let cancelButton = banner.cancelButton
+    cancelButton?.isHidden = !showActionButtons
+    if let title = bottomSheet?.actionButtonTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !title.isEmpty {
+      cancelButton?.setTitle(title, for: .normal)
+    }
+    if let buttonTextColor = colorFromHex(bottomSheet?.actionButtonTextColor) {
+      cancelButton?.setTitleColor(buttonTextColor, for: .normal)
+    }
+    if let buttonBackgroundColor = colorFromHex(bottomSheet?.actionButtonBackgroundColor) {
+      cancelButton?.backgroundColor = buttonBackgroundColor
+    }
+    if let buttonBorderColor = colorFromHex(bottomSheet?.actionButtonBorderColor) {
+      cancelButton?.layer.borderColor = buttonBorderColor.cgColor
+    }
+    if let buttonBorderWidth = bottomSheet?.actionButtonBorderWidth {
+      cancelButton?.layer.borderWidth = CGFloat(max(0, min(buttonBorderWidth, 6)))
+    }
+    let buttonCornerRadius = CGFloat(max(0, min(bottomSheet?.actionButtonCornerRadius ?? 10, 18)))
+    cancelButton?.layer.cornerRadius = buttonCornerRadius
+    cancelButton?.clipsToBounds = true
+
+    banner.distanceRemainingLabel?.isHidden = !showTripProgress
+    banner.timeRemainingLabel?.isHidden = !showTripProgress
+    banner.arrivalTimeLabel?.isHidden = !showTripProgress
+
+    nativeBottomBannerCancelButton?.removeTarget(
+      self,
+      action: #selector(onNativeBottomBannerCancelTap),
+      for: .touchUpInside
+    )
+    if let cancelButton {
+      cancelButton.addTarget(
+        self,
+        action: #selector(onNativeBottomBannerCancelTap),
+        for: .touchUpInside
+      )
+      nativeBottomBannerCancelButton = cancelButton
+    } else {
+      nativeBottomBannerCancelButton = nil
+    }
+  }
+
+  private func setNativeBottomBannerHidden(
+    _ hidden: Bool,
+    in viewController: NavigationViewController
+  ) {
+    guard let banner = resolveBottomBannerController(from: viewController) else {
+      return
+    }
+    banner.view.isHidden = hidden
+    banner.bottomBannerView.isHidden = hidden
+    banner.bottomBannerView.alpha = hidden ? 0 : 1
+  }
+
+  private func resolveBottomBannerController(
+    from viewController: NavigationViewController
+  ) -> BottomBannerViewController? {
+    let selector = NSSelectorFromString("bottomBannerViewController")
+    guard viewController.responds(to: selector) else {
+      return nil
+    }
+    return viewController.value(forKey: "bottomBannerViewController") as? BottomBannerViewController
+  }
+
+  private func configureNativeBannerGestureRevealIfNeeded(
+    on viewController: NavigationViewController,
+    options: NavigationStartOptions
+  ) {
+    clearNativeBannerGestureRevealIfNeeded()
+    guard revealCustomSheetFromNativeBannerGesture else { return }
+    let targetView = UIView()
+    targetView.translatesAutoresizingMaskIntoConstraints = false
+    targetView.backgroundColor = .clear
+    targetView.isUserInteractionEnabled = true
+    viewController.view.addSubview(targetView)
+
+    let requestedHeight = CGFloat(options.bottomSheet?.revealGestureHotzoneHeight ?? 100)
+    let revealZoneHeight = max(56, min(requestedHeight, 220))
+    let trailingExclusion = CGFloat(
+      max(48, min(options.bottomSheet?.revealGestureRightExclusionWidth ?? 80, 220))
+    )
+    NSLayoutConstraint.activate([
+      targetView.leadingAnchor.constraint(equalTo: viewController.view.leadingAnchor),
+      targetView.trailingAnchor.constraint(equalTo: viewController.view.trailingAnchor, constant: -trailingExclusion),
+      targetView.bottomAnchor.constraint(equalTo: viewController.view.bottomAnchor),
+      targetView.heightAnchor.constraint(equalToConstant: revealZoneHeight),
+    ])
+    nativeBottomBannerRevealHotzoneView = targetView
+
+    let pan = UIPanGestureRecognizer(target: self, action: #selector(onNativeBannerRevealPan(_:)))
+    pan.cancelsTouchesInView = false
+    pan.delegate = nativeBannerGestureDelegate
+    targetView.addGestureRecognizer(pan)
+    nativeBottomBannerPanGesture = pan
+    nativeBottomBannerGestureTargetView = targetView
+    targetView.isUserInteractionEnabled = fullScreenBottomSheetHidden
+  }
+
+  private func clearNativeBannerGestureRevealIfNeeded() {
+    if let tap = nativeBottomBannerTapGesture {
+      nativeBottomBannerGestureTargetView?.removeGestureRecognizer(tap)
+    }
+    if let pan = nativeBottomBannerPanGesture {
+      nativeBottomBannerGestureTargetView?.removeGestureRecognizer(pan)
+    }
+    nativeBottomBannerRevealHotzoneView?.removeFromSuperview()
+    nativeBottomBannerTapGesture = nil
+    nativeBottomBannerPanGesture = nil
+    nativeBottomBannerGestureTargetView = nil
+    nativeBottomBannerRevealHotzoneView = nil
+  }
+
+  @objc
+  private func onNativeBottomBannerCancelTap() {
+    sendEvent("onBottomSheetActionPress", [
+      "actionId": "cancel"
+    ])
+    dismissActiveNavigation(emitCancelEvent: true)
+  }
+
   private func configureFullScreenBottomSheetIfNeeded(
     on viewController: NavigationViewController,
     options: NavigationStartOptions
@@ -654,17 +915,36 @@ public class MapboxNavigationModule: Module {
     let expanded = CGFloat(options.bottomSheet?.expandedHeight ?? 250)
     let horizontalPadding = CGFloat(options.bottomSheet?.contentHorizontalPadding ?? 14)
     let contentTopSpacing = CGFloat(options.bottomSheet?.contentTopSpacing ?? 0)
-    let contentBottomPadding = CGFloat(options.bottomSheet?.contentBottomPadding ?? 10)
+    let contentBottomPadding = CGFloat(options.bottomSheet?.contentBottomPadding ?? 6)
+    let actionButtonsBottomPadding = CGFloat(options.bottomSheet?.actionButtonsBottomPadding ?? 4)
     let primaryFontSize = CGFloat(options.bottomSheet?.primaryTextFontSize ?? 16)
     let secondaryFontSize = CGFloat(options.bottomSheet?.secondaryTextFontSize ?? 13)
     let actionButtonFontSize = CGFloat(options.bottomSheet?.actionButtonFontSize ?? 14)
     let actionButtonHeight = CGFloat(options.bottomSheet?.actionButtonHeight ?? 40)
+    bottomSheetShowCurrentStreet = options.bottomSheet?.showCurrentStreet ?? true
+    bottomSheetShowRemainingDistance = options.bottomSheet?.showRemainingDistance ?? true
+    bottomSheetShowRemainingDuration = options.bottomSheet?.showRemainingDuration ?? true
+    bottomSheetShowETA = options.bottomSheet?.showETA ?? true
+    bottomSheetShowCompletionPercent = options.bottomSheet?.showCompletionPercent ?? true
     fullScreenBottomSheetCollapsedHeight = max(72, min(collapsed, 320))
     fullScreenBottomSheetExpandedHeight = max(
       fullScreenBottomSheetCollapsedHeight,
       min(expanded, 500)
     )
-    fullScreenBottomSheetExpanded = options.bottomSheet?.initialState == "expanded"
+    let initialState = options.bottomSheet?.initialState?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+    fullScreenBottomSheetHidden = revealCustomSheetFromNativeBannerGesture || initialState == "hidden"
+    fullScreenBottomSheetExpanded = initialState == "expanded"
+
+    let backdrop = UIView()
+    backdrop.translatesAutoresizingMaskIntoConstraints = false
+    backdrop.backgroundColor = UIColor.black.withAlphaComponent(0.28)
+    backdrop.alpha = fullScreenBottomSheetHidden ? 0 : 1
+    backdrop.isUserInteractionEnabled = !fullScreenBottomSheetHidden
+    let backdropTap = UITapGestureRecognizer(target: self, action: #selector(onBottomSheetBackdropTap))
+    backdropTap.cancelsTouchesInView = true
+    backdrop.addGestureRecognizer(backdropTap)
 
     let container = UIView()
     container.translatesAutoresizingMaskIntoConstraints = false
@@ -674,6 +954,8 @@ public class MapboxNavigationModule: Module {
     container.layer.cornerRadius = max(0, min(cornerRadius, 28))
     container.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
     container.clipsToBounds = true
+    container.alpha = fullScreenBottomSheetHidden ? 0 : 1
+    container.isUserInteractionEnabled = !fullScreenBottomSheetHidden
 
     let handle = UIView()
     handle.translatesAutoresizingMaskIntoConstraints = false
@@ -704,9 +986,11 @@ public class MapboxNavigationModule: Module {
     fullScreenPrimaryActionBehavior = options.bottomSheet?.primaryActionButtonBehavior ?? "stopNavigation"
     fullScreenSecondaryActionBehavior = options.bottomSheet?.secondaryActionButtonBehavior ?? "emitEvent"
 
+    let primaryTitle = options.bottomSheet?.actionButtonTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let hasPrimaryAction = !(primaryTitle?.isEmpty ?? true)
     let actionButton = UIButton(type: .system)
     actionButton.translatesAutoresizingMaskIntoConstraints = false
-    actionButton.setTitle(options.bottomSheet?.actionButtonTitle ?? "End", for: .normal)
+    actionButton.setTitle(primaryTitle, for: .normal)
     actionButton.setTitleColor(colorFromHex(options.bottomSheet?.actionButtonTextColor) ?? .white, for: .normal)
     actionButton.backgroundColor = colorFromHex(options.bottomSheet?.actionButtonBackgroundColor)
       ?? UIColor(red: 0.2, green: 0.35, blue: 0.8, alpha: 1)
@@ -715,7 +999,7 @@ public class MapboxNavigationModule: Module {
     actionButton.layer.borderWidth = CGFloat(max(0, min(options.bottomSheet?.actionButtonBorderWidth ?? 0, 6)))
     actionButton.titleLabel?.font = .systemFont(ofSize: max(10, min(actionButtonFontSize, 24)), weight: .semibold)
     actionButton.addTarget(self, action: #selector(onBottomSheetPrimaryActionTap), for: .touchUpInside)
-    actionButton.isHidden = options.showsActionButtons == false || options.bottomSheet?.showsActionButtons == false
+    actionButton.isHidden = !hasPrimaryAction || options.showsActionButtons == false || options.bottomSheet?.showsActionButtons == false
 
     let secondaryTitle = options.bottomSheet?.secondaryActionButtonTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
     let hasSecondaryAction = !(secondaryTitle?.isEmpty ?? true)
@@ -741,15 +1025,86 @@ public class MapboxNavigationModule: Module {
     let showTripSection = options.showsTripProgress != false && options.bottomSheet?.showsTripProgress != false
     primaryLabel.isHidden = !showManeuverSection
     secondaryLabel.isHidden = !showTripSection
+    fullScreenCustomActionByTag.removeAll()
 
     container.addSubview(handle)
-    container.addSubview(stack)
+    let contentStack = UIStackView()
+    contentStack.translatesAutoresizingMaskIntoConstraints = false
+    contentStack.axis = .vertical
+    contentStack.spacing = 10
+    contentStack.alignment = .fill
+
+    if let headerView = makeCustomNativeHeaderView(options: options) {
+      contentStack.addArrangedSubview(headerView)
+    }
+
+    contentStack.addArrangedSubview(stack)
+
+    let customRows = options.bottomSheet?.customRows ?? []
+    if !customRows.isEmpty {
+      let rowsStack = UIStackView()
+      rowsStack.translatesAutoresizingMaskIntoConstraints = false
+      rowsStack.axis = .vertical
+      rowsStack.spacing = 8
+      rowsStack.alignment = .fill
+      for row in customRows {
+        rowsStack.addArrangedSubview(
+          makeCustomNativeRowView(
+            row: row,
+            primaryColor: colorFromHex(options.bottomSheet?.primaryTextColor) ?? .white,
+            secondaryColor: colorFromHex(options.bottomSheet?.secondaryTextColor) ?? UIColor(white: 0.88, alpha: 0.9),
+            primaryFontSize: primaryFontSize,
+            secondaryFontSize: secondaryFontSize
+          )
+        )
+      }
+      contentStack.addArrangedSubview(rowsStack)
+    }
+
+    let quickActions = options.bottomSheet?.quickActions ?? []
+    if !quickActions.isEmpty {
+      let quickActionsRow = UIStackView()
+      quickActionsRow.translatesAutoresizingMaskIntoConstraints = false
+      quickActionsRow.axis = .horizontal
+      quickActionsRow.spacing = 8
+      quickActionsRow.alignment = .fill
+      quickActionsRow.distribution = .fillEqually
+
+      for action in quickActions.prefix(4) {
+        let button = UIButton(type: .system)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setTitle(action.label, for: .normal)
+        styleCustomNativeQuickActionButton(
+          button,
+          variant: action.variant,
+          options: options,
+          actionButtonFontSize: actionButtonFontSize
+        )
+        fullScreenCustomActionTagSeed += 1
+        button.tag = fullScreenCustomActionTagSeed
+        fullScreenCustomActionByTag[button.tag] = action.id
+        button.addTarget(self, action: #selector(onCustomNativeQuickActionTap(_:)), for: .touchUpInside)
+        button.heightAnchor.constraint(equalToConstant: max(28, min(actionButtonHeight - 4, 60))).isActive = true
+        quickActionsRow.addArrangedSubview(button)
+      }
+
+      contentStack.addArrangedSubview(quickActionsRow)
+    }
+
     let actionStack = UIStackView(arrangedSubviews: [actionButton, secondaryActionButton])
     actionStack.translatesAutoresizingMaskIntoConstraints = false
     actionStack.axis = .horizontal
     actionStack.distribution = .fillEqually
     actionStack.spacing = 8
-    container.addSubview(actionStack)
+    actionStack.isHidden = actionButton.isHidden && secondaryActionButton.isHidden
+    if !actionStack.isHidden {
+      contentStack.addArrangedSubview(actionStack)
+      actionStack.heightAnchor.constraint(equalToConstant: max(32, min(actionButtonHeight, 72))).isActive = true
+      contentStack.setCustomSpacing(max(0, min(actionButtonsBottomPadding, 32)), after: actionStack)
+    }
+
+    container.addSubview(contentStack)
+    viewController.view.addSubview(backdrop)
     viewController.view.addSubview(container)
 
     let topConstraint = container.topAnchor.constraint(
@@ -759,6 +1114,11 @@ public class MapboxNavigationModule: Module {
     fullScreenBottomSheetTopConstraint = topConstraint
 
     NSLayoutConstraint.activate([
+      backdrop.topAnchor.constraint(equalTo: viewController.view.topAnchor),
+      backdrop.leadingAnchor.constraint(equalTo: viewController.view.leadingAnchor),
+      backdrop.trailingAnchor.constraint(equalTo: viewController.view.trailingAnchor),
+      backdrop.bottomAnchor.constraint(equalTo: viewController.view.bottomAnchor),
+
       container.leadingAnchor.constraint(equalTo: viewController.view.leadingAnchor),
       container.trailingAnchor.constraint(equalTo: viewController.view.trailingAnchor),
       container.bottomAnchor.constraint(equalTo: viewController.view.bottomAnchor),
@@ -769,26 +1129,31 @@ public class MapboxNavigationModule: Module {
       handle.widthAnchor.constraint(equalToConstant: 42),
       handle.heightAnchor.constraint(equalToConstant: 5),
 
-      stack.topAnchor.constraint(equalTo: handle.bottomAnchor, constant: 10 + max(0, min(contentTopSpacing, 20))),
-      stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: max(0, min(horizontalPadding, 48))),
-      stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -max(0, min(horizontalPadding, 48))),
-
-      actionStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: max(0, min(horizontalPadding, 48))),
-      actionStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -max(0, min(horizontalPadding, 48))),
-      actionStack.bottomAnchor.constraint(equalTo: container.safeAreaLayoutGuide.bottomAnchor, constant: -max(0, min(contentBottomPadding, 40))),
-      actionStack.heightAnchor.constraint(equalToConstant: max(32, min(actionButtonHeight, 72))),
-      actionStack.topAnchor.constraint(greaterThanOrEqualTo: stack.bottomAnchor, constant: 10),
+      contentStack.topAnchor.constraint(equalTo: handle.bottomAnchor, constant: 10 + max(0, min(contentTopSpacing, 20))),
+      contentStack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: max(0, min(horizontalPadding, 48))),
+      contentStack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -max(0, min(horizontalPadding, 48))),
+      contentStack.bottomAnchor.constraint(lessThanOrEqualTo: container.safeAreaLayoutGuide.bottomAnchor, constant: -max(0, min(contentBottomPadding, 40))),
     ])
 
     if options.bottomSheet?.enableTapToToggle != false {
       let tap = UITapGestureRecognizer(target: self, action: #selector(onBottomSheetToggleTap))
       tap.cancelsTouchesInView = false
-      container.addGestureRecognizer(tap)
+      handle.isUserInteractionEnabled = true
+      handle.addGestureRecognizer(tap)
+      let pan = UIPanGestureRecognizer(target: self, action: #selector(onBottomSheetHandlePan(_:)))
+      pan.cancelsTouchesInView = false
+      handle.addGestureRecognizer(pan)
+      let containerPan = UIPanGestureRecognizer(target: self, action: #selector(onBottomSheetHandlePan(_:)))
+      containerPan.cancelsTouchesInView = false
+      container.addGestureRecognizer(containerPan)
     }
     handle.isHidden = options.bottomSheet?.showHandle == false
 
+    fullScreenBottomSheetBackdropView?.removeFromSuperview()
+    fullScreenBottomSheetBackdropView = backdrop
     fullScreenBottomSheetView?.removeFromSuperview()
     fullScreenBottomSheetView = container
+    fullScreenBottomSheetHandleView = handle
     fullScreenBottomSheetPrimaryLabel = primaryLabel
     fullScreenBottomSheetSecondaryLabel = secondaryLabel
     fullScreenBottomSheetPrimaryActionButton = actionButton
@@ -799,20 +1164,116 @@ public class MapboxNavigationModule: Module {
     instruction: String?,
     progress: RouteProgress?
   ) {
-    guard fullScreenBottomSheetView != nil else {
+    guard isUsingCustomNativeBottomSheet, fullScreenBottomSheetView != nil else {
       return
     }
     if let instruction, !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       fullScreenBottomSheetPrimaryLabel?.text = instruction
+      latestJourneyInstructionPrimary = instruction
+    } else if let cached = latestJourneyInstructionPrimary, !cached.isEmpty {
+      fullScreenBottomSheetPrimaryLabel?.text = cached
     }
+
+    var parts: [String] = []
+    if bottomSheetShowCurrentStreet,
+       let street = latestJourneyInstructionSecondary?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !street.isEmpty {
+      parts.append(street)
+    }
+
     if let progress {
       let remainingMeters = max(0, Int(progress.distanceRemaining.rounded()))
-      let percent = Int((max(0, min(progress.fractionTraveled, 1)) * 100).rounded())
-      fullScreenBottomSheetSecondaryLabel?.text = "\(remainingMeters) m remaining • \(percent)% completed"
+      let durationRemaining = max(0, progress.durationRemaining)
+      let fraction = max(0, min(progress.fractionTraveled, 1))
+      if bottomSheetShowRemainingDistance {
+        parts.append("\(remainingMeters) m")
+      }
+      if bottomSheetShowRemainingDuration {
+        parts.append(formatDuration(durationRemaining))
+      }
+      if bottomSheetShowETA {
+        parts.append(formatETA(durationRemaining))
+      }
+      if bottomSheetShowCompletionPercent {
+        parts.append("\(Int((fraction * 100).rounded()))%")
+      }
+    }
+
+    if parts.isEmpty, bottomSheetShowCurrentStreet,
+       let street = latestJourneyInstructionSecondary?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !street.isEmpty {
+      parts.append(street)
+    }
+    fullScreenBottomSheetSecondaryLabel?.text = parts.isEmpty
+      ? "Waiting for route progress"
+      : parts.joined(separator: " • ")
+  }
+
+  private func formatDuration(_ seconds: TimeInterval) -> String {
+    let totalMinutes = max(0, Int((seconds / 60.0).rounded()))
+    if totalMinutes < 60 {
+      return "\(totalMinutes)m"
+    }
+    let hours = totalMinutes / 60
+    let minutes = totalMinutes % 60
+    return minutes > 0 ? "\(hours)h \(minutes)m" : "\(hours)h"
+  }
+
+  private func formatETA(_ durationRemaining: TimeInterval) -> String {
+    let date = Date().addingTimeInterval(durationRemaining)
+    let formatter = DateFormatter()
+    formatter.locale = Locale.current
+    formatter.timeStyle = .short
+    formatter.dateStyle = .none
+    return formatter.string(from: date)
+  }
+
+  private func emitJourneyData() {
+    var payload: [String: Any] = [:]
+    if let location = latestJourneyLocation {
+      payload["latitude"] = location.coordinate.latitude
+      payload["longitude"] = location.coordinate.longitude
+      payload["bearing"] = location.course
+      payload["speed"] = location.speed
+      payload["altitude"] = location.altitude
+      payload["accuracy"] = location.horizontalAccuracy
+    }
+    if let instruction = latestJourneyInstructionPrimary, !instruction.isEmpty {
+      payload["primaryInstruction"] = instruction
+    }
+    if let secondary = latestJourneyInstructionSecondary, !secondary.isEmpty {
+      payload["secondaryInstruction"] = secondary
+      payload["currentStreet"] = secondary
+    }
+    if let stepDistance = latestJourneyStepDistanceRemaining {
+      payload["stepDistanceRemaining"] = stepDistance
+    }
+    if let distanceRemaining = latestJourneyProgressDistanceRemaining {
+      payload["distanceRemaining"] = distanceRemaining
+    }
+    if let durationRemaining = latestJourneyProgressDurationRemaining {
+      payload["durationRemaining"] = durationRemaining
+      payload["etaIso8601"] = ISO8601DateFormatter().string(from: Date().addingTimeInterval(durationRemaining))
+    }
+    if let fraction = latestJourneyProgressFractionTraveled {
+      payload["fractionTraveled"] = fraction
+      payload["completionPercent"] = Int((fraction * 100).rounded())
+    }
+    if !payload.isEmpty {
+      sendEvent("onJourneyDataChange", payload)
     }
   }
 
   private func detachFullScreenBottomSheet() {
+    clearNativeBannerGestureRevealIfNeeded()
+    nativeBottomBannerCancelButton?.removeTarget(
+      self,
+      action: #selector(onNativeBottomBannerCancelTap),
+      for: .touchUpInside
+    )
+    nativeBottomBannerCancelButton = nil
+    fullScreenBottomSheetBackdropView?.removeFromSuperview()
+    fullScreenBottomSheetBackdropView = nil
     fullScreenBottomSheetView?.removeFromSuperview()
     fullScreenBottomSheetView = nil
     fullScreenBottomSheetPrimaryLabel = nil
@@ -820,10 +1281,16 @@ public class MapboxNavigationModule: Module {
     fullScreenBottomSheetPrimaryActionButton = nil
     fullScreenBottomSheetSecondaryActionButton = nil
     fullScreenBottomSheetTopConstraint = nil
+    fullScreenBottomSheetHandleView = nil
+    fullScreenBottomSheetHidden = false
+    revealCustomSheetFromNativeBannerGesture = false
   }
 
   private func currentBottomSheetHeight() -> CGFloat {
-    fullScreenBottomSheetExpanded
+    if fullScreenBottomSheetHidden {
+      return fullScreenBottomSheetHiddenHeight
+    }
+    return fullScreenBottomSheetExpanded
       ? fullScreenBottomSheetExpandedHeight
       : fullScreenBottomSheetCollapsedHeight
   }
@@ -833,10 +1300,89 @@ public class MapboxNavigationModule: Module {
     guard fullScreenBottomSheetView != nil else {
       return
     }
-    fullScreenBottomSheetExpanded.toggle()
+    if fullScreenBottomSheetHidden {
+      fullScreenBottomSheetHidden = false
+      fullScreenBottomSheetExpanded = false
+    } else {
+      fullScreenBottomSheetExpanded.toggle()
+    }
+    applyFullScreenBottomSheetState(animated: true)
+  }
+
+  @objc
+  private func onNativeBannerRevealPan(_ recognizer: UIPanGestureRecognizer) {
+    guard recognizer.state == .ended else { return }
+    let translationY = recognizer.translation(in: recognizer.view).y
+    let velocityY = recognizer.velocity(in: recognizer.view).y
+    if translationY < -10 || velocityY < -140 {
+      revealCustomNativeBottomSheet(expanded: true)
+    }
+  }
+
+  private func revealCustomNativeBottomSheet(expanded: Bool) {
+    guard fullScreenBottomSheetView != nil else { return }
+    fullScreenBottomSheetHidden = false
+    fullScreenBottomSheetExpanded = expanded
+    applyFullScreenBottomSheetState(animated: true, duration: 0.24, options: [.curveEaseOut])
+  }
+
+  @objc
+  private func onBottomSheetHandlePan(_ recognizer: UIPanGestureRecognizer) {
+    guard fullScreenBottomSheetView != nil else {
+      return
+    }
+    if recognizer.state != .ended {
+      return
+    }
+    let translationY = recognizer.translation(in: recognizer.view).y
+    let velocityY = recognizer.velocity(in: recognizer.view).y
+    let upward = translationY < -12 || velocityY < -160
+    let downward = translationY > 12 || velocityY > 160
+    if upward {
+      if fullScreenBottomSheetHidden {
+        fullScreenBottomSheetHidden = false
+        fullScreenBottomSheetExpanded = false
+      } else {
+        fullScreenBottomSheetExpanded = true
+      }
+    } else if downward {
+      if fullScreenBottomSheetExpanded {
+        fullScreenBottomSheetExpanded = false
+      } else {
+        fullScreenBottomSheetHidden = true
+      }
+    } else {
+      return
+    }
+    applyFullScreenBottomSheetState(animated: true, duration: 0.22)
+  }
+
+  @objc
+  private func onBottomSheetBackdropTap() {
+    guard !fullScreenBottomSheetHidden else { return }
+    fullScreenBottomSheetExpanded = false
+    fullScreenBottomSheetHidden = true
+    applyFullScreenBottomSheetState(animated: true)
+  }
+
+  private func applyFullScreenBottomSheetState(
+    animated: Bool,
+    duration: TimeInterval = 0.2,
+    options: UIView.AnimationOptions = []
+  ) {
     fullScreenBottomSheetTopConstraint?.constant = -currentBottomSheetHeight()
-    UIView.animate(withDuration: 0.2) {
+    nativeBottomBannerRevealHotzoneView?.isUserInteractionEnabled = fullScreenBottomSheetHidden
+    fullScreenBottomSheetView?.isUserInteractionEnabled = !fullScreenBottomSheetHidden
+    let animations = {
+      self.fullScreenBottomSheetView?.alpha = self.fullScreenBottomSheetHidden ? 0 : 1
+      self.fullScreenBottomSheetBackdropView?.alpha = self.fullScreenBottomSheetHidden ? 0 : 1
+      self.fullScreenBottomSheetBackdropView?.isUserInteractionEnabled = !self.fullScreenBottomSheetHidden
       self.navigationViewController?.view.layoutIfNeeded()
+    }
+    if animated {
+      UIView.animate(withDuration: duration, delay: 0, options: options, animations: animations)
+    } else {
+      animations()
     }
   }
 
@@ -848,13 +1394,7 @@ public class MapboxNavigationModule: Module {
       ])
       return
     }
-    if let navVC = navigationViewController {
-      navVC.dismiss(animated: true) {
-        self.navigationViewController = nil
-        self.isCurrentlyNavigating = false
-        self.detachFullScreenBottomSheet()
-      }
-    }
+    dismissActiveNavigation(emitCancelEvent: true)
   }
 
   @objc
@@ -863,18 +1403,263 @@ public class MapboxNavigationModule: Module {
       return
     }
     if fullScreenSecondaryActionBehavior == "stopNavigation" {
-      if let navVC = navigationViewController {
-        navVC.dismiss(animated: true) {
-          self.navigationViewController = nil
-          self.isCurrentlyNavigating = false
-          self.detachFullScreenBottomSheet()
-        }
-      }
+      dismissActiveNavigation(emitCancelEvent: true)
       return
     }
     sendEvent("onBottomSheetActionPress", [
       "actionId": "secondary"
     ])
+  }
+
+  @objc
+  private func onCustomNativeQuickActionTap(_ sender: UIButton) {
+    guard let actionId = fullScreenCustomActionByTag[sender.tag] else {
+      return
+    }
+    sendEvent("onBottomSheetActionPress", [
+      "actionId": actionId
+    ])
+  }
+
+  private func makeCustomNativeRowView(
+    row: BottomSheetCustomRowStartOptions,
+    primaryColor: UIColor,
+    secondaryColor: UIColor,
+    primaryFontSize: CGFloat,
+    secondaryFontSize: CGFloat
+  ) -> UIView {
+    let container = UIView()
+    container.translatesAutoresizingMaskIntoConstraints = false
+
+    let leadingStack = UIStackView()
+    leadingStack.translatesAutoresizingMaskIntoConstraints = false
+    leadingStack.axis = .horizontal
+    leadingStack.spacing = 6
+    leadingStack.alignment = .center
+
+    if let iconName = row.iconSystemName?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !iconName.isEmpty,
+       let image = UIImage(systemName: iconName) {
+      let iconView = UIImageView(image: image)
+      iconView.translatesAutoresizingMaskIntoConstraints = false
+      iconView.tintColor = secondaryColor
+      iconView.contentMode = .scaleAspectFit
+      iconView.setContentHuggingPriority(.required, for: .horizontal)
+      iconView.widthAnchor.constraint(equalToConstant: 14).isActive = true
+      iconView.heightAnchor.constraint(equalToConstant: 14).isActive = true
+      leadingStack.addArrangedSubview(iconView)
+    } else if let iconText = row.iconText?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !iconText.isEmpty {
+      let iconLabel = UILabel()
+      iconLabel.translatesAutoresizingMaskIntoConstraints = false
+      iconLabel.text = iconText
+      iconLabel.textColor = secondaryColor
+      iconLabel.font = .systemFont(ofSize: max(10, min(secondaryFontSize, 24)), weight: .regular)
+      iconLabel.setContentHuggingPriority(.required, for: .horizontal)
+      leadingStack.addArrangedSubview(iconLabel)
+    }
+
+    let title = UILabel()
+    title.translatesAutoresizingMaskIntoConstraints = false
+    title.numberOfLines = 1
+    title.text = row.title
+    title.textColor = primaryColor
+    title.font = .systemFont(
+      ofSize: max(10, min(primaryFontSize - 2, 28)),
+      weight: row.emphasis == true ? .semibold : .regular
+    )
+
+    let value = UILabel()
+    value.translatesAutoresizingMaskIntoConstraints = false
+    value.numberOfLines = 1
+    value.textAlignment = .right
+    value.text = row.value
+    value.textColor = primaryColor
+    value.font = .systemFont(
+      ofSize: max(10, min(primaryFontSize, 30)),
+      weight: row.emphasis == true ? .bold : .medium
+    )
+
+    leadingStack.addArrangedSubview(title)
+    container.addSubview(leadingStack)
+    container.addSubview(value)
+
+    var constraints: [NSLayoutConstraint] = [
+      leadingStack.topAnchor.constraint(equalTo: container.topAnchor),
+      leadingStack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+      leadingStack.trailingAnchor.constraint(lessThanOrEqualTo: value.leadingAnchor, constant: -8),
+
+      value.topAnchor.constraint(equalTo: container.topAnchor),
+      value.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+    ]
+
+    if row.value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+      value.isHidden = true
+      constraints.append(leadingStack.trailingAnchor.constraint(equalTo: container.trailingAnchor))
+    } else {
+      constraints.append(value.widthAnchor.constraint(greaterThanOrEqualToConstant: 40))
+    }
+
+    if let subtitleRaw = row.subtitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !subtitleRaw.isEmpty {
+      let subtitle = UILabel()
+      subtitle.translatesAutoresizingMaskIntoConstraints = false
+      subtitle.numberOfLines = 0
+      subtitle.text = subtitleRaw
+      subtitle.textColor = secondaryColor
+      subtitle.font = .systemFont(ofSize: max(10, min(secondaryFontSize, 24)), weight: .regular)
+      container.addSubview(subtitle)
+
+      constraints.append(contentsOf: [
+        subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
+        subtitle.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+        subtitle.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+        subtitle.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        value.bottomAnchor.constraint(equalTo: title.bottomAnchor),
+      ])
+    } else {
+      constraints.append(contentsOf: [
+        leadingStack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        value.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+      ])
+    }
+
+    NSLayoutConstraint.activate(constraints)
+    return container
+  }
+
+  private func styleCustomNativeQuickActionButton(
+    _ button: UIButton,
+    variant: String?,
+    options: NavigationStartOptions,
+    actionButtonFontSize: CGFloat
+  ) {
+    let normalizedVariant = variant?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let primaryBackground = colorFromHex(options.bottomSheet?.actionButtonBackgroundColor)
+      ?? UIColor(red: 0.2, green: 0.35, blue: 0.8, alpha: 1)
+    let secondaryBackground = colorFromHex(options.bottomSheet?.secondaryActionButtonBackgroundColor)
+      ?? UIColor(white: 1, alpha: 0.12)
+    let primaryText = colorFromHex(options.bottomSheet?.actionButtonTextColor) ?? .white
+    let secondaryText = colorFromHex(options.bottomSheet?.secondaryActionButtonTextColor)
+      ?? colorFromHex(options.bottomSheet?.actionButtonTextColor)
+      ?? UIColor(white: 0.9, alpha: 1.0)
+    let quickPrimaryBackground = colorFromHex(options.bottomSheet?.quickActionBackgroundColor) ?? primaryBackground
+    let quickSecondaryBackground = colorFromHex(options.bottomSheet?.quickActionSecondaryBackgroundColor) ?? secondaryBackground
+    let quickPrimaryText = colorFromHex(options.bottomSheet?.quickActionTextColor) ?? primaryText
+    let quickSecondaryText = colorFromHex(options.bottomSheet?.quickActionSecondaryTextColor) ?? secondaryText
+    let quickGhostText = colorFromHex(options.bottomSheet?.quickActionGhostTextColor) ?? quickSecondaryText
+    let quickBorderWidth = CGFloat(max(0, min(
+      options.bottomSheet?.quickActionBorderWidth ?? options.bottomSheet?.actionButtonBorderWidth ?? 0,
+      6
+    )))
+    let quickBorderColor = colorFromHex(options.bottomSheet?.quickActionBorderColor)
+      ?? colorFromHex(options.bottomSheet?.actionButtonBorderColor)
+    let quickCornerRadius = CGFloat(
+      max(0, min(options.bottomSheet?.quickActionCornerRadius ?? options.bottomSheet?.actionButtonCornerRadius ?? 8, 24))
+    )
+
+    if normalizedVariant == "ghost" {
+      button.backgroundColor = .clear
+      button.setTitleColor(quickGhostText, for: .normal)
+      button.layer.borderWidth = quickBorderWidth
+      button.layer.borderColor = quickBorderColor?.cgColor
+    } else if normalizedVariant == "secondary" {
+      button.backgroundColor = quickSecondaryBackground
+      button.setTitleColor(quickSecondaryText, for: .normal)
+      button.layer.borderWidth = quickBorderWidth
+      button.layer.borderColor = quickBorderColor?.cgColor
+    } else {
+      button.backgroundColor = quickPrimaryBackground
+      button.setTitleColor(quickPrimaryText, for: .normal)
+      button.layer.borderWidth = quickBorderWidth
+      button.layer.borderColor = quickBorderColor?.cgColor
+    }
+
+    button.layer.cornerRadius = quickCornerRadius
+    button.clipsToBounds = true
+    button.titleLabel?.font = .systemFont(ofSize: max(10, min(actionButtonFontSize, 22)), weight: .semibold)
+  }
+
+  private func makeCustomNativeHeaderView(options: NavigationStartOptions) -> UIView? {
+    let titleText = options.bottomSheet?.headerTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let subtitleText = options.bottomSheet?.headerSubtitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let badgeText = options.bottomSheet?.headerBadgeText?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    let hasTitle = !(titleText?.isEmpty ?? true)
+    let hasSubtitle = !(subtitleText?.isEmpty ?? true)
+    let hasBadge = !(badgeText?.isEmpty ?? true)
+
+    guard hasTitle || hasSubtitle || hasBadge else {
+      return nil
+    }
+
+    let container = UIView()
+    container.translatesAutoresizingMaskIntoConstraints = false
+
+    let textStack = UIStackView()
+    textStack.translatesAutoresizingMaskIntoConstraints = false
+    textStack.axis = .vertical
+    textStack.spacing = 2
+    textStack.alignment = .leading
+
+    if let titleText, !titleText.isEmpty {
+      let title = UILabel()
+      title.translatesAutoresizingMaskIntoConstraints = false
+      title.text = titleText
+      title.numberOfLines = 1
+      title.textColor = colorFromHex(options.bottomSheet?.primaryTextColor) ?? .white
+      title.font = .systemFont(ofSize: 16, weight: .semibold)
+      textStack.addArrangedSubview(title)
+    }
+
+    if let subtitleText, !subtitleText.isEmpty {
+      let subtitle = UILabel()
+      subtitle.translatesAutoresizingMaskIntoConstraints = false
+      subtitle.text = subtitleText
+      subtitle.numberOfLines = 1
+      subtitle.textColor = colorFromHex(options.bottomSheet?.secondaryTextColor)
+        ?? UIColor(white: 0.88, alpha: 0.9)
+      subtitle.font = .systemFont(ofSize: 12, weight: .regular)
+      textStack.addArrangedSubview(subtitle)
+    }
+
+    container.addSubview(textStack)
+
+    var constraints: [NSLayoutConstraint] = [
+      textStack.topAnchor.constraint(equalTo: container.topAnchor),
+      textStack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+      textStack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+    ]
+
+    if let badgeText, !badgeText.isEmpty {
+      let badge = UILabel()
+      badge.translatesAutoresizingMaskIntoConstraints = false
+      badge.text = badgeText
+      badge.textColor = colorFromHex(options.bottomSheet?.headerBadgeTextColor) ?? .white
+      badge.backgroundColor = colorFromHex(options.bottomSheet?.headerBadgeBackgroundColor)
+        ?? UIColor(red: 0.2, green: 0.35, blue: 0.8, alpha: 1)
+      badge.font = .systemFont(ofSize: 11, weight: .semibold)
+      badge.textAlignment = .center
+      badge.layer.cornerRadius = 9
+      badge.clipsToBounds = true
+      badge.setContentHuggingPriority(.required, for: .horizontal)
+      container.addSubview(badge)
+
+      constraints.append(contentsOf: [
+        badge.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+        badge.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        badge.leadingAnchor.constraint(greaterThanOrEqualTo: textStack.trailingAnchor, constant: 10),
+        badge.heightAnchor.constraint(greaterThanOrEqualToConstant: 18),
+      ])
+      badge.setContentCompressionResistancePriority(.required, for: .horizontal)
+      badge.layoutMargins = UIEdgeInsets(top: 2, left: 8, bottom: 2, right: 8)
+      badge.text = " \(badgeText) "
+    } else {
+      constraints.append(textStack.trailingAnchor.constraint(equalTo: container.trailingAnchor))
+    }
+
+    NSLayoutConstraint.activate(constraints)
+    return container
   }
 
   private func colorFromHex(_ value: String?) -> UIColor? {
@@ -929,6 +1714,7 @@ public class MapboxNavigationModule: Module {
     }
     return top
   }
+
 }
 
 // MARK: - NavigationViewControllerDelegate
@@ -951,6 +1737,7 @@ extension MapboxNavigationModule: NavigationViewControllerDelegate {
       "altitude": location.altitude,
       "accuracy": location.horizontalAccuracy
     ])
+    latestJourneyLocation = location
     
     sendEvent("onRouteProgressChange", [
       "distanceTraveled": progress.distanceTraveled,
@@ -958,15 +1745,26 @@ extension MapboxNavigationModule: NavigationViewControllerDelegate {
       "durationRemaining": progress.durationRemaining,
       "fractionTraveled": progress.fractionTraveled
     ])
+    latestJourneyProgressDistanceRemaining = progress.distanceRemaining
+    latestJourneyProgressDurationRemaining = progress.durationRemaining
+    latestJourneyProgressFractionTraveled = max(0, min(progress.fractionTraveled, 1))
 
     sendEvent("onBannerInstruction", [
       "primaryText": progress.currentLegProgress.currentStep.instructions,
       "stepDistanceRemaining": progress.currentLegProgress.currentStepProgress.distanceRemaining
     ])
+    latestJourneyInstructionPrimary = progress.currentLegProgress.currentStep.instructions
+    latestJourneyStepDistanceRemaining = progress.currentLegProgress.currentStepProgress.distanceRemaining
+    let secondary = progress.currentLegProgress.currentStep.names?.first
+      ?? progress.currentLegProgress.currentStep.description
+    if !secondary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      latestJourneyInstructionSecondary = secondary
+    }
     updateFullScreenBottomSheet(
       instruction: progress.currentLegProgress.currentStep.instructions,
       progress: progress
     )
+    emitJourneyData()
   }
   
   public func navigationViewController(
@@ -988,6 +1786,9 @@ extension MapboxNavigationModule: NavigationViewControllerDelegate {
     }
     self.navigationViewController = nil
     self.isCurrentlyNavigating = false
+    self.isUsingCustomNativeBottomSheet = false
+    self.isStartInProgress = false
+    NavigationSessionRegistry.shared.release(owner: sessionOwner)
     self.detachFullScreenBottomSheet()
   }
 }
@@ -1026,6 +1827,7 @@ struct NavigationStartOptions: Record {
 
 struct BottomSheetStartOptions: Record {
   @Field var enabled: Bool?
+  @Field var mode: String?
   @Field var showsTripProgress: Bool?
   @Field var showsManeuverView: Bool?
   @Field var showsActionButtons: Bool?
@@ -1037,6 +1839,9 @@ struct BottomSheetStartOptions: Record {
   @Field var contentTopSpacing: Double?
   @Field var showHandle: Bool?
   @Field var enableTapToToggle: Bool?
+  @Field var revealOnNativeBannerGesture: Bool?
+  @Field var revealGestureHotzoneHeight: Double?
+  @Field var revealGestureRightExclusionWidth: Double?
   @Field var backgroundColor: String?
   @Field var handleColor: String?
   @Field var primaryTextColor: String?
@@ -1056,10 +1861,47 @@ struct BottomSheetStartOptions: Record {
   @Field var secondaryTextFontSize: Double?
   @Field var actionButtonFontSize: Double?
   @Field var actionButtonHeight: Double?
+  @Field var actionButtonsBottomPadding: Double?
+  @Field var quickActionBackgroundColor: String?
+  @Field var quickActionTextColor: String?
+  @Field var quickActionSecondaryBackgroundColor: String?
+  @Field var quickActionSecondaryTextColor: String?
+  @Field var quickActionGhostTextColor: String?
+  @Field var quickActionBorderColor: String?
+  @Field var quickActionBorderWidth: Double?
+  @Field var quickActionCornerRadius: Double?
+  @Field var showCurrentStreet: Bool?
+  @Field var showRemainingDistance: Bool?
+  @Field var showRemainingDuration: Bool?
+  @Field var showETA: Bool?
+  @Field var showCompletionPercent: Bool?
   @Field var showDefaultContent: Bool?
   @Field var defaultManeuverTitle: String?
   @Field var defaultTripProgressTitle: String?
+  @Field var quickActions: [BottomSheetQuickActionStartOptions]?
+  @Field var customRows: [BottomSheetCustomRowStartOptions]?
+  @Field var headerTitle: String?
+  @Field var headerSubtitle: String?
+  @Field var headerBadgeText: String?
+  @Field var headerBadgeBackgroundColor: String?
+  @Field var headerBadgeTextColor: String?
   @Field var cornerRadius: Double?
+}
+
+struct BottomSheetQuickActionStartOptions: Record {
+  @Field var id: String
+  @Field var label: String
+  @Field var variant: String?
+}
+
+struct BottomSheetCustomRowStartOptions: Record {
+  @Field var id: String
+  @Field var iconSystemName: String?
+  @Field var iconText: String?
+  @Field var title: String
+  @Field var value: String?
+  @Field var subtitle: String?
+  @Field var emphasis: Bool?
 }
 
 struct Coordinate: Record {

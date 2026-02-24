@@ -8,11 +8,15 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.util.TypedValue
+import android.graphics.drawable.GradientDrawable
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,10 +37,29 @@ import com.mapbox.navigation.dropin.navigationview.NavigationViewListener
 import com.mapbox.navigation.base.route.NavigationRoute
 import com.mapbox.navigation.base.route.RouterFailure
 import com.mapbox.navigation.base.route.RouterOrigin
+import java.lang.ref.WeakReference
 
 class MapboxNavigationActivity : AppCompatActivity() {
   companion object {
     private const val TAG = "MapboxNavigationActivity"
+    private const val SESSION_OWNER = "fullscreen"
+    @Volatile
+    private var activeSessionCount: Int = 0
+    @Volatile
+    private var activeActivityRef: WeakReference<MapboxNavigationActivity>? = null
+
+    fun hasActiveSession(): Boolean {
+      return activeSessionCount > 0 && activeActivityRef?.get() != null
+    }
+
+    fun finishActiveSession() {
+      val activity = activeActivityRef?.get() ?: return
+      activity.runOnUiThread {
+        if (!activity.isFinishing && !activity.isDestroyed) {
+          activity.finish()
+        }
+      }
+    }
   }
 
   private var navigationView: NavigationView? = null
@@ -67,7 +90,88 @@ class MapboxNavigationActivity : AppCompatActivity() {
   private var mapStyleUriDay: String? = null
   private var mapStyleUriNight: String? = null
   private var uiTheme: String = "system"
+  private var bottomSheetMode: String = "native"
+  private var rootContainer: FrameLayout? = null
+  private var customNativeBottomSheetContainer: LinearLayout? = null
+  private var customNativePrimaryTextView: TextView? = null
+  private var customNativeSecondaryTextView: TextView? = null
+  private var customNativeExpanded = false
+  private var customNativeHidden = false
+  private var customNativeRevealOnNativeBannerGesture = true
+  private var customNativeCollapsedHeightPx = 0
+  private var customNativeExpandedHeightPx = 0
+  private var customNativeHiddenHeightPx = 0
+  private var customNativeEnableTapToToggle = true
+  private var customNativeShowHandle = true
+  private var customNativeHeaderTitle: String? = null
+  private var customNativeHeaderSubtitle: String? = null
+  private var customNativeHeaderBadgeText: String? = null
+  private var customNativeHeaderBadgeBackgroundColor: String? = null
+  private var customNativeHeaderBadgeTextColor: String? = null
+  private var customNativeQuickActionIds: Array<String> = emptyArray()
+  private var customNativeQuickActionLabels: Array<String> = emptyArray()
+  private var customNativeQuickActionVariants: Array<String> = emptyArray()
+  private var customNativeRowIds: Array<String> = emptyArray()
+  private var customNativeRowTitles: Array<String> = emptyArray()
+  private var customNativeRowValues: Array<String> = emptyArray()
+  private var customNativeRowSubtitles: Array<String> = emptyArray()
+  private var customNativeRowIconSystemNames: Array<String> = emptyArray()
+  private var customNativeRowIconTexts: Array<String> = emptyArray()
+  private var customNativeRowEmphasis: BooleanArray = BooleanArray(0)
+  private var customNativeBackgroundColor: String? = null
+  private var customNativePrimaryTextColor: String? = null
+  private var customNativeSecondaryTextColor: String? = null
+  private var customNativeActionButtonBackgroundColor: String? = null
+  private var customNativeActionButtonTextColor: String? = null
+  private var customNativeSecondaryActionButtonBackgroundColor: String? = null
+  private var customNativeSecondaryActionButtonTextColor: String? = null
+  private var customNativeActionButtonBorderColor: String? = null
+  private var customNativeActionButtonBorderWidth: Double? = null
+  private var customNativeActionButtonCornerRadius: Double? = null
+  private var customNativeCornerRadiusPx: Float = 0f
+  private var customNativePrimaryTextFontSize: Double? = null
+  private var customNativeSecondaryTextFontSize: Double? = null
+  private var customNativeActionButtonFontSize: Double? = null
+  private var customNativeActionButtonHeight: Double? = null
+  private var customNativeActionButtonsBottomPaddingPx: Int = 0
+  private var customNativeQuickActionBackgroundColor: String? = null
+  private var customNativeQuickActionTextColor: String? = null
+  private var customNativeQuickActionSecondaryBackgroundColor: String? = null
+  private var customNativeQuickActionSecondaryTextColor: String? = null
+  private var customNativeQuickActionGhostTextColor: String? = null
+  private var customNativeQuickActionBorderColor: String? = null
+  private var customNativeQuickActionBorderWidth: Double? = null
+  private var customNativeQuickActionCornerRadius: Double? = null
+  private var customNativeShowCurrentStreet: Boolean = true
+  private var customNativeShowRemainingDistance: Boolean = true
+  private var customNativeShowRemainingDuration: Boolean = true
+  private var customNativeShowEta: Boolean = true
+  private var customNativeShowCompletionPercent: Boolean = true
+  private var customNativeActionButtonTitle: String? = null
+  private var customNativeSecondaryActionButtonTitle: String? = null
+  private var customNativeAttachPending: Boolean = false
   private var hasStartedGuidance: Boolean = false
+  private var hasEmittedArrival: Boolean = false
+  private var destinationName: String = "Destination"
+  private var customNativeHandleTouchStartY = 0f
+  private var nativeBannerGestureTouchStartY = 0f
+  private var nativeBannerGestureArmed = false
+  private var customNativeRevealHotzoneView: View? = null
+  private var customNativeBackdropView: View? = null
+  private var customNativeRevealGestureHotzoneHeightPx: Int = 0
+  private var customNativeRevealGestureRightExclusionWidthPx: Int = 0
+  private var latestLatitude: Double? = null
+  private var latestLongitude: Double? = null
+  private var latestBearing: Double? = null
+  private var latestSpeed: Double? = null
+  private var latestAltitude: Double? = null
+  private var latestAccuracy: Double? = null
+  private var latestPrimaryInstruction: String? = null
+  private var latestSecondaryInstruction: String? = null
+  private var latestStepDistanceRemaining: Double? = null
+  private var latestDistanceRemaining: Double? = null
+  private var latestDurationRemaining: Double? = null
+  private var latestFractionTraveled: Double? = null
   private var mapboxNavigation: MapboxNavigation? = null
   private val mainHandler = Handler(Looper.getMainLooper())
   private val locationObserver = object : LocationObserver {
@@ -75,6 +179,12 @@ class MapboxNavigationActivity : AppCompatActivity() {
 
     override fun onNewLocationMatcherResult(locationMatcherResult: LocationMatcherResult) {
       val location = locationMatcherResult.enhancedLocation
+      latestLatitude = location.latitude
+      latestLongitude = location.longitude
+      latestBearing = location.bearing.toDouble()
+      latestSpeed = location.speed.toDouble()
+      latestAltitude = location.altitude
+      latestAccuracy = location.accuracy.toDouble()
       MapboxNavigationEventBridge.emit(
         "onLocationChange",
         mapOf(
@@ -86,6 +196,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
           "accuracy" to location.accuracy.toDouble()
         )
       )
+      emitJourneyData()
     }
   }
   private val routeProgressObserver = RouteProgressObserver { routeProgress: RouteProgress ->
@@ -98,8 +209,35 @@ class MapboxNavigationActivity : AppCompatActivity() {
         "fractionTraveled" to routeProgress.fractionTraveled.toDouble()
       )
     )
+    latestDistanceRemaining = routeProgress.distanceRemaining.toDouble()
+    latestDurationRemaining = routeProgress.durationRemaining
+    latestFractionTraveled = routeProgress.fractionTraveled.toDouble().coerceIn(0.0, 1.0)
+
+    if (!hasEmittedArrival && routeProgress.distanceRemaining <= 5.0) {
+      hasEmittedArrival = true
+      MapboxNavigationEventBridge.emit(
+        "onArrive",
+        mapOf("name" to destinationName)
+      )
+    }
 
     emitBannerInstruction(routeProgress.bannerInstructions)
+    if ((bottomSheetMode == "customnative" || bottomSheetMode == "overlay") &&
+      customNativeBottomSheetContainer == null &&
+      !hasStartedGuidance
+    ) {
+      val looksLikeActiveGuidance =
+        routeProgress.distanceTraveled > 1.0 || routeProgress.fractionTraveled > 0.0f
+      if (looksLikeActiveGuidance) {
+        hasStartedGuidance = true
+        attachCustomNativeBottomSheetIfNeeded()
+      }
+    }
+    updateCustomNativeBottomSheet(
+      instruction = routeProgress.bannerInstructions?.primary()?.text(),
+      progress = routeProgress
+    )
+    emitJourneyData()
   }
   private val bannerInstructionsObserver = BannerInstructionsObserver { bannerInstructions ->
     emitBannerInstruction(bannerInstructions)
@@ -161,6 +299,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
 
       hasStartedGuidance = true
       navigationView?.api?.startActiveGuidance(routes)
+      attachCustomNativeBottomSheetIfNeeded()
     }
 
     override fun onRouteFetchCanceled(routeOptions: RouteOptions, routerOrigin: RouterOrigin) {
@@ -173,10 +312,31 @@ class MapboxNavigationActivity : AppCompatActivity() {
         )
       )
     }
+
+    override fun onActiveNavigation() {
+      hasStartedGuidance = true
+      attachCustomNativeBottomSheetIfNeeded()
+    }
+
+    override fun onFreeDrive() {
+      if (hasStartedGuidance && !isFinishing && !isDestroyed) {
+        finish()
+      }
+    }
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    if (!NavigationSessionRegistry.acquire(SESSION_OWNER)) {
+      showErrorScreen(
+        "Another navigation session is already active. Stop embedded/full-screen navigation before starting a new one.",
+        null
+      )
+      finish()
+      return
+    }
+    activeSessionCount += 1
+    activeActivityRef = WeakReference(this)
 
     try {
       accessToken = resolveAccessToken()
@@ -184,6 +344,8 @@ class MapboxNavigationActivity : AppCompatActivity() {
       val originLng = intent.getDoubleExtraOrNull("originLng")
       val destinationLat = intent.getDoubleExtraOrNull("destLat")
       val destinationLng = intent.getDoubleExtraOrNull("destLng")
+      destinationName = intent.getStringExtra("destinationName")?.trim()?.takeIf { it.isNotEmpty() }
+        ?: "Destination"
       shouldSimulateRoute = intent.getBooleanExtra("shouldSimulate", false)
       routeAlternatives = intent.getBooleanExtra("routeAlternatives", false)
       showsSpeedLimits = intent.getBooleanExtra("showsSpeedLimits", true)
@@ -208,6 +370,86 @@ class MapboxNavigationActivity : AppCompatActivity() {
       mapStyleUriDay = intent.getStringExtra("mapStyleUriDay")?.trim()?.takeIf { it.isNotEmpty() }
       mapStyleUriNight = intent.getStringExtra("mapStyleUriNight")?.trim()?.takeIf { it.isNotEmpty() }
       uiTheme = intent.getStringExtra("uiTheme")?.trim()?.lowercase() ?: "system"
+      bottomSheetMode = intent.getStringExtra("bottomSheetMode")?.trim()?.lowercase() ?: "native"
+      val initialBottomSheetState = intent.getStringExtra("bottomSheetInitialState")?.trim()?.lowercase()
+      customNativeExpanded = initialBottomSheetState == "expanded"
+      customNativeHidden = initialBottomSheetState == "hidden"
+      customNativeRevealOnNativeBannerGesture = intent.getBooleanExtra("bottomSheetRevealOnNativeBannerGesture", true)
+      customNativeEnableTapToToggle = intent.getBooleanExtra("bottomSheetEnableTapToToggle", true)
+      customNativeShowHandle = intent.getBooleanExtra("bottomSheetShowHandle", true)
+      customNativeRevealGestureHotzoneHeightPx = dpToPx(
+        (intent.getDoubleExtra("bottomSheetRevealGestureHotzoneHeight", 100.0)).toFloat()
+      ).coerceIn(dpToPx(56f), dpToPx(220f))
+      customNativeRevealGestureRightExclusionWidthPx = dpToPx(
+        (intent.getDoubleExtra("bottomSheetRevealGestureRightExclusionWidth", 80.0)).toFloat()
+      ).coerceIn(dpToPx(48f), dpToPx(220f))
+      customNativeCornerRadiusPx = dpToPx(
+        (intent.getDoubleExtra("bottomSheetCornerRadius", 16.0)).toFloat()
+      ).toFloat().coerceIn(0f, dpToPx(28f).toFloat())
+      customNativeHiddenHeightPx = 0
+      customNativeCollapsedHeightPx = dpToPx(
+        (intent.getDoubleExtra("bottomSheetCollapsedHeight", 120.0)).toFloat()
+      )
+      customNativeExpandedHeightPx = dpToPx(
+        (intent.getDoubleExtra("bottomSheetExpandedHeight", 340.0)).toFloat()
+      )
+      if (customNativeExpandedHeightPx < customNativeCollapsedHeightPx) {
+        customNativeExpandedHeightPx = customNativeCollapsedHeightPx
+      }
+      if (
+        customNativeRevealOnNativeBannerGesture &&
+        (bottomSheetMode == "customnative" || bottomSheetMode == "overlay")
+      ) {
+        customNativeHidden = true
+        customNativeExpanded = false
+      }
+      customNativeHeaderTitle = intent.getStringExtra("bottomSheetHeaderTitle")
+      customNativeHeaderSubtitle = intent.getStringExtra("bottomSheetHeaderSubtitle")
+      customNativeHeaderBadgeText = intent.getStringExtra("bottomSheetHeaderBadgeText")
+      customNativeHeaderBadgeBackgroundColor = intent.getStringExtra("bottomSheetHeaderBadgeBackgroundColor")
+      customNativeHeaderBadgeTextColor = intent.getStringExtra("bottomSheetHeaderBadgeTextColor")
+      customNativeQuickActionIds = intent.getStringArrayExtra("bottomSheetQuickActionIds") ?: emptyArray()
+      customNativeQuickActionLabels = intent.getStringArrayExtra("bottomSheetQuickActionLabels") ?: emptyArray()
+      customNativeQuickActionVariants = intent.getStringArrayExtra("bottomSheetQuickActionVariants") ?: emptyArray()
+      customNativeRowIds = intent.getStringArrayExtra("bottomSheetCustomRowIds") ?: emptyArray()
+      customNativeRowTitles = intent.getStringArrayExtra("bottomSheetCustomRowTitles") ?: emptyArray()
+      customNativeRowValues = intent.getStringArrayExtra("bottomSheetCustomRowValues") ?: emptyArray()
+      customNativeRowSubtitles = intent.getStringArrayExtra("bottomSheetCustomRowSubtitles") ?: emptyArray()
+      customNativeRowIconSystemNames = intent.getStringArrayExtra("bottomSheetCustomRowIconSystemNames") ?: emptyArray()
+      customNativeRowIconTexts = intent.getStringArrayExtra("bottomSheetCustomRowIconTexts") ?: emptyArray()
+      customNativeRowEmphasis = intent.getBooleanArrayExtra("bottomSheetCustomRowEmphasis") ?: BooleanArray(0)
+      customNativeBackgroundColor = intent.getStringExtra("bottomSheetBackgroundColor")
+      customNativePrimaryTextColor = intent.getStringExtra("bottomSheetPrimaryTextColor")
+      customNativeSecondaryTextColor = intent.getStringExtra("bottomSheetSecondaryTextColor")
+      customNativeActionButtonBackgroundColor = intent.getStringExtra("bottomSheetActionButtonBackgroundColor")
+      customNativeActionButtonTextColor = intent.getStringExtra("bottomSheetActionButtonTextColor")
+      customNativeSecondaryActionButtonBackgroundColor = intent.getStringExtra("bottomSheetSecondaryActionButtonBackgroundColor")
+      customNativeSecondaryActionButtonTextColor = intent.getStringExtra("bottomSheetSecondaryActionButtonTextColor")
+      customNativeActionButtonBorderColor = intent.getStringExtra("bottomSheetActionButtonBorderColor")
+      customNativeActionButtonBorderWidth = intent.getDoubleExtraOrNull("bottomSheetActionButtonBorderWidth")
+      customNativeActionButtonCornerRadius = intent.getDoubleExtraOrNull("bottomSheetActionButtonCornerRadius")
+      customNativePrimaryTextFontSize = intent.getDoubleExtraOrNull("bottomSheetPrimaryTextFontSize")
+      customNativeSecondaryTextFontSize = intent.getDoubleExtraOrNull("bottomSheetSecondaryTextFontSize")
+      customNativeActionButtonFontSize = intent.getDoubleExtraOrNull("bottomSheetActionButtonFontSize")
+      customNativeActionButtonHeight = intent.getDoubleExtraOrNull("bottomSheetActionButtonHeight")
+      customNativeActionButtonsBottomPaddingPx = dpToPx(
+        (intent.getDoubleExtra("bottomSheetActionButtonsBottomPadding", 6.0)).toFloat()
+      )
+      customNativeQuickActionBackgroundColor = intent.getStringExtra("bottomSheetQuickActionBackgroundColor")
+      customNativeQuickActionTextColor = intent.getStringExtra("bottomSheetQuickActionTextColor")
+      customNativeQuickActionSecondaryBackgroundColor = intent.getStringExtra("bottomSheetQuickActionSecondaryBackgroundColor")
+      customNativeQuickActionSecondaryTextColor = intent.getStringExtra("bottomSheetQuickActionSecondaryTextColor")
+      customNativeQuickActionGhostTextColor = intent.getStringExtra("bottomSheetQuickActionGhostTextColor")
+      customNativeQuickActionBorderColor = intent.getStringExtra("bottomSheetQuickActionBorderColor")
+      customNativeQuickActionBorderWidth = intent.getDoubleExtraOrNull("bottomSheetQuickActionBorderWidth")
+      customNativeQuickActionCornerRadius = intent.getDoubleExtraOrNull("bottomSheetQuickActionCornerRadius")
+      customNativeShowCurrentStreet = intent.getBooleanExtra("bottomSheetShowCurrentStreet", true)
+      customNativeShowRemainingDistance = intent.getBooleanExtra("bottomSheetShowRemainingDistance", true)
+      customNativeShowRemainingDuration = intent.getBooleanExtra("bottomSheetShowRemainingDuration", true)
+      customNativeShowEta = intent.getBooleanExtra("bottomSheetShowETA", true)
+      customNativeShowCompletionPercent = intent.getBooleanExtra("bottomSheetShowCompletionPercent", true)
+      customNativeActionButtonTitle = intent.getStringExtra("bottomSheetActionButtonTitle")
+      customNativeSecondaryActionButtonTitle = intent.getStringExtra("bottomSheetSecondaryActionButtonTitle")
 
       val waypointLats = intent.getDoubleArrayExtra("waypointLats")
       val waypointLngs = intent.getDoubleArrayExtra("waypointLngs")
@@ -278,6 +520,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
           resolveNightStyleUri()?.let { mapStyleUriNight = it }
           showSpeedLimit = showsSpeedLimits
           showRoadName = showsWayNameLabel
+          // Keep native preview controls available (including "Start") before custom sheet is attached.
           showTripProgress = showsTripProgress
           showManeuver = showsManeuverView
           showActionButtons = showsActionButtons
@@ -291,13 +534,37 @@ class MapboxNavigationActivity : AppCompatActivity() {
               coordinates.addAll(waypointPoints)
               coordinates.add(destinationPoint!!)
               builder.coordinatesList(coordinates)
+              // Keep optional arrays aligned with coordinates to avoid route-option validation mismatch.
+              // Use concrete layer values because null placeholders can be dropped by the API serializer.
+              builder.layersList(MutableList(coordinates.size) { 0 })
               builder.alternatives(routeAlternatives)
             }
           )
         }
         view.addListener(navigationViewListener)
+        // Avoid full-map gesture interception. A dedicated bottom hot-zone is attached when needed.
       }
-      setContentView(navigationView ?: FrameLayout(this))
+      val root = FrameLayout(this).apply {
+        layoutParams = FrameLayout.LayoutParams(
+          FrameLayout.LayoutParams.MATCH_PARENT,
+          FrameLayout.LayoutParams.MATCH_PARENT
+        )
+      }
+      rootContainer = root
+      navigationView?.let { navView ->
+        root.addView(
+          navView,
+          FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+          )
+        )
+      }
+      customNativeAttachPending = bottomSheetMode == "customnative" || bottomSheetMode == "overlay"
+      if (customNativeAttachPending && hasStartedGuidance) {
+        attachCustomNativeBottomSheetIfNeeded()
+      }
+      setContentView(root)
       attachNavigationObserversWithRetry()
 
       navigationView?.api?.routeReplayEnabled(shouldSimulateRoute)
@@ -319,12 +586,669 @@ class MapboxNavigationActivity : AppCompatActivity() {
     }
   }
 
+  private fun attachCustomNativeBottomSheet(root: FrameLayout) {
+    if (customNativeBottomSheetContainer != null) {
+      return
+    }
+    val backdrop = View(this).apply {
+      setBackgroundColor(0x47000000)
+      alpha = if (customNativeHidden) 0f else 1f
+      isClickable = !customNativeHidden
+      setOnClickListener {
+        if (!customNativeHidden) {
+          customNativeExpanded = false
+          customNativeHidden = true
+          applyCustomNativeBottomSheetHeight()
+        }
+      }
+    }
+    backdrop.layoutParams = FrameLayout.LayoutParams(
+      FrameLayout.LayoutParams.MATCH_PARENT,
+      FrameLayout.LayoutParams.MATCH_PARENT
+    )
+    root.addView(backdrop)
+    customNativeBackdropView = backdrop
+
+    val container = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      val bg = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        setColor(parseColorOrDefault(customNativeBackgroundColor, 0xEE0F172A.toInt()))
+        cornerRadii = floatArrayOf(
+          customNativeCornerRadiusPx, customNativeCornerRadiusPx,
+          customNativeCornerRadiusPx, customNativeCornerRadiusPx,
+          0f, 0f,
+          0f, 0f
+        )
+      }
+      background = bg
+      setPadding(dpToPx(14f), dpToPx(8f), dpToPx(14f), dpToPx(14f))
+      clipToPadding = false
+      clipToOutline = true
+      elevation = dpToPx(8f).toFloat()
+    }
+    container.layoutParams = FrameLayout.LayoutParams(
+      FrameLayout.LayoutParams.MATCH_PARENT,
+      currentCustomNativeBottomSheetHeight(),
+      Gravity.BOTTOM
+    )
+    customNativeBottomSheetContainer = container
+    container.alpha = if (customNativeHidden) 0f else 1f
+    container.setOnTouchListener { _, event ->
+      when (event.actionMasked) {
+        MotionEvent.ACTION_DOWN -> {
+          customNativeHandleTouchStartY = event.rawY
+          false
+        }
+        MotionEvent.ACTION_UP -> {
+          val deltaY = event.rawY - customNativeHandleTouchStartY
+          if (deltaY > 18f) {
+            if (customNativeExpanded) {
+              customNativeExpanded = false
+            } else {
+              customNativeHidden = true
+            }
+            applyCustomNativeBottomSheetHeight()
+            return@setOnTouchListener true
+          }
+          false
+        }
+        else -> false
+      }
+    }
+
+    val handle = View(this).apply {
+      setBackgroundColor(parseColorOrDefault(intent.getStringExtra("bottomSheetHandleColor"), 0xBFD0D7E2.toInt()))
+      layoutParams = LinearLayout.LayoutParams(dpToPx(42f), dpToPx(5f)).apply {
+        gravity = Gravity.CENTER_HORIZONTAL
+      }
+      visibility = if (customNativeShowHandle) View.VISIBLE else View.GONE
+    }
+    container.addView(handle)
+
+    if (customNativeEnableTapToToggle) {
+      handle.setOnClickListener { toggleCustomNativeBottomSheet() }
+      handle.setOnTouchListener { _, event ->
+        when (event.actionMasked) {
+          MotionEvent.ACTION_DOWN -> {
+            customNativeHandleTouchStartY = event.rawY
+          }
+          MotionEvent.ACTION_UP -> {
+            val deltaY = event.rawY - customNativeHandleTouchStartY
+            if (deltaY < -14f) {
+              if (customNativeHidden) {
+                customNativeHidden = false
+                customNativeExpanded = false
+              } else {
+                customNativeExpanded = true
+              }
+              applyCustomNativeBottomSheetHeight()
+              return@setOnTouchListener true
+            }
+            if (deltaY > 14f) {
+              if (customNativeExpanded) {
+                customNativeExpanded = false
+              } else {
+                customNativeHidden = true
+              }
+              applyCustomNativeBottomSheetHeight()
+              return@setOnTouchListener true
+            }
+          }
+        }
+        false
+      }
+    }
+
+    val header = buildCustomNativeHeaderView()
+    if (header != null) {
+      container.addView(header)
+    }
+
+    customNativePrimaryTextView = TextView(this).apply {
+      text = "Starting navigation..."
+      setTextColor(parseColorOrDefault(customNativePrimaryTextColor, 0xFFFFFFFF.toInt()))
+      setTextSize(TypedValue.COMPLEX_UNIT_SP, customNativePrimaryTextFontSize?.toFloat() ?: 16f)
+      setPadding(0, dpToPx(8f), 0, 0)
+      maxLines = 2
+    }
+    container.addView(customNativePrimaryTextView)
+
+    customNativeSecondaryTextView = TextView(this).apply {
+      text = "Waiting for route progress"
+      setTextColor(parseColorOrDefault(customNativeSecondaryTextColor, 0xE6BFDBFE.toInt()))
+      setTextSize(TypedValue.COMPLEX_UNIT_SP, customNativeSecondaryTextFontSize?.toFloat() ?: 13f)
+      setPadding(0, dpToPx(2f), 0, 0)
+      maxLines = 2
+    }
+    container.addView(customNativeSecondaryTextView)
+
+    addCustomNativeRows(container)
+    addCustomNativeQuickActions(container)
+    addCustomNativeBottomButtons(container)
+
+    root.addView(container)
+    updateCustomNativeOverlayInteractivity()
+  }
+
+  private fun attachCustomNativeBottomSheetIfNeeded() {
+    if (!customNativeAttachPending || customNativeBottomSheetContainer != null) {
+      return
+    }
+    val root = rootContainer ?: return
+    attachCustomNativeBottomSheet(root)
+    configureNativeBannerGestureRevealIfNeeded()
+    customNativeAttachPending = false
+  }
+
+  private fun addCustomNativeRows(container: LinearLayout) {
+    if (customNativeRowIds.isEmpty() || customNativeRowTitles.size != customNativeRowIds.size) {
+      return
+    }
+
+    val rowsWrap = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(0, dpToPx(8f), 0, 0)
+    }
+
+    customNativeRowIds.indices.forEach { index ->
+      val row = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(0, dpToPx(4f), 0, dpToPx(2f))
+      }
+
+      val top = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+      }
+
+      val title = TextView(this).apply {
+        val iconText = customNativeRowIconTexts.getOrNull(index)?.trim().orEmpty()
+        val iconFallback = customNativeRowIconSystemNames
+          .getOrNull(index)
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() }
+          ?.replace('.', ' ')
+          .orEmpty()
+        val prefix = if (iconText.isNotEmpty()) iconText else iconFallback
+        text = if (prefix.isNotEmpty()) "$prefix  ${customNativeRowTitles[index]}" else customNativeRowTitles[index]
+        setTextColor(parseColorOrDefault(customNativePrimaryTextColor, 0xFFFFFFFF.toInt()))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, (customNativePrimaryTextFontSize?.toFloat() ?: 15f) - 1f)
+        if (customNativeRowEmphasis.getOrNull(index) == true) {
+          setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+      }
+      top.addView(title)
+
+      val value = customNativeRowValues.getOrNull(index)?.trim().orEmpty()
+      if (value.isNotEmpty()) {
+        val valueView = TextView(this).apply {
+          text = value
+          setTextColor(parseColorOrDefault(customNativePrimaryTextColor, 0xFFFFFFFF.toInt()))
+          setTextSize(TypedValue.COMPLEX_UNIT_SP, customNativePrimaryTextFontSize?.toFloat() ?: 16f)
+          if (customNativeRowEmphasis.getOrNull(index) == true) {
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+          }
+        }
+        top.addView(valueView)
+      }
+
+      row.addView(top)
+
+      val subtitle = customNativeRowSubtitles.getOrNull(index)?.trim().orEmpty()
+      if (subtitle.isNotEmpty()) {
+        val subtitleView = TextView(this).apply {
+          text = subtitle
+          setTextColor(parseColorOrDefault(customNativeSecondaryTextColor, 0xE6BFDBFE.toInt()))
+          setTextSize(TypedValue.COMPLEX_UNIT_SP, customNativeSecondaryTextFontSize?.toFloat() ?: 12f)
+        }
+        row.addView(subtitleView)
+      }
+
+      rowsWrap.addView(row)
+    }
+
+    container.addView(rowsWrap)
+  }
+
+  private fun addCustomNativeQuickActions(container: LinearLayout) {
+    if (customNativeQuickActionIds.isEmpty() || customNativeQuickActionLabels.size != customNativeQuickActionIds.size) {
+      return
+    }
+    val row = LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      setPadding(0, dpToPx(8f), 0, kotlin.math.max(0, customNativeActionButtonsBottomPaddingPx))
+      gravity = Gravity.CENTER_VERTICAL
+    }
+
+    customNativeQuickActionIds.indices.take(4).forEach { index ->
+      val button = Button(this).apply {
+        text = customNativeQuickActionLabels[index]
+        isAllCaps = false
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, customNativeActionButtonFontSize?.toFloat() ?: 13f)
+        val buttonCorner = (customNativeQuickActionCornerRadius?.toFloat()
+          ?: customNativeActionButtonCornerRadius?.toFloat()
+          ?: dpToPx(10f).toFloat()).coerceIn(0f, dpToPx(24f).toFloat())
+        val borderWidth = (customNativeQuickActionBorderWidth?.toFloat()
+          ?: customNativeActionButtonBorderWidth?.toFloat()
+          ?: 0f).coerceIn(0f, dpToPx(4f).toFloat())
+        val borderColor = parseColorOrDefault(
+          customNativeQuickActionBorderColor ?: customNativeActionButtonBorderColor,
+          0x00000000
+        )
+        val variant = customNativeQuickActionVariants.getOrNull(index)?.trim()?.lowercase().orEmpty()
+        when (variant) {
+          "ghost" -> {
+            background = GradientDrawable().apply {
+              shape = GradientDrawable.RECTANGLE
+              setColor(0x00000000)
+              cornerRadius = buttonCorner
+              if (borderWidth > 0f) {
+                setStroke(borderWidth.toInt(), borderColor)
+              }
+            }
+            setTextColor(
+              parseColorOrDefault(
+                customNativeQuickActionGhostTextColor
+                  ?: customNativeQuickActionSecondaryTextColor
+                  ?: customNativeSecondaryActionButtonTextColor,
+                0xFFE6EEF9.toInt()
+              )
+            )
+          }
+          "secondary" -> {
+            background = GradientDrawable().apply {
+              shape = GradientDrawable.RECTANGLE
+              setColor(
+                parseColorOrDefault(
+                  customNativeQuickActionSecondaryBackgroundColor
+                    ?: customNativeSecondaryActionButtonBackgroundColor,
+                  0x331E293B
+                )
+              )
+              cornerRadius = buttonCorner
+              if (borderWidth > 0f) {
+                setStroke(borderWidth.toInt(), borderColor)
+              }
+            }
+            setTextColor(
+              parseColorOrDefault(
+                customNativeQuickActionSecondaryTextColor
+                  ?: customNativeSecondaryActionButtonTextColor,
+                0xFFE6EEF9.toInt()
+              )
+            )
+          }
+          else -> {
+            background = GradientDrawable().apply {
+              shape = GradientDrawable.RECTANGLE
+              setColor(
+                parseColorOrDefault(
+                  customNativeQuickActionBackgroundColor ?: customNativeActionButtonBackgroundColor,
+                  0xFF2563EB.toInt()
+                )
+              )
+              cornerRadius = buttonCorner
+              if (borderWidth > 0f) {
+                setStroke(borderWidth.toInt(), borderColor)
+              }
+            }
+            setTextColor(
+              parseColorOrDefault(
+                customNativeQuickActionTextColor ?: customNativeActionButtonTextColor,
+                0xFFFFFFFF.toInt()
+              )
+            )
+          }
+        }
+        setOnClickListener {
+          MapboxNavigationEventBridge.emit(
+            "onBottomSheetActionPress",
+            mapOf("actionId" to customNativeQuickActionIds[index])
+          )
+        }
+      }
+      val params = LinearLayout.LayoutParams(0, dpToPx((customNativeActionButtonHeight ?: 38.0).toFloat()), 1f)
+      if (index > 0) {
+        params.marginStart = dpToPx(8f)
+      }
+      row.addView(button, params)
+    }
+
+    container.addView(row)
+  }
+
+  private fun addCustomNativeBottomButtons(container: LinearLayout) {
+    val primaryTitle = customNativeActionButtonTitle?.trim().orEmpty()
+    val secondaryTitle = customNativeSecondaryActionButtonTitle?.trim().orEmpty()
+    if (primaryTitle.isEmpty() && secondaryTitle.isEmpty()) {
+      return
+    }
+
+    val row = LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      setPadding(0, dpToPx(8f), 0, 0)
+      gravity = Gravity.CENTER_VERTICAL
+    }
+
+    if (primaryTitle.isNotEmpty()) {
+      val primary = Button(this).apply {
+        text = primaryTitle
+        isAllCaps = false
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, customNativeActionButtonFontSize?.toFloat() ?: 14f)
+        val buttonCorner = (customNativeActionButtonCornerRadius?.toFloat()
+          ?: dpToPx(10f).toFloat()).coerceIn(0f, dpToPx(24f).toFloat())
+        background = GradientDrawable().apply {
+          shape = GradientDrawable.RECTANGLE
+          setColor(parseColorOrDefault(customNativeActionButtonBackgroundColor, 0xFF2563EB.toInt()))
+          cornerRadius = buttonCorner
+          val borderWidth = (customNativeActionButtonBorderWidth?.toFloat() ?: 0f).coerceIn(0f, dpToPx(4f).toFloat())
+          if (borderWidth > 0f) {
+            setStroke(borderWidth.toInt(), parseColorOrDefault(customNativeActionButtonBorderColor, 0x00000000))
+          }
+        }
+        setTextColor(parseColorOrDefault(customNativeActionButtonTextColor, 0xFFFFFFFF.toInt()))
+        setOnClickListener { finish() }
+      }
+      row.addView(primary, LinearLayout.LayoutParams(0, dpToPx((customNativeActionButtonHeight ?: 42.0).toFloat()), 1f))
+    }
+
+    if (secondaryTitle.isNotEmpty()) {
+      val secondary = Button(this).apply {
+        text = secondaryTitle
+        isAllCaps = false
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, customNativeActionButtonFontSize?.toFloat() ?: 14f)
+        val buttonCorner = (customNativeActionButtonCornerRadius?.toFloat()
+          ?: dpToPx(10f).toFloat()).coerceIn(0f, dpToPx(24f).toFloat())
+        background = GradientDrawable().apply {
+          shape = GradientDrawable.RECTANGLE
+          setColor(parseColorOrDefault(customNativeSecondaryActionButtonBackgroundColor, 0x331E293B))
+          cornerRadius = buttonCorner
+          val borderWidth = (customNativeActionButtonBorderWidth?.toFloat() ?: 0f).coerceIn(0f, dpToPx(4f).toFloat())
+          if (borderWidth > 0f) {
+            setStroke(borderWidth.toInt(), parseColorOrDefault(customNativeActionButtonBorderColor, 0x00000000))
+          }
+        }
+        setTextColor(parseColorOrDefault(customNativeSecondaryActionButtonTextColor, 0xFFE6EEF9.toInt()))
+        setOnClickListener {
+          MapboxNavigationEventBridge.emit(
+            "onBottomSheetActionPress",
+            mapOf("actionId" to "secondary")
+          )
+        }
+      }
+      val params = LinearLayout.LayoutParams(0, dpToPx((customNativeActionButtonHeight ?: 42.0).toFloat()), 1f)
+      if (primaryTitle.isNotEmpty()) {
+        params.marginStart = dpToPx(8f)
+      }
+      row.addView(secondary, params)
+    }
+
+    container.addView(row)
+  }
+
+  private fun buildCustomNativeHeaderView(): View? {
+    val title = customNativeHeaderTitle?.trim().orEmpty()
+    val subtitle = customNativeHeaderSubtitle?.trim().orEmpty()
+    val badge = customNativeHeaderBadgeText?.trim().orEmpty()
+    if (title.isEmpty() && subtitle.isEmpty() && badge.isEmpty()) {
+      return null
+    }
+
+    val row = LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      setPadding(0, dpToPx(8f), 0, 0)
+    }
+
+    val textStack = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+    }
+    if (title.isNotEmpty()) {
+      textStack.addView(TextView(this).apply {
+        text = title
+        setTextColor(parseColorOrDefault(customNativePrimaryTextColor, 0xFFFFFFFF.toInt()))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+      })
+    }
+    if (subtitle.isNotEmpty()) {
+      textStack.addView(TextView(this).apply {
+        text = subtitle
+        setTextColor(parseColorOrDefault(customNativeSecondaryTextColor, 0xE6BFDBFE.toInt()))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+      })
+    }
+    row.addView(textStack)
+
+    if (badge.isNotEmpty()) {
+      row.addView(TextView(this).apply {
+        text = " $badge "
+        setTextColor(parseColorOrDefault(customNativeHeaderBadgeTextColor, 0xFFFFFFFF.toInt()))
+        setBackgroundColor(parseColorOrDefault(customNativeHeaderBadgeBackgroundColor, 0xFF2563EB.toInt()))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        setPadding(dpToPx(6f), dpToPx(2f), dpToPx(6f), dpToPx(2f))
+      })
+    }
+
+    return row
+  }
+
+  private fun toggleCustomNativeBottomSheet() {
+    if (customNativeHidden) {
+      customNativeHidden = false
+      customNativeExpanded = false
+    } else {
+      customNativeExpanded = !customNativeExpanded
+    }
+    applyCustomNativeBottomSheetHeight()
+  }
+
+  private fun currentCustomNativeBottomSheetHeight(): Int {
+    return when {
+      customNativeHidden -> customNativeHiddenHeightPx
+      customNativeExpanded -> customNativeExpandedHeightPx
+      else -> customNativeCollapsedHeightPx
+    }
+  }
+
+  private fun applyCustomNativeBottomSheetHeight() {
+    val container = customNativeBottomSheetContainer ?: return
+    container.layoutParams = (container.layoutParams as FrameLayout.LayoutParams).apply {
+      height = currentCustomNativeBottomSheetHeight()
+    }
+    container.alpha = if (customNativeHidden) 0f else 1f
+    if (!customNativeHidden) {
+      container.translationY = 0f
+    }
+    updateCustomNativeOverlayInteractivity()
+    container.requestLayout()
+  }
+
+  private fun revealCustomNativeBottomSheet(expanded: Boolean) {
+    val container = customNativeBottomSheetContainer ?: return
+    if (!customNativeHidden && customNativeExpanded == expanded) {
+      return
+    }
+    customNativeHidden = false
+    customNativeExpanded = expanded
+    applyCustomNativeBottomSheetHeight()
+    container.alpha = 0f
+    container.translationY = dpToPx(20f).toFloat()
+    container.animate()
+      .alpha(1f)
+      .translationY(0f)
+      .setDuration(220L)
+      .start()
+    updateCustomNativeOverlayInteractivity()
+  }
+
+  private fun configureNativeBannerGestureRevealIfNeeded() {
+    customNativeRevealHotzoneView?.let { existing ->
+      (existing.parent as? ViewGroup)?.removeView(existing)
+      customNativeRevealHotzoneView = null
+    }
+
+    val shouldAttach =
+      customNativeRevealOnNativeBannerGesture &&
+      (bottomSheetMode == "customnative" || bottomSheetMode == "overlay")
+
+    if (!shouldAttach || !hasStartedGuidance) {
+      return
+    }
+
+    val root = rootContainer ?: return
+    val hotzone = View(this).apply {
+      setBackgroundColor(0x00000000)
+      isClickable = true
+    }
+    hotzone.layoutParams = FrameLayout.LayoutParams(
+      FrameLayout.LayoutParams.MATCH_PARENT,
+      customNativeRevealGestureHotzoneHeightPx,
+      Gravity.BOTTOM
+    ).apply {
+      marginEnd = customNativeRevealGestureRightExclusionWidthPx
+    }
+
+    hotzone.setOnTouchListener { touchedView, event ->
+      if (customNativeBottomSheetContainer == null || !customNativeHidden || !hasStartedGuidance) {
+        return@setOnTouchListener false
+      }
+      val rightExclusion = customNativeRevealGestureRightExclusionWidthPx.toFloat()
+      if (event.x > (touchedView.width.toFloat() - rightExclusion)) {
+        return@setOnTouchListener false
+      }
+      when (event.actionMasked) {
+        MotionEvent.ACTION_DOWN -> {
+          nativeBannerGestureTouchStartY = event.rawY
+          nativeBannerGestureArmed = true
+          true
+        }
+        MotionEvent.ACTION_UP -> {
+          if (nativeBannerGestureArmed && customNativeHidden) {
+            val deltaY = nativeBannerGestureTouchStartY - event.rawY
+            val isUpwardSwipe = deltaY > 18f
+            if (isUpwardSwipe) {
+              revealCustomNativeBottomSheet(expanded = true)
+              nativeBannerGestureArmed = false
+              return@setOnTouchListener true
+            }
+          }
+          nativeBannerGestureArmed = false
+          false
+        }
+        MotionEvent.ACTION_CANCEL -> {
+          nativeBannerGestureArmed = false
+          false
+        }
+        else -> false
+      }
+    }
+
+    root.addView(hotzone)
+    customNativeRevealHotzoneView = hotzone
+    updateCustomNativeOverlayInteractivity()
+  }
+
+  private fun clearNativeBannerGestureRevealIfNeeded() {
+    customNativeRevealHotzoneView?.let { existing ->
+      (existing.parent as? ViewGroup)?.removeView(existing)
+    }
+    customNativeRevealHotzoneView = null
+    nativeBannerGestureArmed = false
+  }
+
+  private fun updateCustomNativeOverlayInteractivity() {
+    val hotzone = customNativeRevealHotzoneView
+    val shouldEnableHotzone = customNativeHidden && hasStartedGuidance && customNativeRevealOnNativeBannerGesture
+    hotzone?.isClickable = shouldEnableHotzone
+    hotzone?.isFocusable = shouldEnableHotzone
+    hotzone?.visibility = if (shouldEnableHotzone) View.VISIBLE else View.GONE
+
+    val backdrop = customNativeBackdropView
+    if (backdrop != null) {
+      val visible = !customNativeHidden
+      backdrop.isClickable = visible
+      backdrop.visibility = if (visible) View.VISIBLE else View.GONE
+      backdrop.alpha = if (visible) 1f else 0f
+    }
+  }
+
+  private fun updateCustomNativeBottomSheet(instruction: String?, progress: RouteProgress?) {
+    val primary = customNativePrimaryTextView ?: return
+    val secondary = customNativeSecondaryTextView ?: return
+    val nextInstruction = instruction?.trim()
+    if (!nextInstruction.isNullOrBlank()) {
+      latestPrimaryInstruction = nextInstruction
+      primary.text = nextInstruction
+    } else if (!latestPrimaryInstruction.isNullOrBlank()) {
+      primary.text = latestPrimaryInstruction
+    }
+    val currentStreet = latestSecondaryInstruction?.trim().orEmpty()
+    val parts = mutableListOf<String>()
+    if (customNativeShowCurrentStreet && currentStreet.isNotEmpty()) {
+      parts.add(currentStreet)
+    }
+    if (progress != null) {
+      val remainingMeters = kotlin.math.max(0, progress.distanceRemaining.toInt())
+      val durationRemaining = kotlin.math.max(0.0, progress.durationRemaining)
+      val fraction = progress.fractionTraveled.toDouble().coerceIn(0.0, 1.0)
+      val percent = Math.round(fraction * 100.0).toInt()
+      if (customNativeShowRemainingDistance) {
+        parts.add("$remainingMeters m")
+      }
+      if (customNativeShowRemainingDuration) {
+        parts.add(formatDuration(durationRemaining))
+      }
+      if (customNativeShowEta) {
+        val etaMillis = System.currentTimeMillis() + (durationRemaining * 1000.0).toLong()
+        parts.add(formatEtaLocal(etaMillis))
+      }
+      if (customNativeShowCompletionPercent) {
+        parts.add("$percent%")
+      }
+    }
+    secondary.text = if (parts.isNotEmpty()) {
+      parts.joinToString(" • ")
+    } else {
+      "Waiting for route progress"
+    }
+  }
+
   override fun onDestroy() {
     mainHandler.removeCallbacksAndMessages(null)
     navigationView?.removeListener(navigationViewListener)
+    clearNativeBannerGestureRevealIfNeeded()
     detachNavigationObservers()
     super.onDestroy()
+    activeSessionCount = (activeSessionCount - 1).coerceAtLeast(0)
+    if (activeActivityRef?.get() === this) {
+      activeActivityRef = null
+    }
+    NavigationSessionRegistry.release(SESSION_OWNER)
     navigationView = null
+    rootContainer = null
+    customNativeAttachPending = false
+    customNativeBottomSheetContainer = null
+    customNativeBackdropView = null
+    customNativePrimaryTextView = null
+    customNativeSecondaryTextView = null
+  }
+
+  private fun parseColorOrDefault(value: String?, fallback: Int): Int {
+    if (value.isNullOrBlank()) return fallback
+    return runCatching { android.graphics.Color.parseColor(value.trim()) }.getOrDefault(fallback)
+  }
+
+  private fun dpToPx(dp: Float): Int {
+    return TypedValue.applyDimension(
+      TypedValue.COMPLEX_UNIT_DIP,
+      dp,
+      resources.displayMetrics
+    ).toInt()
   }
 
   private fun resolveAccessToken(): String {
@@ -564,6 +1488,9 @@ class MapboxNavigationActivity : AppCompatActivity() {
     if (primary.isEmpty()) {
       return
     }
+    latestPrimaryInstruction = primary
+    latestSecondaryInstruction = instruction?.secondary()?.text()?.trim()?.takeIf { it.isNotEmpty() }
+    latestStepDistanceRemaining = instruction?.distanceAlongGeometry()
 
     val payload = mutableMapOf<String, Any?>("primaryText" to primary)
     val secondary = instruction?.secondary()?.text()?.trim().orEmpty()
@@ -573,6 +1500,56 @@ class MapboxNavigationActivity : AppCompatActivity() {
     payload["stepDistanceRemaining"] = instruction?.distanceAlongGeometry() ?: 0.0
 
     MapboxNavigationEventBridge.emit("onBannerInstruction", payload)
+    emitJourneyData()
+  }
+
+  private fun emitJourneyData() {
+    val payload = mutableMapOf<String, Any>()
+    latestLatitude?.let { payload["latitude"] = it }
+    latestLongitude?.let { payload["longitude"] = it }
+    latestBearing?.let { payload["bearing"] = it }
+    latestSpeed?.let { payload["speed"] = it }
+    latestAltitude?.let { payload["altitude"] = it }
+    latestAccuracy?.let { payload["accuracy"] = it }
+    latestPrimaryInstruction?.let { payload["primaryInstruction"] = it }
+    latestSecondaryInstruction?.let { payload["secondaryInstruction"] = it }
+    latestStepDistanceRemaining?.let { payload["stepDistanceRemaining"] = it }
+    latestSecondaryInstruction?.let { payload["currentStreet"] = it }
+    latestDistanceRemaining?.let { payload["distanceRemaining"] = it }
+    latestDurationRemaining?.let { duration ->
+      payload["durationRemaining"] = duration
+      val etaMillis = System.currentTimeMillis() + (duration * 1000.0).toLong()
+      payload["etaIso8601"] = formatIsoUtc(etaMillis)
+    }
+    latestFractionTraveled?.let { fraction ->
+      payload["fractionTraveled"] = fraction
+      payload["completionPercent"] = Math.round(fraction * 100.0).toInt()
+    }
+    if (payload.isNotEmpty()) {
+      MapboxNavigationEventBridge.emit("onJourneyDataChange", payload)
+    }
+  }
+
+  private fun formatDuration(seconds: Double): String {
+    val totalMinutes = kotlin.math.max(0, kotlin.math.round(seconds / 60.0).toInt())
+    if (totalMinutes < 60) {
+      return "${totalMinutes}m"
+    }
+    val hours = totalMinutes / 60
+    val minutes = totalMinutes % 60
+    return if (minutes > 0) "${hours}h ${minutes}m" else "${hours}h"
+  }
+
+  private fun formatEtaLocal(timestampMillis: Long): String {
+    val formatter = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+    formatter.timeZone = java.util.TimeZone.getDefault()
+    return formatter.format(java.util.Date(timestampMillis))
+  }
+
+  private fun formatIsoUtc(timestampMillis: Long): String {
+    val formatter = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+    formatter.timeZone = java.util.TimeZone.getTimeZone("UTC")
+    return formatter.format(java.util.Date(timestampMillis))
   }
 
   private fun parseWaypoints(

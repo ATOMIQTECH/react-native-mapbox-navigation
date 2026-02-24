@@ -24,10 +24,14 @@ export type BottomSheetOptions = {
   showsManeuverView?: boolean;
   /** Show default bottom action buttons. */
   showsActionButtons?: boolean;
-  /** Rendering mode. iOS defaults to `overlay` for customizability. */
-  mode?: "native" | "overlay";
-  /** Initial overlay state. */
-  initialState?: "collapsed" | "expanded";
+  /** Rendering mode.
+   * - `native`: use SDK native banner (default).
+   * - `customNative`: iOS full-screen only, hides SDK banner and shows package native expandable sheet.
+   * - `overlay`: embedded React overlay mode.
+   */
+  mode?: "native" | "customNative" | "overlay";
+  /** Initial overlay/custom-native state. */
+  initialState?: "hidden" | "collapsed" | "expanded";
   /** Overlay collapsed height in points. */
   collapsedHeight?: number;
   /** Overlay expanded height in points. */
@@ -42,6 +46,16 @@ export type BottomSheetOptions = {
   showHandle?: boolean;
   /** Allow tap on sheet container/handle to toggle expanded state. */
   enableTapToToggle?: boolean;
+  /** Embedded overlay mode: minimum interval for location-driven overlay rerenders (ms). */
+  overlayLocationUpdateIntervalMs?: number;
+  /** Embedded overlay mode: minimum interval for progress-driven overlay rerenders (ms). */
+  overlayProgressUpdateIntervalMs?: number;
+  /** iOS full-screen customNative: reveal custom sheet when user taps/swipes native Mapbox bottom banner. */
+  revealOnNativeBannerGesture?: boolean;
+  /** Full-screen customNative: hidden gesture-reveal zone height in points/dp (default `100`). */
+  revealGestureHotzoneHeight?: number;
+  /** Full-screen customNative: right-side exclusion width for native end/camera buttons (points/dp, default `80`). */
+  revealGestureRightExclusionWidth?: number;
   /** Show built-in default content cards when custom content is not provided. */
   showDefaultContent?: boolean;
   /** Default title for maneuver card in package-built overlay. */
@@ -54,50 +68,90 @@ export type BottomSheetOptions = {
   contentContainerStyle?: any;
   /** Style override for overlay drag/toggle handle. */
   handleStyle?: any;
-  /** iOS full-screen: background color (hex/rgb string), e.g. `#0f172a`. */
+  /** Overlay sheet: background color (hex/rgb string), e.g. `#0f172a`. */
   backgroundColor?: string;
-  /** iOS full-screen: handle color (hex/rgb string). */
+  /** Overlay sheet: handle color (hex/rgb string). */
   handleColor?: string;
-  /** iOS full-screen: primary text color (hex/rgb string). */
+  /** Overlay sheet: primary text color (hex/rgb string). */
   primaryTextColor?: string;
-  /** iOS full-screen: secondary text color (hex/rgb string). */
+  /** Overlay sheet: secondary text color (hex/rgb string). */
   secondaryTextColor?: string;
-  /** iOS full-screen: action button background color (hex/rgb string). */
+  /** Overlay sheet: action button background color (hex/rgb string). */
   actionButtonBackgroundColor?: string;
-  /** iOS full-screen: action button text color (hex/rgb string). */
+  /** Overlay sheet: action button text color (hex/rgb string). */
   actionButtonTextColor?: string;
-  /** iOS full-screen: action button label. */
+  /** Overlay sheet: action button label. */
   actionButtonTitle?: string;
-  /** iOS full-screen: optional secondary action button label. */
+  /** Overlay sheet: optional secondary action button label. */
   secondaryActionButtonTitle?: string;
-  /** iOS full-screen: primary action behavior. Defaults to `stopNavigation`. */
+  /** Overlay sheet: primary action behavior. Defaults to `stopNavigation`. */
   primaryActionButtonBehavior?: "stopNavigation" | "emitEvent";
-  /** iOS full-screen: secondary action behavior. Defaults to `emitEvent`. */
+  /** Overlay sheet: secondary action behavior. Defaults to `emitEvent`. */
   secondaryActionButtonBehavior?: "none" | "stopNavigation" | "emitEvent";
-  /** iOS full-screen: action button border color. */
+  /** Overlay sheet: action button border color. */
   actionButtonBorderColor?: string;
-  /** iOS full-screen: action button border width. */
+  /** Overlay sheet: action button border width. */
   actionButtonBorderWidth?: number;
-  /** iOS full-screen: action button corner radius. */
+  /** Overlay sheet: action button corner radius. */
   actionButtonCornerRadius?: number;
-  /** iOS full-screen: secondary action button background color (hex/rgb string). */
+  /** Overlay sheet: secondary action button background color (hex/rgb string). */
   secondaryActionButtonBackgroundColor?: string;
-  /** iOS full-screen: secondary action button text color (hex/rgb string). */
+  /** Overlay sheet: secondary action button text color (hex/rgb string). */
   secondaryActionButtonTextColor?: string;
-  /** iOS full-screen: maneuver title font size. */
+  /** Overlay sheet: maneuver title font size. */
   primaryTextFontSize?: number;
-  /** iOS full-screen: progress subtitle font size. */
+  /** Overlay sheet: progress subtitle font size. */
   secondaryTextFontSize?: number;
-  /** iOS full-screen: action button title font size. */
+  /** Overlay sheet: action button title font size. */
   actionButtonFontSize?: number;
-  /** iOS full-screen: action button height. */
+  /** Overlay sheet: action button height. */
   actionButtonHeight?: number;
-  /** iOS full-screen: corner radius (points). */
+  /** Bottom spacing after action buttons in custom-native/overlay sheets. */
+  actionButtonsBottomPadding?: number;
+  /** Quick action (primary variant) background color. */
+  quickActionBackgroundColor?: string;
+  /** Quick action (primary variant) text color. */
+  quickActionTextColor?: string;
+  /** Quick action (secondary variant) background color. */
+  quickActionSecondaryBackgroundColor?: string;
+  /** Quick action (secondary variant) text color. */
+  quickActionSecondaryTextColor?: string;
+  /** Quick action (ghost variant) text color. */
+  quickActionGhostTextColor?: string;
+  /** Quick action border color. */
+  quickActionBorderColor?: string;
+  /** Quick action border width. */
+  quickActionBorderWidth?: number;
+  /** Quick action corner radius. */
+  quickActionCornerRadius?: number;
+  /** Overlay sheet: corner radius (points). */
   cornerRadius?: number;
+  /** Show current street/road label in package-rendered sheet content. */
+  showCurrentStreet?: boolean;
+  /** Show remaining distance in package-rendered sheet content. */
+  showRemainingDistance?: boolean;
+  /** Show remaining duration in package-rendered sheet content. */
+  showRemainingDuration?: boolean;
+  /** Show ETA in package-rendered sheet content. */
+  showETA?: boolean;
+  /** Show completion percentage in package-rendered sheet content. */
+  showCompletionPercent?: boolean;
   /** Overlay quick actions rendered by package default sheet. */
   quickActions?: BottomSheetQuickAction[];
   /** Overlay prebuilt quick actions with package-managed behavior. */
   builtInQuickActions?: BottomSheetBuiltInQuickAction[];
+  /** iOS full-screen `customNative`: extra native content rows below progress/instruction. */
+  customRows?: BottomSheetCustomRow[];
+  /** iOS full-screen `customNative`: optional top header title. */
+  headerTitle?: string;
+  /** iOS full-screen `customNative`: optional top header subtitle. */
+  headerSubtitle?: string;
+  /** iOS full-screen `customNative`: optional header badge text on trailing side. */
+  headerBadgeText?: string;
+  /** iOS full-screen `customNative`: optional header badge background color. */
+  headerBadgeBackgroundColor?: string;
+  /** iOS full-screen `customNative`: optional header badge text color. */
+  headerBadgeTextColor?: string;
 };
 
 /** Overlay quick action button config. */
@@ -105,6 +159,19 @@ export type BottomSheetQuickAction = {
   id: string;
   label: string;
   variant?: "primary" | "secondary" | "ghost";
+};
+
+/** Extra row item for iOS full-screen custom native sheet. */
+export type BottomSheetCustomRow = {
+  id: string;
+  /** Optional SF Symbol name for native icon (for example: `car.fill`). */
+  iconSystemName?: string;
+  /** Optional fallback icon text/emoji. */
+  iconText?: string;
+  title: string;
+  value?: string;
+  subtitle?: string;
+  emphasis?: boolean;
 };
 
 /** Prebuilt overlay actions with package-managed behavior. */
@@ -222,6 +289,25 @@ export type RouteProgress = {
   fractionTraveled: number;
 };
 
+/** Structured journey data suitable for custom bottom banner UIs. */
+export type JourneyData = {
+  latitude?: number;
+  longitude?: number;
+  bearing?: number;
+  speed?: number;
+  altitude?: number;
+  accuracy?: number;
+  primaryInstruction?: string;
+  secondaryInstruction?: string;
+  currentStreet?: string;
+  stepDistanceRemaining?: number;
+  distanceRemaining?: number;
+  durationRemaining?: number;
+  fractionTraveled?: number;
+  completionPercent?: number;
+  etaIso8601?: string;
+};
+
 /** Arrival event payload. */
 export type ArrivalEvent = {
   index?: number;
@@ -256,7 +342,7 @@ export type BannerInstruction = {
 
 /** Full-screen bottom-sheet action event payload. */
 export type BottomSheetActionEvent = {
-  actionId: "primary" | "secondary";
+  actionId: "primary" | "secondary" | "cancel" | string;
 };
 
 /** Event subscription handle. */
@@ -276,7 +362,7 @@ export interface MapboxNavigationModule {
   getNavigationSettings(): Promise<NavigationSettings>;
 }
 
-/** Props for embedded `MapboxNavigationView`. */
+/** @deprecated Embedded `MapboxNavigationView` runtime support has been removed. */
 export interface MapboxNavigationViewProps {
   style?: any;
   startOrigin?: Coordinate;
@@ -331,6 +417,8 @@ export interface MapboxNavigationViewProps {
   onLocationChange?: (location: LocationUpdate) => void;
   /** Callback for route progress changes. */
   onRouteProgressChange?: (progress: RouteProgress) => void;
+  /** Callback with aggregated journey data for custom UI rendering. */
+  onJourneyDataChange?: (data: JourneyData) => void;
   /** Callback when arrival is detected. */
   onArrive?: (point: ArrivalEvent) => void;
   /** Android: callback when destination preview is shown. */

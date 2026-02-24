@@ -1,5 +1,7 @@
 # Troubleshooting
 
+Applies to package version: `1.1.6`
+
 ## Build Fails Downloading Mapbox Dependencies
 
 Check `MAPBOX_DOWNLOADS_TOKEN`:

@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.1.6
+
+- Stabilized full-screen navigation lifecycle on iOS and Android.
+- Hardened session conflict handling to prevent overlapping navigation sessions.
+- Added consistent close/stop behavior for native end-navigation controls.
+- Improved custom native bottom sheet gesture behavior and right-side safe-zone handling.
+- Added configurable right exclusion width for reveal hot-zone:
+  - `bottomSheet.revealGestureRightExclusionWidth`
+- Added quick-action style customization fields:
+  - `quickActionBackgroundColor`
+  - `quickActionTextColor`
+  - `quickActionSecondaryBackgroundColor`
+  - `quickActionSecondaryTextColor`
+  - `quickActionGhostTextColor`
+  - `quickActionBorderColor`
+  - `quickActionBorderWidth`
+  - `quickActionCornerRadius`
+- Added/standardized rounded-corner handling for action and quick-action buttons.
+- Updated example app to full-screen-only test flow.
+- Removed embedded runtime usage support (`MapboxNavigationView`) due to session-conflict instability.
+- Updated documentation (`README`, `USAGE`, `QUICKSTART`, troubleshooting notes) to match `1.1.6` behavior and API surface.
+
 ## 1.1.0
 
 - Added iOS current-location fallback for full-screen `startNavigation` when `startOrigin` is omitted.
