@@ -7,6 +7,9 @@ import UIKit
 
 class MapboxNavigationView: ExpoView {
   private let sessionOwner = "embedded-\(UUID().uuidString)"
+  var enabled: Bool = false {
+    didSet { handleEnabledChange() }
+  }
   var startOrigin: [String: Any]? {
     didSet { startNavigationIfReady() }
   }
@@ -49,6 +52,7 @@ class MapboxNavigationView: ExpoView {
   private var isRouteCalculationInProgress = false
   private var hasPendingSessionConflict = false
   private var warnedUnsupportedOptions = Set<String>()
+  private var routeRequestToken = UUID()
   
   let onLocationChange = EventDispatcher()
   let onRouteProgressChange = EventDispatcher()
@@ -71,14 +75,27 @@ class MapboxNavigationView: ExpoView {
   override func didMoveToWindow() {
     super.didMoveToWindow()
     
-    if window != nil {
+    if window != nil && enabled {
       startNavigationIfReady()
+    } else {
+      cleanupNavigation()
+    }
+  }
+
+  private func handleEnabledChange() {
+    if enabled {
+      if window != nil {
+        startNavigationIfReady()
+      }
     } else {
       cleanupNavigation()
     }
   }
   
   private func startNavigationIfReady() {
+    guard enabled else {
+      return
+    }
     guard navigationViewController == nil else {
       return
     }
@@ -134,10 +151,22 @@ class MapboxNavigationView: ExpoView {
     routeOptions.distanceMeasurementSystem = distanceUnit == "imperial" ? .imperial : .metric
     routeOptions.includesAlternativeRoutes = routeAlternatives
     
+    let requestToken = UUID()
+    routeRequestToken = requestToken
     isRouteCalculationInProgress = true
     Directions.shared.calculate(routeOptions) { [weak self] (_, result) in
       guard let self = self else { return }
+      if self.routeRequestToken != requestToken {
+        // A newer embedded start/stop cycle occurred; ignore stale route results.
+        NavigationSessionRegistry.shared.release(owner: self.sessionOwner)
+        return
+      }
+
       self.isRouteCalculationInProgress = false
+      guard self.enabled, self.window != nil, self.navigationViewController == nil else {
+        NavigationSessionRegistry.shared.release(owner: self.sessionOwner)
+        return
+      }
       
       switch result {
       case .success(let response):
@@ -185,24 +214,7 @@ class MapboxNavigationView: ExpoView {
     NavigationSettings.shared.voiceMuted = mute
     NavigationSettings.shared.voiceVolume = Float(max(0, min(voiceVolume, 1)))
     viewController.showsSpeedLimits = showsSpeedLimits
-    if !showsManeuverView {
-      warnUnsupportedOptionOnce(
-        key: "showsManeuverView",
-        message: "showsManeuverView is currently not supported on embedded iOS navigation and will be ignored."
-      )
-    }
-    if !showsTripProgress {
-      warnUnsupportedOptionOnce(
-        key: "showsTripProgress",
-        message: "showsTripProgress is currently not supported on embedded iOS navigation and will be ignored."
-      )
-    }
-    if !showsActionButtons {
-      warnUnsupportedOptionOnce(
-        key: "showsActionButtons",
-        message: "showsActionButtons is currently not supported on embedded iOS navigation and will be ignored."
-      )
-    }
+    applyEmbeddedBannerVisibility(to: viewController)
     if !showsReportFeedback {
       warnUnsupportedOptionOnce(
         key: "showsReportFeedback",
@@ -237,12 +249,6 @@ class MapboxNavigationView: ExpoView {
       warnUnsupportedOptionOnce(
         key: "annotatesIntersectionsAlongRoute",
         message: "annotatesIntersectionsAlongRoute is currently not supported on embedded iOS navigation and will be ignored."
-      )
-    }
-    if !showCancelButton {
-      warnUnsupportedOptionOnce(
-        key: "showCancelButton",
-        message: "showCancelButton is currently not supported for embedded iOS navigation and will be ignored."
       )
     }
     if !showsWayNameLabel {
@@ -284,12 +290,57 @@ class MapboxNavigationView: ExpoView {
   }
   
   private func cleanupNavigation() {
+    // Invalidate any in-flight route calculation callback so it can't re-attach navigation after teardown.
+    routeRequestToken = UUID()
+    isRouteCalculationInProgress = false
     navigationViewController?.willMove(toParent: nil)
     navigationViewController?.view.removeFromSuperview()
     navigationViewController?.removeFromParent()
     navigationViewController = nil
     NavigationSessionRegistry.shared.release(owner: sessionOwner)
     hasPendingSessionConflict = false
+  }
+
+  private func applyEmbeddedBannerVisibility(to viewController: NavigationViewController) {
+    // Best-effort: Mapbox iOS v2 exposes top/bottom banner controllers internally.
+    // We access them via KVC to avoid hard dependencies across SDK patch versions.
+    let showManeuver = showsManeuverView
+    let showTripProgress = showsTripProgress
+    let showActionButtons = showsActionButtons
+    let showCancel = showCancelButton
+
+    if let top = resolveTopBannerController(from: viewController) {
+      top.view.isHidden = !showManeuver
+      top.view.alpha = showManeuver ? 1 : 0
+      top.view.isUserInteractionEnabled = showManeuver
+    }
+
+    if let bottom = resolveBottomBannerController(from: viewController) {
+      bottom.distanceRemainingLabel?.isHidden = !showTripProgress
+      bottom.timeRemainingLabel?.isHidden = !showTripProgress
+      bottom.arrivalTimeLabel?.isHidden = !showTripProgress
+
+      let cancelVisible = showActionButtons && showCancel
+      bottom.cancelButton?.isHidden = !cancelVisible
+      bottom.cancelButton?.alpha = cancelVisible ? 1 : 0
+      bottom.cancelButton?.isUserInteractionEnabled = cancelVisible
+    }
+  }
+
+  private func resolveTopBannerController(from viewController: NavigationViewController) -> UIViewController? {
+    let selector = NSSelectorFromString("topBannerViewController")
+    guard viewController.responds(to: selector) else {
+      return nil
+    }
+    return viewController.value(forKey: "topBannerViewController") as? UIViewController
+  }
+
+  private func resolveBottomBannerController(from viewController: NavigationViewController) -> BottomBannerViewController? {
+    let selector = NSSelectorFromString("bottomBannerViewController")
+    guard viewController.responds(to: selector) else {
+      return nil
+    }
+    return viewController.value(forKey: "bottomBannerViewController") as? BottomBannerViewController
   }
 
   private func applyCameraConfiguration(to viewController: NavigationViewController) {

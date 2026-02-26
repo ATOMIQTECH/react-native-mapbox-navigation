@@ -6,6 +6,17 @@ import CoreLocation
 import UIKit
 
 private final class NativeBannerGestureDelegate: NSObject, UIGestureRecognizerDelegate {
+  var shouldReceiveTouch: ((UITouch) -> Bool)?
+  var shouldBegin: ((UIGestureRecognizer) -> Bool)?
+
+  func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    return shouldBegin?(gestureRecognizer) ?? true
+  }
+
+  func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+    return shouldReceiveTouch?(touch) ?? true
+  }
+
   func gestureRecognizer(
     _ gestureRecognizer: UIGestureRecognizer,
     shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
@@ -40,6 +51,8 @@ public class MapboxNavigationModule: Module {
   private var revealCustomSheetFromNativeBannerGesture = false
   private weak var nativeBottomBannerGestureTargetView: UIView?
   private weak var nativeBottomBannerRevealHotzoneView: UIView?
+  private var nativeBottomBannerRevealZoneHeight: CGFloat = 0
+  private var nativeBottomBannerRevealTrailingExclusion: CGFloat = 0
   private var nativeBottomBannerTapGesture: UITapGestureRecognizer?
   private var nativeBottomBannerPanGesture: UIPanGestureRecognizer?
   private let nativeBannerGestureDelegate = NativeBannerGestureDelegate()
@@ -146,6 +159,10 @@ public class MapboxNavigationModule: Module {
       
       Prop("startOrigin") { (view: MapboxNavigationView, origin: [String: Any]?) in
         view.startOrigin = origin
+      }
+
+      Prop("enabled") { (view: MapboxNavigationView, enabled: Bool) in
+        view.enabled = enabled
       }
       
       Prop("destination") { (view: MapboxNavigationView, destination: [String: Any]) in
@@ -770,15 +787,23 @@ public class MapboxNavigationModule: Module {
     }
 
     if let primaryFontSize = bottomSheet?.primaryTextFontSize {
-      banner.arrivalTimeLabel?.font = .systemFont(
-        ofSize: CGFloat(max(10, min(primaryFontSize, 34))),
-        weight: .semibold
+      banner.arrivalTimeLabel?.font = resolvedFont(
+        size: CGFloat(max(10, min(primaryFontSize, 34))),
+        defaultWeight: .semibold,
+        family: bottomSheet?.primaryTextFontFamily,
+        weightName: bottomSheet?.primaryTextFontWeight
       )
     }
     if let secondaryFontSize = bottomSheet?.secondaryTextFontSize {
       let size = CGFloat(max(10, min(secondaryFontSize, 28)))
-      banner.distanceRemainingLabel?.font = .systemFont(ofSize: size, weight: .medium)
-      banner.timeRemainingLabel?.font = .systemFont(ofSize: size, weight: .medium)
+      let secondaryFont = resolvedFont(
+        size: size,
+        defaultWeight: .medium,
+        family: bottomSheet?.secondaryTextFontFamily,
+        weightName: bottomSheet?.secondaryTextFontWeight
+      )
+      banner.distanceRemainingLabel?.font = secondaryFont
+      banner.timeRemainingLabel?.font = secondaryFont
     }
 
     let cancelButton = banner.cancelButton
@@ -802,6 +827,14 @@ public class MapboxNavigationModule: Module {
     let buttonCornerRadius = CGFloat(max(0, min(bottomSheet?.actionButtonCornerRadius ?? 10, 18)))
     cancelButton?.layer.cornerRadius = buttonCornerRadius
     cancelButton?.clipsToBounds = true
+    if let buttonFontSize = bottomSheet?.actionButtonFontSize {
+      cancelButton?.titleLabel?.font = resolvedFont(
+        size: CGFloat(max(10, min(buttonFontSize, 26))),
+        defaultWeight: .semibold,
+        family: bottomSheet?.actionButtonFontFamily,
+        weightName: bottomSheet?.actionButtonFontWeight
+      )
+    }
 
     banner.distanceRemainingLabel?.isHidden = !showTripProgress
     banner.timeRemainingLabel?.isHidden = !showTripProgress
@@ -852,32 +885,39 @@ public class MapboxNavigationModule: Module {
   ) {
     clearNativeBannerGestureRevealIfNeeded()
     guard revealCustomSheetFromNativeBannerGesture else { return }
-    let targetView = UIView()
-    targetView.translatesAutoresizingMaskIntoConstraints = false
-    targetView.backgroundColor = .clear
-    targetView.isUserInteractionEnabled = true
-    viewController.view.addSubview(targetView)
-
     let requestedHeight = CGFloat(options.bottomSheet?.revealGestureHotzoneHeight ?? 100)
     let revealZoneHeight = max(56, min(requestedHeight, 220))
     let trailingExclusion = CGFloat(
       max(48, min(options.bottomSheet?.revealGestureRightExclusionWidth ?? 80, 220))
     )
-    NSLayoutConstraint.activate([
-      targetView.leadingAnchor.constraint(equalTo: viewController.view.leadingAnchor),
-      targetView.trailingAnchor.constraint(equalTo: viewController.view.trailingAnchor, constant: -trailingExclusion),
-      targetView.bottomAnchor.constraint(equalTo: viewController.view.bottomAnchor),
-      targetView.heightAnchor.constraint(equalToConstant: revealZoneHeight),
-    ])
-    nativeBottomBannerRevealHotzoneView = targetView
+    nativeBottomBannerRevealZoneHeight = revealZoneHeight
+    nativeBottomBannerRevealTrailingExclusion = trailingExclusion
 
     let pan = UIPanGestureRecognizer(target: self, action: #selector(onNativeBannerRevealPan(_:)))
     pan.cancelsTouchesInView = false
+    pan.delaysTouchesBegan = false
+    pan.delaysTouchesEnded = false
+
+    nativeBannerGestureDelegate.shouldReceiveTouch = { [weak self] touch in
+      guard let self else { return false }
+      guard self.fullScreenBottomSheetHidden else { return false }
+      let location = touch.location(in: viewController.view)
+      let inBottomZone = location.y >= (viewController.view.bounds.height - self.nativeBottomBannerRevealZoneHeight)
+      let inAllowedX = location.x <= (viewController.view.bounds.width - self.nativeBottomBannerRevealTrailingExclusion)
+      if !inBottomZone || !inAllowedX {
+        return false
+      }
+      return true
+    }
+    nativeBannerGestureDelegate.shouldBegin = { [weak self] _ in
+      guard let self else { return false }
+      return self.fullScreenBottomSheetHidden
+    }
     pan.delegate = nativeBannerGestureDelegate
-    targetView.addGestureRecognizer(pan)
+    viewController.view.addGestureRecognizer(pan)
     nativeBottomBannerPanGesture = pan
-    nativeBottomBannerGestureTargetView = targetView
-    targetView.isUserInteractionEnabled = fullScreenBottomSheetHidden
+    nativeBottomBannerGestureTargetView = viewController.view
+    nativeBottomBannerRevealHotzoneView = nil
   }
 
   private func clearNativeBannerGestureRevealIfNeeded() {
@@ -887,11 +927,12 @@ public class MapboxNavigationModule: Module {
     if let pan = nativeBottomBannerPanGesture {
       nativeBottomBannerGestureTargetView?.removeGestureRecognizer(pan)
     }
-    nativeBottomBannerRevealHotzoneView?.removeFromSuperview()
     nativeBottomBannerTapGesture = nil
     nativeBottomBannerPanGesture = nil
     nativeBottomBannerGestureTargetView = nil
     nativeBottomBannerRevealHotzoneView = nil
+    nativeBottomBannerRevealZoneHeight = 0
+    nativeBottomBannerRevealTrailingExclusion = 0
   }
 
   @objc
@@ -954,8 +995,24 @@ public class MapboxNavigationModule: Module {
     container.layer.cornerRadius = max(0, min(cornerRadius, 28))
     container.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
     container.clipsToBounds = true
-    container.alpha = fullScreenBottomSheetHidden ? 0 : 1
     container.isUserInteractionEnabled = !fullScreenBottomSheetHidden
+
+    // Wrap the container so we can add a drop shadow without disabling clipping on the content view.
+    let shadowWrap = UIView()
+    shadowWrap.translatesAutoresizingMaskIntoConstraints = false
+    shadowWrap.layer.shadowColor = UIColor.black.cgColor
+    shadowWrap.layer.shadowOpacity = 0.22
+    shadowWrap.layer.shadowRadius = 16
+    shadowWrap.layer.shadowOffset = CGSize(width: 0, height: -6)
+    shadowWrap.alpha = fullScreenBottomSheetHidden ? 0 : 1
+    shadowWrap.isUserInteractionEnabled = !fullScreenBottomSheetHidden
+    shadowWrap.addSubview(container)
+    NSLayoutConstraint.activate([
+      container.topAnchor.constraint(equalTo: shadowWrap.topAnchor),
+      container.leadingAnchor.constraint(equalTo: shadowWrap.leadingAnchor),
+      container.trailingAnchor.constraint(equalTo: shadowWrap.trailingAnchor),
+      container.bottomAnchor.constraint(equalTo: shadowWrap.bottomAnchor),
+    ])
 
     let handle = UIView()
     handle.translatesAutoresizingMaskIntoConstraints = false
@@ -966,7 +1023,12 @@ public class MapboxNavigationModule: Module {
     let primaryLabel = UILabel()
     primaryLabel.translatesAutoresizingMaskIntoConstraints = false
     primaryLabel.textColor = colorFromHex(options.bottomSheet?.primaryTextColor) ?? .white
-    primaryLabel.font = .systemFont(ofSize: max(10, min(primaryFontSize, 30)), weight: .semibold)
+    primaryLabel.font = resolvedFont(
+      size: max(10, min(primaryFontSize, 30)),
+      defaultWeight: .semibold,
+      family: options.bottomSheet?.primaryTextFontFamily,
+      weightName: options.bottomSheet?.primaryTextFontWeight
+    )
     primaryLabel.numberOfLines = 2
     primaryLabel.text = "Starting navigation..."
 
@@ -974,7 +1036,12 @@ public class MapboxNavigationModule: Module {
     secondaryLabel.translatesAutoresizingMaskIntoConstraints = false
     secondaryLabel.textColor = colorFromHex(options.bottomSheet?.secondaryTextColor)
       ?? UIColor(white: 0.88, alpha: 0.9)
-    secondaryLabel.font = .systemFont(ofSize: max(10, min(secondaryFontSize, 24)), weight: .medium)
+    secondaryLabel.font = resolvedFont(
+      size: max(10, min(secondaryFontSize, 24)),
+      defaultWeight: .medium,
+      family: options.bottomSheet?.secondaryTextFontFamily,
+      weightName: options.bottomSheet?.secondaryTextFontWeight
+    )
     secondaryLabel.numberOfLines = 2
     secondaryLabel.text = "Waiting for route progress"
 
@@ -997,7 +1064,12 @@ public class MapboxNavigationModule: Module {
     actionButton.layer.cornerRadius = CGFloat(options.bottomSheet?.actionButtonCornerRadius ?? 8)
     actionButton.layer.borderColor = colorFromHex(options.bottomSheet?.actionButtonBorderColor)?.cgColor
     actionButton.layer.borderWidth = CGFloat(max(0, min(options.bottomSheet?.actionButtonBorderWidth ?? 0, 6)))
-    actionButton.titleLabel?.font = .systemFont(ofSize: max(10, min(actionButtonFontSize, 24)), weight: .semibold)
+    actionButton.titleLabel?.font = resolvedFont(
+      size: max(10, min(actionButtonFontSize, 24)),
+      defaultWeight: .semibold,
+      family: options.bottomSheet?.actionButtonFontFamily,
+      weightName: options.bottomSheet?.actionButtonFontWeight
+    )
     actionButton.addTarget(self, action: #selector(onBottomSheetPrimaryActionTap), for: .touchUpInside)
     actionButton.isHidden = !hasPrimaryAction || options.showsActionButtons == false || options.bottomSheet?.showsActionButtons == false
 
@@ -1017,7 +1089,12 @@ public class MapboxNavigationModule: Module {
     secondaryActionButton.layer.cornerRadius = CGFloat(options.bottomSheet?.actionButtonCornerRadius ?? 8)
     secondaryActionButton.layer.borderColor = colorFromHex(options.bottomSheet?.actionButtonBorderColor)?.cgColor
     secondaryActionButton.layer.borderWidth = CGFloat(max(0, min(options.bottomSheet?.actionButtonBorderWidth ?? 0, 6)))
-    secondaryActionButton.titleLabel?.font = .systemFont(ofSize: max(10, min(actionButtonFontSize, 24)), weight: .semibold)
+    secondaryActionButton.titleLabel?.font = resolvedFont(
+      size: max(10, min(actionButtonFontSize, 24)),
+      defaultWeight: .semibold,
+      family: options.bottomSheet?.actionButtonFontFamily,
+      weightName: options.bottomSheet?.actionButtonFontWeight
+    )
     secondaryActionButton.addTarget(self, action: #selector(onBottomSheetSecondaryActionTap), for: .touchUpInside)
     secondaryActionButton.isHidden = !hasSecondaryAction || actionButton.isHidden
 
@@ -1054,7 +1131,8 @@ public class MapboxNavigationModule: Module {
             primaryColor: colorFromHex(options.bottomSheet?.primaryTextColor) ?? .white,
             secondaryColor: colorFromHex(options.bottomSheet?.secondaryTextColor) ?? UIColor(white: 0.88, alpha: 0.9),
             primaryFontSize: primaryFontSize,
-            secondaryFontSize: secondaryFontSize
+            secondaryFontSize: secondaryFontSize,
+            options: options
           )
         )
       }
@@ -1105,9 +1183,9 @@ public class MapboxNavigationModule: Module {
 
     container.addSubview(contentStack)
     viewController.view.addSubview(backdrop)
-    viewController.view.addSubview(container)
+    viewController.view.addSubview(shadowWrap)
 
-    let topConstraint = container.topAnchor.constraint(
+    let topConstraint = shadowWrap.topAnchor.constraint(
       equalTo: viewController.view.safeAreaLayoutGuide.bottomAnchor,
       constant: -currentBottomSheetHeight()
     )
@@ -1119,9 +1197,9 @@ public class MapboxNavigationModule: Module {
       backdrop.trailingAnchor.constraint(equalTo: viewController.view.trailingAnchor),
       backdrop.bottomAnchor.constraint(equalTo: viewController.view.bottomAnchor),
 
-      container.leadingAnchor.constraint(equalTo: viewController.view.leadingAnchor),
-      container.trailingAnchor.constraint(equalTo: viewController.view.trailingAnchor),
-      container.bottomAnchor.constraint(equalTo: viewController.view.bottomAnchor),
+      shadowWrap.leadingAnchor.constraint(equalTo: viewController.view.leadingAnchor),
+      shadowWrap.trailingAnchor.constraint(equalTo: viewController.view.trailingAnchor),
+      shadowWrap.bottomAnchor.constraint(equalTo: viewController.view.bottomAnchor),
       topConstraint,
 
       handle.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
@@ -1152,7 +1230,7 @@ public class MapboxNavigationModule: Module {
     fullScreenBottomSheetBackdropView?.removeFromSuperview()
     fullScreenBottomSheetBackdropView = backdrop
     fullScreenBottomSheetView?.removeFromSuperview()
-    fullScreenBottomSheetView = container
+    fullScreenBottomSheetView = shadowWrap
     fullScreenBottomSheetHandleView = handle
     fullScreenBottomSheetPrimaryLabel = primaryLabel
     fullScreenBottomSheetSecondaryLabel = secondaryLabel
@@ -1426,7 +1504,8 @@ public class MapboxNavigationModule: Module {
     primaryColor: UIColor,
     secondaryColor: UIColor,
     primaryFontSize: CGFloat,
-    secondaryFontSize: CGFloat
+    secondaryFontSize: CGFloat,
+    options: NavigationStartOptions
   ) -> UIView {
     let container = UIView()
     container.translatesAutoresizingMaskIntoConstraints = false
@@ -1454,7 +1533,12 @@ public class MapboxNavigationModule: Module {
       iconLabel.translatesAutoresizingMaskIntoConstraints = false
       iconLabel.text = iconText
       iconLabel.textColor = secondaryColor
-      iconLabel.font = .systemFont(ofSize: max(10, min(secondaryFontSize, 24)), weight: .regular)
+      iconLabel.font = resolvedFont(
+        size: max(10, min(secondaryFontSize, 24)),
+        defaultWeight: .regular,
+        family: options.bottomSheet?.secondaryTextFontFamily,
+        weightName: options.bottomSheet?.secondaryTextFontWeight
+      )
       iconLabel.setContentHuggingPriority(.required, for: .horizontal)
       leadingStack.addArrangedSubview(iconLabel)
     }
@@ -1464,9 +1548,11 @@ public class MapboxNavigationModule: Module {
     title.numberOfLines = 1
     title.text = row.title
     title.textColor = primaryColor
-    title.font = .systemFont(
-      ofSize: max(10, min(primaryFontSize - 2, 28)),
-      weight: row.emphasis == true ? .semibold : .regular
+    title.font = resolvedFont(
+      size: max(10, min(primaryFontSize - 2, 28)),
+      defaultWeight: row.emphasis == true ? .semibold : .regular,
+      family: options.bottomSheet?.primaryTextFontFamily,
+      weightName: options.bottomSheet?.primaryTextFontWeight
     )
 
     let value = UILabel()
@@ -1475,9 +1561,11 @@ public class MapboxNavigationModule: Module {
     value.textAlignment = .right
     value.text = row.value
     value.textColor = primaryColor
-    value.font = .systemFont(
-      ofSize: max(10, min(primaryFontSize, 30)),
-      weight: row.emphasis == true ? .bold : .medium
+    value.font = resolvedFont(
+      size: max(10, min(primaryFontSize, 30)),
+      defaultWeight: row.emphasis == true ? .bold : .medium,
+      family: options.bottomSheet?.primaryTextFontFamily,
+      weightName: options.bottomSheet?.primaryTextFontWeight
     )
 
     leadingStack.addArrangedSubview(title)
@@ -1507,7 +1595,12 @@ public class MapboxNavigationModule: Module {
       subtitle.numberOfLines = 0
       subtitle.text = subtitleRaw
       subtitle.textColor = secondaryColor
-      subtitle.font = .systemFont(ofSize: max(10, min(secondaryFontSize, 24)), weight: .regular)
+      subtitle.font = resolvedFont(
+        size: max(10, min(secondaryFontSize, 24)),
+        defaultWeight: .regular,
+        family: options.bottomSheet?.secondaryTextFontFamily,
+        weightName: options.bottomSheet?.secondaryTextFontWeight
+      )
       container.addSubview(subtitle)
 
       constraints.append(contentsOf: [
@@ -1577,7 +1670,12 @@ public class MapboxNavigationModule: Module {
 
     button.layer.cornerRadius = quickCornerRadius
     button.clipsToBounds = true
-    button.titleLabel?.font = .systemFont(ofSize: max(10, min(actionButtonFontSize, 22)), weight: .semibold)
+    button.titleLabel?.font = resolvedFont(
+      size: max(10, min(actionButtonFontSize, 22)),
+      defaultWeight: .semibold,
+      family: options.bottomSheet?.quickActionFontFamily ?? options.bottomSheet?.actionButtonFontFamily,
+      weightName: options.bottomSheet?.quickActionFontWeight ?? options.bottomSheet?.actionButtonFontWeight
+    )
   }
 
   private func makeCustomNativeHeaderView(options: NavigationStartOptions) -> UIView? {
@@ -1608,7 +1706,13 @@ public class MapboxNavigationModule: Module {
       title.text = titleText
       title.numberOfLines = 1
       title.textColor = colorFromHex(options.bottomSheet?.primaryTextColor) ?? .white
-      title.font = .systemFont(ofSize: 16, weight: .semibold)
+      let titleSize = CGFloat(max(10, min(options.bottomSheet?.headerTitleFontSize ?? 16, 30)))
+      title.font = resolvedFont(
+        size: titleSize,
+        defaultWeight: .semibold,
+        family: options.bottomSheet?.headerTitleFontFamily ?? options.bottomSheet?.primaryTextFontFamily,
+        weightName: options.bottomSheet?.headerTitleFontWeight ?? options.bottomSheet?.primaryTextFontWeight
+      )
       textStack.addArrangedSubview(title)
     }
 
@@ -1619,7 +1723,13 @@ public class MapboxNavigationModule: Module {
       subtitle.numberOfLines = 1
       subtitle.textColor = colorFromHex(options.bottomSheet?.secondaryTextColor)
         ?? UIColor(white: 0.88, alpha: 0.9)
-      subtitle.font = .systemFont(ofSize: 12, weight: .regular)
+      let subtitleSize = CGFloat(max(10, min(options.bottomSheet?.headerSubtitleFontSize ?? 12, 24)))
+      subtitle.font = resolvedFont(
+        size: subtitleSize,
+        defaultWeight: .regular,
+        family: options.bottomSheet?.headerSubtitleFontFamily ?? options.bottomSheet?.secondaryTextFontFamily,
+        weightName: options.bottomSheet?.headerSubtitleFontWeight ?? options.bottomSheet?.secondaryTextFontWeight
+      )
       textStack.addArrangedSubview(subtitle)
     }
 
@@ -1638,9 +1748,17 @@ public class MapboxNavigationModule: Module {
       badge.textColor = colorFromHex(options.bottomSheet?.headerBadgeTextColor) ?? .white
       badge.backgroundColor = colorFromHex(options.bottomSheet?.headerBadgeBackgroundColor)
         ?? UIColor(red: 0.2, green: 0.35, blue: 0.8, alpha: 1)
-      badge.font = .systemFont(ofSize: 11, weight: .semibold)
+      let badgeSize = CGFloat(max(10, min(options.bottomSheet?.headerBadgeFontSize ?? 11, 22)))
+      badge.font = resolvedFont(
+        size: badgeSize,
+        defaultWeight: .semibold,
+        family: options.bottomSheet?.headerBadgeFontFamily ?? options.bottomSheet?.actionButtonFontFamily,
+        weightName: options.bottomSheet?.headerBadgeFontWeight ?? options.bottomSheet?.actionButtonFontWeight
+      )
       badge.textAlignment = .center
-      badge.layer.cornerRadius = 9
+      badge.layer.cornerRadius = CGFloat(max(0, min(options.bottomSheet?.headerBadgeCornerRadius ?? 9, 24)))
+      badge.layer.borderColor = colorFromHex(options.bottomSheet?.headerBadgeBorderColor)?.cgColor
+      badge.layer.borderWidth = CGFloat(max(0, min(options.bottomSheet?.headerBadgeBorderWidth ?? 0, 6)))
       badge.clipsToBounds = true
       badge.setContentHuggingPriority(.required, for: .horizontal)
       container.addSubview(badge)
@@ -1692,6 +1810,50 @@ public class MapboxNavigationModule: Module {
     let g = CGFloat((intValue & 0x0000FF00) >> 8) / 255.0
     let b = CGFloat(intValue & 0x000000FF) / 255.0
     return UIColor(red: r, green: g, blue: b, alpha: a)
+  }
+
+  private func resolvedFont(
+    size: CGFloat,
+    defaultWeight: UIFont.Weight,
+    family: String?,
+    weightName: String?
+  ) -> UIFont {
+    let clampedSize = max(10, min(size, 40))
+    let weight = fontWeight(from: weightName) ?? defaultWeight
+    let trimmedFamily = family?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !trimmedFamily.isEmpty, let customFont = UIFont(name: trimmedFamily, size: clampedSize) {
+      return customFont
+    }
+    return .systemFont(ofSize: clampedSize, weight: weight)
+  }
+
+  private func fontWeight(from value: String?) -> UIFont.Weight? {
+    guard let raw = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+          !raw.isEmpty else {
+      return nil
+    }
+    switch raw {
+    case "100", "thin":
+      return .thin
+    case "200", "extralight", "ultralight":
+      return .ultraLight
+    case "300", "light":
+      return .light
+    case "400", "normal", "regular":
+      return .regular
+    case "500", "medium":
+      return .medium
+    case "600", "semibold", "demibold":
+      return .semibold
+    case "700", "bold":
+      return .bold
+    case "800", "extrabold", "heavy":
+      return .heavy
+    case "900", "black":
+      return .black
+    default:
+      return nil
+    }
   }
 
   private func warnUnsupportedOptionOnce(key: String, message: String) {
@@ -1858,8 +2020,14 @@ struct BottomSheetStartOptions: Record {
   @Field var secondaryActionButtonBackgroundColor: String?
   @Field var secondaryActionButtonTextColor: String?
   @Field var primaryTextFontSize: Double?
+  @Field var primaryTextFontFamily: String?
+  @Field var primaryTextFontWeight: String?
   @Field var secondaryTextFontSize: Double?
+  @Field var secondaryTextFontFamily: String?
+  @Field var secondaryTextFontWeight: String?
   @Field var actionButtonFontSize: Double?
+  @Field var actionButtonFontFamily: String?
+  @Field var actionButtonFontWeight: String?
   @Field var actionButtonHeight: Double?
   @Field var actionButtonsBottomPadding: Double?
   @Field var quickActionBackgroundColor: String?
@@ -1870,6 +2038,8 @@ struct BottomSheetStartOptions: Record {
   @Field var quickActionBorderColor: String?
   @Field var quickActionBorderWidth: Double?
   @Field var quickActionCornerRadius: Double?
+  @Field var quickActionFontFamily: String?
+  @Field var quickActionFontWeight: String?
   @Field var showCurrentStreet: Bool?
   @Field var showRemainingDistance: Bool?
   @Field var showRemainingDuration: Bool?
@@ -1881,10 +2051,22 @@ struct BottomSheetStartOptions: Record {
   @Field var quickActions: [BottomSheetQuickActionStartOptions]?
   @Field var customRows: [BottomSheetCustomRowStartOptions]?
   @Field var headerTitle: String?
+  @Field var headerTitleFontSize: Double?
+  @Field var headerTitleFontFamily: String?
+  @Field var headerTitleFontWeight: String?
   @Field var headerSubtitle: String?
+  @Field var headerSubtitleFontSize: Double?
+  @Field var headerSubtitleFontFamily: String?
+  @Field var headerSubtitleFontWeight: String?
   @Field var headerBadgeText: String?
+  @Field var headerBadgeFontSize: Double?
+  @Field var headerBadgeFontFamily: String?
+  @Field var headerBadgeFontWeight: String?
   @Field var headerBadgeBackgroundColor: String?
   @Field var headerBadgeTextColor: String?
+  @Field var headerBadgeCornerRadius: Double?
+  @Field var headerBadgeBorderColor: String?
+  @Field var headerBadgeBorderWidth: Double?
   @Field var cornerRadius: Double?
 }
 

@@ -18,8 +18,17 @@
   - `quickActionBorderWidth`
   - `quickActionCornerRadius`
 - Added/standardized rounded-corner handling for action and quick-action buttons.
+- Added extended full-screen custom-native typography and badge styling controls:
+  - `primaryTextFontFamily`, `primaryTextFontWeight`
+  - `secondaryTextFontFamily`, `secondaryTextFontWeight`
+  - `actionButtonFontFamily`, `actionButtonFontWeight`
+  - `quickActionFontFamily`, `quickActionFontWeight`
+  - `headerTitleFontSize`, `headerTitleFontFamily`, `headerTitleFontWeight`
+  - `headerSubtitleFontSize`, `headerSubtitleFontFamily`, `headerSubtitleFontWeight`
+  - `headerBadgeFontSize`, `headerBadgeFontFamily`, `headerBadgeFontWeight`
+  - `headerBadgeCornerRadius`, `headerBadgeBorderColor`, `headerBadgeBorderWidth`
 - Updated example app to full-screen-only test flow.
-- Removed embedded runtime usage support (`MapboxNavigationView`) due to session-conflict instability.
+- Re-enabled embedded runtime usage (`MapboxNavigationView`) with explicit opt-in gate (`enabled`) to reduce session-conflict loops.
 - Updated documentation (`README`, `USAGE`, `QUICKSTART`, troubleshooting notes) to match `1.1.6` behavior and API surface.
 
 ## 1.1.0

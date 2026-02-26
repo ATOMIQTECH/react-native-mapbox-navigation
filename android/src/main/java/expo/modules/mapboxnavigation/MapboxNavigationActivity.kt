@@ -3,6 +3,7 @@ package expo.modules.mapboxnavigation
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -16,6 +17,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.util.TypedValue
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.appcompat.app.AppCompatActivity
@@ -69,6 +71,9 @@ class MapboxNavigationActivity : AppCompatActivity() {
   private var waypointPoints: List<Point> = emptyList()
   private var shouldSimulateRoute: Boolean = false
   private var routeAlternatives: Boolean = false
+  private var mute: Boolean = false
+  private var voiceVolume: Double = 1.0
+  private var language: String = "en"
   private var showsSpeedLimits: Boolean = true
   private var showsWayNameLabel: Boolean = true
   private var showsTripProgress: Boolean = true
@@ -108,6 +113,18 @@ class MapboxNavigationActivity : AppCompatActivity() {
   private var customNativeHeaderBadgeText: String? = null
   private var customNativeHeaderBadgeBackgroundColor: String? = null
   private var customNativeHeaderBadgeTextColor: String? = null
+  private var customNativeHeaderTitleFontSize: Double? = null
+  private var customNativeHeaderTitleFontFamily: String? = null
+  private var customNativeHeaderTitleFontWeight: String? = null
+  private var customNativeHeaderSubtitleFontSize: Double? = null
+  private var customNativeHeaderSubtitleFontFamily: String? = null
+  private var customNativeHeaderSubtitleFontWeight: String? = null
+  private var customNativeHeaderBadgeFontSize: Double? = null
+  private var customNativeHeaderBadgeFontFamily: String? = null
+  private var customNativeHeaderBadgeFontWeight: String? = null
+  private var customNativeHeaderBadgeCornerRadius: Double? = null
+  private var customNativeHeaderBadgeBorderColor: String? = null
+  private var customNativeHeaderBadgeBorderWidth: Double? = null
   private var customNativeQuickActionIds: Array<String> = emptyArray()
   private var customNativeQuickActionLabels: Array<String> = emptyArray()
   private var customNativeQuickActionVariants: Array<String> = emptyArray()
@@ -130,8 +147,14 @@ class MapboxNavigationActivity : AppCompatActivity() {
   private var customNativeActionButtonCornerRadius: Double? = null
   private var customNativeCornerRadiusPx: Float = 0f
   private var customNativePrimaryTextFontSize: Double? = null
+  private var customNativePrimaryTextFontFamily: String? = null
+  private var customNativePrimaryTextFontWeight: String? = null
   private var customNativeSecondaryTextFontSize: Double? = null
+  private var customNativeSecondaryTextFontFamily: String? = null
+  private var customNativeSecondaryTextFontWeight: String? = null
   private var customNativeActionButtonFontSize: Double? = null
+  private var customNativeActionButtonFontFamily: String? = null
+  private var customNativeActionButtonFontWeight: String? = null
   private var customNativeActionButtonHeight: Double? = null
   private var customNativeActionButtonsBottomPaddingPx: Int = 0
   private var customNativeQuickActionBackgroundColor: String? = null
@@ -142,6 +165,8 @@ class MapboxNavigationActivity : AppCompatActivity() {
   private var customNativeQuickActionBorderColor: String? = null
   private var customNativeQuickActionBorderWidth: Double? = null
   private var customNativeQuickActionCornerRadius: Double? = null
+  private var customNativeQuickActionFontFamily: String? = null
+  private var customNativeQuickActionFontWeight: String? = null
   private var customNativeShowCurrentStreet: Boolean = true
   private var customNativeShowRemainingDistance: Boolean = true
   private var customNativeShowRemainingDuration: Boolean = true
@@ -155,6 +180,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
   private var destinationName: String = "Destination"
   private var customNativeHandleTouchStartY = 0f
   private var nativeBannerGestureTouchStartY = 0f
+  private var nativeBannerGestureTouchStartX = 0f
   private var nativeBannerGestureArmed = false
   private var customNativeRevealHotzoneView: View? = null
   private var customNativeBackdropView: View? = null
@@ -347,6 +373,9 @@ class MapboxNavigationActivity : AppCompatActivity() {
       destinationName = intent.getStringExtra("destinationName")?.trim()?.takeIf { it.isNotEmpty() }
         ?: "Destination"
       shouldSimulateRoute = intent.getBooleanExtra("shouldSimulate", false)
+      mute = intent.getBooleanExtra("mute", false)
+      voiceVolume = intent.getDoubleExtra("voiceVolume", 1.0)
+      language = intent.getStringExtra("language")?.trim()?.takeIf { it.isNotEmpty() } ?: "en"
       routeAlternatives = intent.getBooleanExtra("routeAlternatives", false)
       showsSpeedLimits = intent.getBooleanExtra("showsSpeedLimits", true)
       showsWayNameLabel = intent.getBooleanExtra("showsWayNameLabel", true)
@@ -404,10 +433,22 @@ class MapboxNavigationActivity : AppCompatActivity() {
         customNativeExpanded = false
       }
       customNativeHeaderTitle = intent.getStringExtra("bottomSheetHeaderTitle")
+      customNativeHeaderTitleFontSize = intent.getDoubleExtraOrNull("bottomSheetHeaderTitleFontSize")
+      customNativeHeaderTitleFontFamily = intent.getStringExtra("bottomSheetHeaderTitleFontFamily")
+      customNativeHeaderTitleFontWeight = intent.getStringExtra("bottomSheetHeaderTitleFontWeight")
       customNativeHeaderSubtitle = intent.getStringExtra("bottomSheetHeaderSubtitle")
+      customNativeHeaderSubtitleFontSize = intent.getDoubleExtraOrNull("bottomSheetHeaderSubtitleFontSize")
+      customNativeHeaderSubtitleFontFamily = intent.getStringExtra("bottomSheetHeaderSubtitleFontFamily")
+      customNativeHeaderSubtitleFontWeight = intent.getStringExtra("bottomSheetHeaderSubtitleFontWeight")
       customNativeHeaderBadgeText = intent.getStringExtra("bottomSheetHeaderBadgeText")
+      customNativeHeaderBadgeFontSize = intent.getDoubleExtraOrNull("bottomSheetHeaderBadgeFontSize")
+      customNativeHeaderBadgeFontFamily = intent.getStringExtra("bottomSheetHeaderBadgeFontFamily")
+      customNativeHeaderBadgeFontWeight = intent.getStringExtra("bottomSheetHeaderBadgeFontWeight")
       customNativeHeaderBadgeBackgroundColor = intent.getStringExtra("bottomSheetHeaderBadgeBackgroundColor")
       customNativeHeaderBadgeTextColor = intent.getStringExtra("bottomSheetHeaderBadgeTextColor")
+      customNativeHeaderBadgeCornerRadius = intent.getDoubleExtraOrNull("bottomSheetHeaderBadgeCornerRadius")
+      customNativeHeaderBadgeBorderColor = intent.getStringExtra("bottomSheetHeaderBadgeBorderColor")
+      customNativeHeaderBadgeBorderWidth = intent.getDoubleExtraOrNull("bottomSheetHeaderBadgeBorderWidth")
       customNativeQuickActionIds = intent.getStringArrayExtra("bottomSheetQuickActionIds") ?: emptyArray()
       customNativeQuickActionLabels = intent.getStringArrayExtra("bottomSheetQuickActionLabels") ?: emptyArray()
       customNativeQuickActionVariants = intent.getStringArrayExtra("bottomSheetQuickActionVariants") ?: emptyArray()
@@ -429,8 +470,14 @@ class MapboxNavigationActivity : AppCompatActivity() {
       customNativeActionButtonBorderWidth = intent.getDoubleExtraOrNull("bottomSheetActionButtonBorderWidth")
       customNativeActionButtonCornerRadius = intent.getDoubleExtraOrNull("bottomSheetActionButtonCornerRadius")
       customNativePrimaryTextFontSize = intent.getDoubleExtraOrNull("bottomSheetPrimaryTextFontSize")
+      customNativePrimaryTextFontFamily = intent.getStringExtra("bottomSheetPrimaryTextFontFamily")
+      customNativePrimaryTextFontWeight = intent.getStringExtra("bottomSheetPrimaryTextFontWeight")
       customNativeSecondaryTextFontSize = intent.getDoubleExtraOrNull("bottomSheetSecondaryTextFontSize")
+      customNativeSecondaryTextFontFamily = intent.getStringExtra("bottomSheetSecondaryTextFontFamily")
+      customNativeSecondaryTextFontWeight = intent.getStringExtra("bottomSheetSecondaryTextFontWeight")
       customNativeActionButtonFontSize = intent.getDoubleExtraOrNull("bottomSheetActionButtonFontSize")
+      customNativeActionButtonFontFamily = intent.getStringExtra("bottomSheetActionButtonFontFamily")
+      customNativeActionButtonFontWeight = intent.getStringExtra("bottomSheetActionButtonFontWeight")
       customNativeActionButtonHeight = intent.getDoubleExtraOrNull("bottomSheetActionButtonHeight")
       customNativeActionButtonsBottomPaddingPx = dpToPx(
         (intent.getDoubleExtra("bottomSheetActionButtonsBottomPadding", 6.0)).toFloat()
@@ -443,6 +490,8 @@ class MapboxNavigationActivity : AppCompatActivity() {
       customNativeQuickActionBorderColor = intent.getStringExtra("bottomSheetQuickActionBorderColor")
       customNativeQuickActionBorderWidth = intent.getDoubleExtraOrNull("bottomSheetQuickActionBorderWidth")
       customNativeQuickActionCornerRadius = intent.getDoubleExtraOrNull("bottomSheetQuickActionCornerRadius")
+      customNativeQuickActionFontFamily = intent.getStringExtra("bottomSheetQuickActionFontFamily")
+      customNativeQuickActionFontWeight = intent.getStringExtra("bottomSheetQuickActionFontWeight")
       customNativeShowCurrentStreet = intent.getBooleanExtra("bottomSheetShowCurrentStreet", true)
       customNativeShowRemainingDistance = intent.getBooleanExtra("bottomSheetShowRemainingDistance", true)
       customNativeShowRemainingDuration = intent.getBooleanExtra("bottomSheetShowRemainingDuration", true)
@@ -544,7 +593,12 @@ class MapboxNavigationActivity : AppCompatActivity() {
         view.addListener(navigationViewListener)
         // Avoid full-map gesture interception. A dedicated bottom hot-zone is attached when needed.
       }
-      val root = FrameLayout(this).apply {
+      val root = object : FrameLayout(this) {
+        override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+          maybeHandleNativeBannerSwipe(ev)
+          return super.dispatchTouchEvent(ev)
+        }
+      }.apply {
         layoutParams = FrameLayout.LayoutParams(
           FrameLayout.LayoutParams.MATCH_PARENT,
           FrameLayout.LayoutParams.MATCH_PARENT
@@ -566,6 +620,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
       }
       setContentView(root)
       attachNavigationObserversWithRetry()
+      applyAudioGuidanceSettingsWithRetry()
 
       navigationView?.api?.routeReplayEnabled(shouldSimulateRoute)
 
@@ -583,6 +638,19 @@ class MapboxNavigationActivity : AppCompatActivity() {
 
     } catch (throwable: Throwable) {
       showErrorScreen("Failed to create NavigationView: ${throwable.message}", throwable)
+    }
+  }
+
+  private fun applyAudioGuidanceSettingsWithRetry(attempt: Int = 0) {
+    if (attempt > 20) {
+      return
+    }
+    // No-op until MapboxNavigationProvider is created by the Drop-In view.
+    MapboxAudioGuidanceController.setMuted(mute)
+    MapboxAudioGuidanceController.setVoiceVolume(voiceVolume)
+    MapboxAudioGuidanceController.setLanguage(language)
+    if (!MapboxNavigationProvider.isCreated()) {
+      mainHandler.postDelayed({ applyAudioGuidanceSettingsWithRetry(attempt + 1) }, 120L)
     }
   }
 
@@ -614,6 +682,8 @@ class MapboxNavigationActivity : AppCompatActivity() {
       val bg = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
         setColor(parseColorOrDefault(customNativeBackgroundColor, 0xEE0F172A.toInt()))
+        // Subtle border for a more "pro" card-like look by default.
+        setStroke(dpToPx(1f), 0x26FFFFFF)
         cornerRadii = floatArrayOf(
           customNativeCornerRadiusPx, customNativeCornerRadiusPx,
           customNativeCornerRadiusPx, customNativeCornerRadiusPx,
@@ -709,6 +779,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
       text = "Starting navigation..."
       setTextColor(parseColorOrDefault(customNativePrimaryTextColor, 0xFFFFFFFF.toInt()))
       setTextSize(TypedValue.COMPLEX_UNIT_SP, customNativePrimaryTextFontSize?.toFloat() ?: 16f)
+      applyConfiguredTypeface(this, customNativePrimaryTextFontFamily, customNativePrimaryTextFontWeight)
       setPadding(0, dpToPx(8f), 0, 0)
       maxLines = 2
     }
@@ -718,6 +789,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
       text = "Waiting for route progress"
       setTextColor(parseColorOrDefault(customNativeSecondaryTextColor, 0xE6BFDBFE.toInt()))
       setTextSize(TypedValue.COMPLEX_UNIT_SP, customNativeSecondaryTextFontSize?.toFloat() ?: 13f)
+      applyConfiguredTypeface(this, customNativeSecondaryTextFontFamily, customNativeSecondaryTextFontWeight)
       setPadding(0, dpToPx(2f), 0, 0)
       maxLines = 2
     }
@@ -774,8 +846,9 @@ class MapboxNavigationActivity : AppCompatActivity() {
         text = if (prefix.isNotEmpty()) "$prefix  ${customNativeRowTitles[index]}" else customNativeRowTitles[index]
         setTextColor(parseColorOrDefault(customNativePrimaryTextColor, 0xFFFFFFFF.toInt()))
         setTextSize(TypedValue.COMPLEX_UNIT_SP, (customNativePrimaryTextFontSize?.toFloat() ?: 15f) - 1f)
+        applyConfiguredTypeface(this, customNativePrimaryTextFontFamily, customNativePrimaryTextFontWeight)
         if (customNativeRowEmphasis.getOrNull(index) == true) {
-          setTypeface(typeface, android.graphics.Typeface.BOLD)
+          setTypeface(typeface, Typeface.BOLD)
         }
         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
       }
@@ -787,8 +860,9 @@ class MapboxNavigationActivity : AppCompatActivity() {
           text = value
           setTextColor(parseColorOrDefault(customNativePrimaryTextColor, 0xFFFFFFFF.toInt()))
           setTextSize(TypedValue.COMPLEX_UNIT_SP, customNativePrimaryTextFontSize?.toFloat() ?: 16f)
+          applyConfiguredTypeface(this, customNativePrimaryTextFontFamily, customNativePrimaryTextFontWeight)
           if (customNativeRowEmphasis.getOrNull(index) == true) {
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTypeface(typeface, Typeface.BOLD)
           }
         }
         top.addView(valueView)
@@ -802,6 +876,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
           text = subtitle
           setTextColor(parseColorOrDefault(customNativeSecondaryTextColor, 0xE6BFDBFE.toInt()))
           setTextSize(TypedValue.COMPLEX_UNIT_SP, customNativeSecondaryTextFontSize?.toFloat() ?: 12f)
+          applyConfiguredTypeface(this, customNativeSecondaryTextFontFamily, customNativeSecondaryTextFontWeight)
         }
         row.addView(subtitleView)
       }
@@ -827,6 +902,11 @@ class MapboxNavigationActivity : AppCompatActivity() {
         text = customNativeQuickActionLabels[index]
         isAllCaps = false
         setTextSize(TypedValue.COMPLEX_UNIT_SP, customNativeActionButtonFontSize?.toFloat() ?: 13f)
+        applyConfiguredTypeface(
+          this,
+          customNativeQuickActionFontFamily ?: customNativeActionButtonFontFamily,
+          customNativeQuickActionFontWeight ?: customNativeActionButtonFontWeight
+        )
         val buttonCorner = (customNativeQuickActionCornerRadius?.toFloat()
           ?: customNativeActionButtonCornerRadius?.toFloat()
           ?: dpToPx(10f).toFloat()).coerceIn(0f, dpToPx(24f).toFloat())
@@ -937,6 +1017,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
         text = primaryTitle
         isAllCaps = false
         setTextSize(TypedValue.COMPLEX_UNIT_SP, customNativeActionButtonFontSize?.toFloat() ?: 14f)
+        applyConfiguredTypeface(this, customNativeActionButtonFontFamily, customNativeActionButtonFontWeight)
         val buttonCorner = (customNativeActionButtonCornerRadius?.toFloat()
           ?: dpToPx(10f).toFloat()).coerceIn(0f, dpToPx(24f).toFloat())
         background = GradientDrawable().apply {
@@ -959,6 +1040,7 @@ class MapboxNavigationActivity : AppCompatActivity() {
         text = secondaryTitle
         isAllCaps = false
         setTextSize(TypedValue.COMPLEX_UNIT_SP, customNativeActionButtonFontSize?.toFloat() ?: 14f)
+        applyConfiguredTypeface(this, customNativeActionButtonFontFamily, customNativeActionButtonFontWeight)
         val buttonCorner = (customNativeActionButtonCornerRadius?.toFloat()
           ?: dpToPx(10f).toFloat()).coerceIn(0f, dpToPx(24f).toFloat())
         background = GradientDrawable().apply {
@@ -1010,15 +1092,30 @@ class MapboxNavigationActivity : AppCompatActivity() {
       textStack.addView(TextView(this).apply {
         text = title
         setTextColor(parseColorOrDefault(customNativePrimaryTextColor, 0xFFFFFFFF.toInt()))
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        setTextSize(
+          TypedValue.COMPLEX_UNIT_SP,
+          (customNativeHeaderTitleFontSize?.toFloat() ?: 16f).coerceIn(10f, 30f)
+        )
+        applyConfiguredTypeface(
+          this,
+          customNativeHeaderTitleFontFamily ?: customNativePrimaryTextFontFamily,
+          customNativeHeaderTitleFontWeight ?: customNativePrimaryTextFontWeight ?: "700"
+        )
       })
     }
     if (subtitle.isNotEmpty()) {
       textStack.addView(TextView(this).apply {
         text = subtitle
         setTextColor(parseColorOrDefault(customNativeSecondaryTextColor, 0xE6BFDBFE.toInt()))
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        setTextSize(
+          TypedValue.COMPLEX_UNIT_SP,
+          (customNativeHeaderSubtitleFontSize?.toFloat() ?: 12f).coerceIn(10f, 24f)
+        )
+        applyConfiguredTypeface(
+          this,
+          customNativeHeaderSubtitleFontFamily ?: customNativeSecondaryTextFontFamily,
+          customNativeHeaderSubtitleFontWeight ?: customNativeSecondaryTextFontWeight
+        )
       })
     }
     row.addView(textStack)
@@ -1027,9 +1124,30 @@ class MapboxNavigationActivity : AppCompatActivity() {
       row.addView(TextView(this).apply {
         text = " $badge "
         setTextColor(parseColorOrDefault(customNativeHeaderBadgeTextColor, 0xFFFFFFFF.toInt()))
-        setBackgroundColor(parseColorOrDefault(customNativeHeaderBadgeBackgroundColor, 0xFF2563EB.toInt()))
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        setTextSize(
+          TypedValue.COMPLEX_UNIT_SP,
+          (customNativeHeaderBadgeFontSize?.toFloat() ?: 11f).coerceIn(10f, 22f)
+        )
+        applyConfiguredTypeface(
+          this,
+          customNativeHeaderBadgeFontFamily ?: customNativeActionButtonFontFamily,
+          customNativeHeaderBadgeFontWeight ?: customNativeActionButtonFontWeight ?: "700"
+        )
+        val badgeRadius = (customNativeHeaderBadgeCornerRadius?.toFloat() ?: dpToPx(9f).toFloat())
+          .coerceIn(0f, dpToPx(24f).toFloat())
+        val badgeStrokeWidth = (customNativeHeaderBadgeBorderWidth?.toFloat() ?: 0f)
+          .coerceIn(0f, dpToPx(4f).toFloat())
+        background = GradientDrawable().apply {
+          shape = GradientDrawable.RECTANGLE
+          cornerRadius = badgeRadius
+          setColor(parseColorOrDefault(customNativeHeaderBadgeBackgroundColor, 0xFF2563EB.toInt()))
+          if (badgeStrokeWidth > 0f) {
+            setStroke(
+              badgeStrokeWidth.toInt(),
+              parseColorOrDefault(customNativeHeaderBadgeBorderColor, 0x00000000)
+            )
+          }
+        }
         setPadding(dpToPx(6f), dpToPx(2f), dpToPx(6f), dpToPx(2f))
       })
     }
@@ -1099,57 +1217,9 @@ class MapboxNavigationActivity : AppCompatActivity() {
     if (!shouldAttach || !hasStartedGuidance) {
       return
     }
-
-    val root = rootContainer ?: return
-    val hotzone = View(this).apply {
-      setBackgroundColor(0x00000000)
-      isClickable = true
-    }
-    hotzone.layoutParams = FrameLayout.LayoutParams(
-      FrameLayout.LayoutParams.MATCH_PARENT,
-      customNativeRevealGestureHotzoneHeightPx,
-      Gravity.BOTTOM
-    ).apply {
-      marginEnd = customNativeRevealGestureRightExclusionWidthPx
-    }
-
-    hotzone.setOnTouchListener { touchedView, event ->
-      if (customNativeBottomSheetContainer == null || !customNativeHidden || !hasStartedGuidance) {
-        return@setOnTouchListener false
-      }
-      val rightExclusion = customNativeRevealGestureRightExclusionWidthPx.toFloat()
-      if (event.x > (touchedView.width.toFloat() - rightExclusion)) {
-        return@setOnTouchListener false
-      }
-      when (event.actionMasked) {
-        MotionEvent.ACTION_DOWN -> {
-          nativeBannerGestureTouchStartY = event.rawY
-          nativeBannerGestureArmed = true
-          true
-        }
-        MotionEvent.ACTION_UP -> {
-          if (nativeBannerGestureArmed && customNativeHidden) {
-            val deltaY = nativeBannerGestureTouchStartY - event.rawY
-            val isUpwardSwipe = deltaY > 18f
-            if (isUpwardSwipe) {
-              revealCustomNativeBottomSheet(expanded = true)
-              nativeBannerGestureArmed = false
-              return@setOnTouchListener true
-            }
-          }
-          nativeBannerGestureArmed = false
-          false
-        }
-        MotionEvent.ACTION_CANCEL -> {
-          nativeBannerGestureArmed = false
-          false
-        }
-        else -> false
-      }
-    }
-
-    root.addView(hotzone)
-    customNativeRevealHotzoneView = hotzone
+    // Do not add an overlay hotzone View here. Overlay views block taps on SDK buttons underneath.
+    // We observe swipes from the root container (dispatchTouchEvent) without consuming touches.
+    nativeBannerGestureArmed = false
     updateCustomNativeOverlayInteractivity()
   }
 
@@ -1174,6 +1244,44 @@ class MapboxNavigationActivity : AppCompatActivity() {
       backdrop.isClickable = visible
       backdrop.visibility = if (visible) View.VISIBLE else View.GONE
       backdrop.alpha = if (visible) 1f else 0f
+    }
+  }
+
+  private fun maybeHandleNativeBannerSwipe(ev: MotionEvent) {
+    if (!customNativeRevealOnNativeBannerGesture) return
+    if (!(bottomSheetMode == "customnative" || bottomSheetMode == "overlay")) return
+    if (!hasStartedGuidance) return
+    if (!customNativeHidden) return
+    if (customNativeBottomSheetContainer == null) return
+
+    val root = rootContainer ?: return
+    val hotzoneHeight = customNativeRevealGestureHotzoneHeightPx
+    val rightExclusion = customNativeRevealGestureRightExclusionWidthPx
+
+    when (ev.actionMasked) {
+      MotionEvent.ACTION_DOWN -> {
+        val y = ev.y
+        val x = ev.x
+        val inBottomZone = y >= (root.height - hotzoneHeight).toFloat()
+        val inAllowedX = x <= (root.width - rightExclusion).toFloat()
+        nativeBannerGestureArmed = inBottomZone && inAllowedX
+        nativeBannerGestureTouchStartY = ev.rawY
+        nativeBannerGestureTouchStartX = ev.rawX
+      }
+      MotionEvent.ACTION_MOVE -> {
+        if (!nativeBannerGestureArmed) return
+        val dy = nativeBannerGestureTouchStartY - ev.rawY
+        val dx = nativeBannerGestureTouchStartX - ev.rawX
+        val verticalEnough = kotlin.math.abs(dy) > kotlin.math.abs(dx)
+        val upwardEnough = dy > 26f
+        if (verticalEnough && upwardEnough) {
+          nativeBannerGestureArmed = false
+          revealCustomNativeBottomSheet(expanded = true)
+        }
+      }
+      MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+        nativeBannerGestureArmed = false
+      }
     }
   }
 
@@ -1241,6 +1349,36 @@ class MapboxNavigationActivity : AppCompatActivity() {
   private fun parseColorOrDefault(value: String?, fallback: Int): Int {
     if (value.isNullOrBlank()) return fallback
     return runCatching { android.graphics.Color.parseColor(value.trim()) }.getOrDefault(fallback)
+  }
+
+  private fun applyConfiguredTypeface(view: TextView, family: String?, weight: String?) {
+    val requestedWeight = resolveTypefaceWeight(weight)
+    val trimmedFamily = family?.trim().orEmpty()
+    val baseTypeface = if (trimmedFamily.isNotEmpty()) {
+      Typeface.create(trimmedFamily, Typeface.NORMAL)
+    } else {
+      Typeface.defaultFromStyle(Typeface.NORMAL)
+    }
+    view.typeface = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      Typeface.create(baseTypeface, requestedWeight, false)
+    } else {
+      Typeface.create(baseTypeface, if (requestedWeight >= 600) Typeface.BOLD else Typeface.NORMAL)
+    }
+  }
+
+  private fun resolveTypefaceWeight(weight: String?): Int {
+    return when (weight?.trim()?.lowercase()) {
+      "100", "thin" -> 100
+      "200", "extralight", "ultralight" -> 200
+      "300", "light" -> 300
+      "400", "normal", "regular" -> 400
+      "500", "medium" -> 500
+      "600", "semibold", "demibold" -> 600
+      "700", "bold" -> 700
+      "800", "extrabold", "heavy" -> 800
+      "900", "black" -> 900
+      else -> 400
+    }
   }
 
   private fun dpToPx(dp: Float): Int {

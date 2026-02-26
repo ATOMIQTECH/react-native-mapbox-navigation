@@ -25,9 +25,13 @@ export type BottomSheetOptions = {
   /** Show default bottom action buttons. */
   showsActionButtons?: boolean;
   /** Rendering mode.
-   * - `native`: use SDK native banner (default).
-   * - `customNative`: iOS full-screen only, hides SDK banner and shows package native expandable sheet.
-   * - `overlay`: embedded React overlay mode.
+   * - `native`: use SDK native banner UI.
+   * - `customNative`: use package-built modern native sheet (full-screen iOS + Android).
+   * - `overlay`: embedded-only React overlay mode.
+   *
+   * Default:
+   * - Full-screen `startNavigation`: when `bottomSheet.enabled !== false` and `mode` is omitted, defaults to `customNative`.
+   * - Embedded `MapboxNavigationView`: use `overlay` to render React UI via `renderBottomSheet`.
    */
   mode?: "native" | "customNative" | "overlay";
   /** Initial overlay/custom-native state. */
@@ -100,10 +104,22 @@ export type BottomSheetOptions = {
   secondaryActionButtonTextColor?: string;
   /** Overlay sheet: maneuver title font size. */
   primaryTextFontSize?: number;
+  /** Bottom sheet: primary text font family name (native platform font). */
+  primaryTextFontFamily?: string;
+  /** Bottom sheet: primary text font weight (`normal`, `medium`, `semibold`, `bold`, `100..900`). */
+  primaryTextFontWeight?: string;
   /** Overlay sheet: progress subtitle font size. */
   secondaryTextFontSize?: number;
+  /** Bottom sheet: secondary text font family name (native platform font). */
+  secondaryTextFontFamily?: string;
+  /** Bottom sheet: secondary text font weight (`normal`, `medium`, `semibold`, `bold`, `100..900`). */
+  secondaryTextFontWeight?: string;
   /** Overlay sheet: action button title font size. */
   actionButtonFontSize?: number;
+  /** Bottom sheet: action button font family name (native platform font). */
+  actionButtonFontFamily?: string;
+  /** Bottom sheet: action button font weight (`normal`, `medium`, `semibold`, `bold`, `100..900`). */
+  actionButtonFontWeight?: string;
   /** Overlay sheet: action button height. */
   actionButtonHeight?: number;
   /** Bottom spacing after action buttons in custom-native/overlay sheets. */
@@ -124,6 +140,10 @@ export type BottomSheetOptions = {
   quickActionBorderWidth?: number;
   /** Quick action corner radius. */
   quickActionCornerRadius?: number;
+  /** Quick action font family name (native platform font). */
+  quickActionFontFamily?: string;
+  /** Quick action font weight (`normal`, `medium`, `semibold`, `bold`, `100..900`). */
+  quickActionFontWeight?: string;
   /** Overlay sheet: corner radius (points). */
   cornerRadius?: number;
   /** Show current street/road label in package-rendered sheet content. */
@@ -144,14 +164,38 @@ export type BottomSheetOptions = {
   customRows?: BottomSheetCustomRow[];
   /** iOS full-screen `customNative`: optional top header title. */
   headerTitle?: string;
+  /** Full-screen custom-native header title font size. */
+  headerTitleFontSize?: number;
+  /** Full-screen custom-native header title font family name. */
+  headerTitleFontFamily?: string;
+  /** Full-screen custom-native header title font weight. */
+  headerTitleFontWeight?: string;
   /** iOS full-screen `customNative`: optional top header subtitle. */
   headerSubtitle?: string;
+  /** Full-screen custom-native header subtitle font size. */
+  headerSubtitleFontSize?: number;
+  /** Full-screen custom-native header subtitle font family name. */
+  headerSubtitleFontFamily?: string;
+  /** Full-screen custom-native header subtitle font weight. */
+  headerSubtitleFontWeight?: string;
   /** iOS full-screen `customNative`: optional header badge text on trailing side. */
   headerBadgeText?: string;
+  /** Full-screen custom-native header badge font size. */
+  headerBadgeFontSize?: number;
+  /** Full-screen custom-native header badge font family name. */
+  headerBadgeFontFamily?: string;
+  /** Full-screen custom-native header badge font weight. */
+  headerBadgeFontWeight?: string;
   /** iOS full-screen `customNative`: optional header badge background color. */
   headerBadgeBackgroundColor?: string;
   /** iOS full-screen `customNative`: optional header badge text color. */
   headerBadgeTextColor?: string;
+  /** Full-screen custom-native header badge corner radius. */
+  headerBadgeCornerRadius?: number;
+  /** Full-screen custom-native header badge border color. */
+  headerBadgeBorderColor?: string;
+  /** Full-screen custom-native header badge border width. */
+  headerBadgeBorderWidth?: number;
 };
 
 /** Overlay quick action button config. */
@@ -362,8 +406,9 @@ export interface MapboxNavigationModule {
   getNavigationSettings(): Promise<NavigationSettings>;
 }
 
-/** @deprecated Embedded `MapboxNavigationView` runtime support has been removed. */
 export interface MapboxNavigationViewProps {
+  /** Explicitly opt in to embedded navigation startup. Defaults to `false`. */
+  enabled?: boolean;
   style?: any;
   startOrigin?: Coordinate;
   destination: Waypoint;
@@ -400,7 +445,11 @@ export interface MapboxNavigationViewProps {
   bottomSheetContent?: ReactNode;
   /** Advanced custom sheet renderer. */
   renderBottomSheet?: (context: {
+    state: "hidden" | "collapsed" | "expanded";
+    hidden: boolean;
     expanded: boolean;
+    show: (state?: "collapsed" | "expanded") => void;
+    hide: () => void;
     expand: () => void;
     collapse: () => void;
     toggle: () => void;
