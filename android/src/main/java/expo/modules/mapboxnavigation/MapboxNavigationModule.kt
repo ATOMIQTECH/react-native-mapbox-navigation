@@ -44,12 +44,14 @@ class MapboxNavigationModule : Module() {
       stopNavigation(promise)
     }
 
-    AsyncFunction("setMuted") { _: Boolean, promise: Promise ->
-      // Voice control is handled by native navigation UI state.
+    AsyncFunction("setMuted") { muted: Boolean, promise: Promise ->
+      // Best-effort integration via MapboxAudioGuidance.
+      MapboxAudioGuidanceController.setMuted(muted)
       promise.resolve(null)
     }
 
-    AsyncFunction("setVoiceVolume") { _: Double, promise: Promise ->
+    AsyncFunction("setVoiceVolume") { volume: Double, promise: Promise ->
+      MapboxAudioGuidanceController.setVoiceVolume(volume)
       promise.resolve(null)
     }
 
@@ -57,7 +59,8 @@ class MapboxNavigationModule : Module() {
       promise.resolve(null)
     }
 
-    AsyncFunction("setLanguage") { _: String, promise: Promise ->
+    AsyncFunction("setLanguage") { language: String, promise: Promise ->
+      MapboxAudioGuidanceController.setLanguage(language)
       promise.resolve(null)
     }
 
@@ -94,6 +97,10 @@ class MapboxNavigationModule : Module() {
 
       Prop("startOrigin") { view: MapboxNavigationView, origin: Map<String, Any>? ->
         view.setStartOrigin(origin)
+      }
+
+      Prop("enabled") { view: MapboxNavigationView, enabled: Boolean ->
+        view.setNavigationEnabled(enabled)
       }
 
       Prop("destination") { view: MapboxNavigationView, destination: Map<String, Any> ->
@@ -266,6 +273,8 @@ class MapboxNavigationModule : Module() {
 
     val shouldSimulate = (options["shouldSimulateRoute"] as? Boolean) ?: false
     val mute = (options["mute"] as? Boolean) ?: false
+    val voiceVolume = (options["voiceVolume"] as? Number)?.toDouble() ?: 1.0
+    val language = (options["language"] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: "en"
     val cameraPitch = (options["cameraPitch"] as? Number)?.toDouble()
     val cameraZoom = (options["cameraZoom"] as? Number)?.toDouble()
     val cameraMode = (options["cameraMode"] as? String) ?: "following"
@@ -309,8 +318,14 @@ class MapboxNavigationModule : Module() {
     val bottomSheetSecondaryActionButtonBackgroundColor = bottomSheet?.get("secondaryActionButtonBackgroundColor") as? String
     val bottomSheetSecondaryActionButtonTextColor = bottomSheet?.get("secondaryActionButtonTextColor") as? String
     val bottomSheetPrimaryTextFontSize = (bottomSheet?.get("primaryTextFontSize") as? Number)?.toDouble()
+    val bottomSheetPrimaryTextFontFamily = bottomSheet?.get("primaryTextFontFamily") as? String
+    val bottomSheetPrimaryTextFontWeight = bottomSheet?.get("primaryTextFontWeight") as? String
     val bottomSheetSecondaryTextFontSize = (bottomSheet?.get("secondaryTextFontSize") as? Number)?.toDouble()
+    val bottomSheetSecondaryTextFontFamily = bottomSheet?.get("secondaryTextFontFamily") as? String
+    val bottomSheetSecondaryTextFontWeight = bottomSheet?.get("secondaryTextFontWeight") as? String
     val bottomSheetActionButtonFontSize = (bottomSheet?.get("actionButtonFontSize") as? Number)?.toDouble()
+    val bottomSheetActionButtonFontFamily = bottomSheet?.get("actionButtonFontFamily") as? String
+    val bottomSheetActionButtonFontWeight = bottomSheet?.get("actionButtonFontWeight") as? String
     val bottomSheetActionButtonHeight = (bottomSheet?.get("actionButtonHeight") as? Number)?.toDouble()
     val bottomSheetActionButtonsBottomPadding = (bottomSheet?.get("actionButtonsBottomPadding") as? Number)?.toDouble()
     val bottomSheetQuickActionBackgroundColor = bottomSheet?.get("quickActionBackgroundColor") as? String
@@ -321,16 +336,30 @@ class MapboxNavigationModule : Module() {
     val bottomSheetQuickActionBorderColor = bottomSheet?.get("quickActionBorderColor") as? String
     val bottomSheetQuickActionBorderWidth = (bottomSheet?.get("quickActionBorderWidth") as? Number)?.toDouble()
     val bottomSheetQuickActionCornerRadius = (bottomSheet?.get("quickActionCornerRadius") as? Number)?.toDouble()
+    val bottomSheetQuickActionFontFamily = bottomSheet?.get("quickActionFontFamily") as? String
+    val bottomSheetQuickActionFontWeight = bottomSheet?.get("quickActionFontWeight") as? String
     val bottomSheetShowCurrentStreet = bottomSheet?.get("showCurrentStreet") as? Boolean
     val bottomSheetShowRemainingDistance = bottomSheet?.get("showRemainingDistance") as? Boolean
     val bottomSheetShowRemainingDuration = bottomSheet?.get("showRemainingDuration") as? Boolean
     val bottomSheetShowETA = bottomSheet?.get("showETA") as? Boolean
     val bottomSheetShowCompletionPercent = bottomSheet?.get("showCompletionPercent") as? Boolean
     val bottomSheetHeaderTitle = bottomSheet?.get("headerTitle") as? String
+    val bottomSheetHeaderTitleFontSize = (bottomSheet?.get("headerTitleFontSize") as? Number)?.toDouble()
+    val bottomSheetHeaderTitleFontFamily = bottomSheet?.get("headerTitleFontFamily") as? String
+    val bottomSheetHeaderTitleFontWeight = bottomSheet?.get("headerTitleFontWeight") as? String
     val bottomSheetHeaderSubtitle = bottomSheet?.get("headerSubtitle") as? String
+    val bottomSheetHeaderSubtitleFontSize = (bottomSheet?.get("headerSubtitleFontSize") as? Number)?.toDouble()
+    val bottomSheetHeaderSubtitleFontFamily = bottomSheet?.get("headerSubtitleFontFamily") as? String
+    val bottomSheetHeaderSubtitleFontWeight = bottomSheet?.get("headerSubtitleFontWeight") as? String
     val bottomSheetHeaderBadgeText = bottomSheet?.get("headerBadgeText") as? String
+    val bottomSheetHeaderBadgeFontSize = (bottomSheet?.get("headerBadgeFontSize") as? Number)?.toDouble()
+    val bottomSheetHeaderBadgeFontFamily = bottomSheet?.get("headerBadgeFontFamily") as? String
+    val bottomSheetHeaderBadgeFontWeight = bottomSheet?.get("headerBadgeFontWeight") as? String
     val bottomSheetHeaderBadgeBackgroundColor = bottomSheet?.get("headerBadgeBackgroundColor") as? String
     val bottomSheetHeaderBadgeTextColor = bottomSheet?.get("headerBadgeTextColor") as? String
+    val bottomSheetHeaderBadgeCornerRadius = (bottomSheet?.get("headerBadgeCornerRadius") as? Number)?.toDouble()
+    val bottomSheetHeaderBadgeBorderColor = bottomSheet?.get("headerBadgeBorderColor") as? String
+    val bottomSheetHeaderBadgeBorderWidth = (bottomSheet?.get("headerBadgeBorderWidth") as? Number)?.toDouble()
     val quickActions = bottomSheet?.get("quickActions") as? List<*>
     val quickActionIds = quickActions?.mapNotNull { (it as? Map<*, *>)?.get("id") as? String } ?: emptyList()
     val quickActionLabels = quickActions?.mapNotNull { (it as? Map<*, *>)?.get("label") as? String } ?: emptyList()
@@ -382,6 +411,8 @@ class MapboxNavigationModule : Module() {
         destinationName?.takeIf { it.isNotBlank() }?.let { putExtra("destinationName", it) }
         putExtra("shouldSimulate", shouldSimulate)
         putExtra("mute", mute)
+        putExtra("voiceVolume", voiceVolume)
+        putExtra("language", language)
         putExtra("cameraPitch", cameraPitch)
         putExtra("cameraZoom", cameraZoom)
         putExtra("cameraMode", cameraMode)
@@ -419,8 +450,14 @@ class MapboxNavigationModule : Module() {
         bottomSheetSecondaryActionButtonBackgroundColor?.let { putExtra("bottomSheetSecondaryActionButtonBackgroundColor", it) }
         bottomSheetSecondaryActionButtonTextColor?.let { putExtra("bottomSheetSecondaryActionButtonTextColor", it) }
         bottomSheetPrimaryTextFontSize?.let { putExtra("bottomSheetPrimaryTextFontSize", it) }
+        bottomSheetPrimaryTextFontFamily?.let { putExtra("bottomSheetPrimaryTextFontFamily", it) }
+        bottomSheetPrimaryTextFontWeight?.let { putExtra("bottomSheetPrimaryTextFontWeight", it) }
         bottomSheetSecondaryTextFontSize?.let { putExtra("bottomSheetSecondaryTextFontSize", it) }
+        bottomSheetSecondaryTextFontFamily?.let { putExtra("bottomSheetSecondaryTextFontFamily", it) }
+        bottomSheetSecondaryTextFontWeight?.let { putExtra("bottomSheetSecondaryTextFontWeight", it) }
         bottomSheetActionButtonFontSize?.let { putExtra("bottomSheetActionButtonFontSize", it) }
+        bottomSheetActionButtonFontFamily?.let { putExtra("bottomSheetActionButtonFontFamily", it) }
+        bottomSheetActionButtonFontWeight?.let { putExtra("bottomSheetActionButtonFontWeight", it) }
         bottomSheetActionButtonHeight?.let { putExtra("bottomSheetActionButtonHeight", it) }
         bottomSheetActionButtonsBottomPadding?.let { putExtra("bottomSheetActionButtonsBottomPadding", it) }
         bottomSheetQuickActionBackgroundColor?.let { putExtra("bottomSheetQuickActionBackgroundColor", it) }
@@ -431,16 +468,30 @@ class MapboxNavigationModule : Module() {
         bottomSheetQuickActionBorderColor?.let { putExtra("bottomSheetQuickActionBorderColor", it) }
         bottomSheetQuickActionBorderWidth?.let { putExtra("bottomSheetQuickActionBorderWidth", it) }
         bottomSheetQuickActionCornerRadius?.let { putExtra("bottomSheetQuickActionCornerRadius", it) }
+        bottomSheetQuickActionFontFamily?.let { putExtra("bottomSheetQuickActionFontFamily", it) }
+        bottomSheetQuickActionFontWeight?.let { putExtra("bottomSheetQuickActionFontWeight", it) }
         bottomSheetShowCurrentStreet?.let { putExtra("bottomSheetShowCurrentStreet", it) }
         bottomSheetShowRemainingDistance?.let { putExtra("bottomSheetShowRemainingDistance", it) }
         bottomSheetShowRemainingDuration?.let { putExtra("bottomSheetShowRemainingDuration", it) }
         bottomSheetShowETA?.let { putExtra("bottomSheetShowETA", it) }
         bottomSheetShowCompletionPercent?.let { putExtra("bottomSheetShowCompletionPercent", it) }
         bottomSheetHeaderTitle?.let { putExtra("bottomSheetHeaderTitle", it) }
+        bottomSheetHeaderTitleFontSize?.let { putExtra("bottomSheetHeaderTitleFontSize", it) }
+        bottomSheetHeaderTitleFontFamily?.let { putExtra("bottomSheetHeaderTitleFontFamily", it) }
+        bottomSheetHeaderTitleFontWeight?.let { putExtra("bottomSheetHeaderTitleFontWeight", it) }
         bottomSheetHeaderSubtitle?.let { putExtra("bottomSheetHeaderSubtitle", it) }
+        bottomSheetHeaderSubtitleFontSize?.let { putExtra("bottomSheetHeaderSubtitleFontSize", it) }
+        bottomSheetHeaderSubtitleFontFamily?.let { putExtra("bottomSheetHeaderSubtitleFontFamily", it) }
+        bottomSheetHeaderSubtitleFontWeight?.let { putExtra("bottomSheetHeaderSubtitleFontWeight", it) }
         bottomSheetHeaderBadgeText?.let { putExtra("bottomSheetHeaderBadgeText", it) }
+        bottomSheetHeaderBadgeFontSize?.let { putExtra("bottomSheetHeaderBadgeFontSize", it) }
+        bottomSheetHeaderBadgeFontFamily?.let { putExtra("bottomSheetHeaderBadgeFontFamily", it) }
+        bottomSheetHeaderBadgeFontWeight?.let { putExtra("bottomSheetHeaderBadgeFontWeight", it) }
         bottomSheetHeaderBadgeBackgroundColor?.let { putExtra("bottomSheetHeaderBadgeBackgroundColor", it) }
         bottomSheetHeaderBadgeTextColor?.let { putExtra("bottomSheetHeaderBadgeTextColor", it) }
+        bottomSheetHeaderBadgeCornerRadius?.let { putExtra("bottomSheetHeaderBadgeCornerRadius", it) }
+        bottomSheetHeaderBadgeBorderColor?.let { putExtra("bottomSheetHeaderBadgeBorderColor", it) }
+        bottomSheetHeaderBadgeBorderWidth?.let { putExtra("bottomSheetHeaderBadgeBorderWidth", it) }
         if (quickActionIds.isNotEmpty() && quickActionLabels.size == quickActionIds.size) {
           putExtra("bottomSheetQuickActionIds", quickActionIds.toTypedArray())
           putExtra("bottomSheetQuickActionLabels", quickActionLabels.toTypedArray())

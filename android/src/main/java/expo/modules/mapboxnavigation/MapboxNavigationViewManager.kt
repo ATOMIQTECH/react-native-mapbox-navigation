@@ -3,10 +3,16 @@ package expo.modules.mapboxnavigation
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.TextView
 import com.mapbox.api.directions.v5.models.BannerInstructions
 import com.mapbox.api.directions.v5.models.RouteOptions
 import com.mapbox.geojson.Point
@@ -32,9 +38,12 @@ import java.util.UUID
 class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
   companion object {
     private const val TAG = "MapboxNavigationView"
+    private const val EMBEDDED_BUILD = "1.1.6-embedded-2026-02-26-r4"
   }
 
+  private val expoAppContext: AppContext = appContext
   private var startOrigin: Map<String, Any>? = null
+  private var navigationEnabled = false
   private val sessionOwner = "embedded-${UUID.randomUUID()}"
   private var ownsNavigationSession = false
   private var destination: Map<String, Any>? = null
@@ -77,11 +86,16 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private var language = "en"
 
   private var navigationView: NavigationView? = null
+  private var navigationRoot: FrameLayout? = null
   private var mapboxNavigation: MapboxNavigation? = null
+  private var permissionPlaceholderView: TextView? = null
+  private var lastLayoutLogKey: String? = null
   private val mainHandler = Handler(Looper.getMainLooper())
   private var hasStartedGuidance = false
   private var hasEmittedArrival = false
   private var hasPendingSessionConflict = false
+  private var hasStartedDestinationPreview = false
+  private var lastStartSignature: String? = null
   private val warnedUnsupportedKeys = mutableSetOf<String>()
   private var latestLatitude: Double? = null
   private var latestLongitude: Double? = null
@@ -184,7 +198,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
 
     override fun onRouteFetchSuccessful(routes: List<NavigationRoute>) {
-      if (!shouldSimulateRoute || routes.isEmpty() || hasStartedGuidance) {
+      if (routes.isEmpty() || hasStartedGuidance) {
         return
       }
       hasStartedGuidance = true
@@ -204,7 +218,87 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
+    Log.i(TAG, "Embedded view attached ($EMBEDDED_BUILD)")
+    if (!navigationEnabled) {
+      return
+    }
+    startEmbeddedIfEnabled()
+  }
+
+  override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+    super.onLayout(changed, left, top, right, bottom)
+
+    // ExpoView does not guarantee child layout. Ensure our embedded Mapbox NavigationView (and placeholder)
+    // always fill the host bounds.
+    val hostW = right - left
+    val hostH = bottom - top
+    for (i in 0 until childCount) {
+      val child = getChildAt(i)
+      if (child.visibility == View.GONE) continue
+      child.layout(0, 0, hostW, hostH)
+    }
+
+    val nav = navigationView
+    val navW = nav?.width ?: 0
+    val navH = nav?.height ?: 0
+    val navVisible = nav?.visibility ?: -1
+    val navShown = nav?.isShown ?: false
+    val placeholder = permissionPlaceholderView
+    val placeholderVisible = placeholder?.visibility ?: -1
+    val key =
+      "host=${hostW}x${hostH};nav=${navW}x${navH};navVis=$navVisible;navShown=$navShown;ph=$placeholderVisible"
+    if (key != lastLayoutLogKey) {
+      lastLayoutLogKey = key
+      Log.i(TAG, "layout changed ($EMBEDDED_BUILD): $key")
+    }
+
+    if (nav != null && hostW > 0 && hostH > 0 && (navW == 0 || navH == 0)) {
+      forceMeasureAndLayoutNavigationView(hostW, hostH)
+    }
+  }
+
+  override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    val width = View.MeasureSpec.getSize(widthMeasureSpec)
+    val height = View.MeasureSpec.getSize(heightMeasureSpec)
+    setMeasuredDimension(width, height)
+
+    val childWidthSpec = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY)
+    val childHeightSpec = View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY)
+    for (i in 0 until childCount) {
+      val child = getChildAt(i)
+      if (child.visibility == View.GONE) continue
+      child.measure(childWidthSpec, childHeightSpec)
+    }
+  }
+
+  override fun onDetachedFromWindow() {
+    deactivateEmbeddedNavigation()
+    super.onDetachedFromWindow()
+  }
+
+  fun setNavigationEnabled(enabled: Boolean) {
+    navigationEnabled = enabled
+    if (enabled) {
+      if (windowToken != null) {
+        startEmbeddedIfEnabled()
+      }
+    } else {
+      deactivateEmbeddedNavigation()
+    }
+  }
+
+  private fun startEmbeddedIfEnabled() {
+    if (!navigationEnabled) {
+      return
+    }
+    Log.i(
+      TAG,
+      "startEmbeddedIfEnabled ($EMBEDDED_BUILD): enabled=$navigationEnabled hasPerm=${hasLocationPermission()} hasNav=${navigationView != null}"
+    )
     if (!hasLocationPermission()) {
+      showPermissionPlaceholderIfNeeded(
+        "Location permission required.\nGrant ACCESS_FINE_LOCATION to start embedded navigation."
+      )
       onError(
         mapOf(
           "code" to "LOCATION_PERMISSION_REQUIRED",
@@ -213,53 +307,85 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       )
       return
     }
+
+    hidePermissionPlaceholderIfNeeded()
     createNavigationViewIfNeeded()
-    startNavigationIfReady()
+    if (navigationView == null) {
+      Log.e(TAG, "NavigationView is still null after createNavigationViewIfNeeded ($EMBEDDED_BUILD)")
+      onError(
+        mapOf(
+          "code" to "EMBEDDED_VIEW_NOT_CREATED",
+          "message" to "Failed to create embedded NavigationView (see native logs for details)."
+        )
+      )
+      return
+    }
     attachNavigationObserversWithRetry()
+    startNavigationIfReady()
   }
 
-  override fun onDetachedFromWindow() {
+  private fun deactivateEmbeddedNavigation() {
     mainHandler.removeCallbacksAndMessages(null)
     detachNavigationObservers()
     navigationView?.removeListener(navigationViewListener)
+    navigationRoot?.let { removeView(it) }
     removeAllViews()
     navigationView = null
+    navigationRoot = null
+    permissionPlaceholderView = null
+    hasStartedGuidance = false
+    hasEmittedArrival = false
+    hasStartedDestinationPreview = false
+    lastStartSignature = null
     releaseNavigationSession()
-    super.onDetachedFromWindow()
   }
 
   fun setStartOrigin(origin: Map<String, Any>?) {
     startOrigin = origin
-    startNavigationIfReady()
+    if (navigationEnabled) {
+      startNavigationIfReady()
+    }
   }
 
   fun setDestination(dest: Map<String, Any>?) {
     destination = dest
     hasEmittedArrival = false
-    startNavigationIfReady()
+    if (navigationEnabled) {
+      startNavigationIfReady()
+    }
   }
 
   fun setWaypoints(wps: List<Map<String, Any>>?) {
     waypoints = wps
-    startNavigationIfReady()
+    if (navigationEnabled) {
+      startNavigationIfReady()
+    }
   }
 
   fun setShouldSimulateRoute(simulate: Boolean) {
     shouldSimulateRoute = simulate
-    navigationView?.api?.routeReplayEnabled(simulate)
+    if (simulate) {
+      applySimulationIfNeeded()
+    }
   }
 
   fun setShowCancelButton(show: Boolean) {
     showCancelButton = show
+    warnUnsupportedOption(
+      "showCancelButton",
+      "showCancelButton is not currently supported by the Android embedded Drop-In view and will be ignored."
+    )
     applyViewOptions()
   }
 
   fun setMute(muted: Boolean) {
     mute = muted
+    MapboxAudioGuidanceController.setMuted(muted)
   }
 
   fun setVoiceVolume(volume: Double) {
     voiceVolume = volume
+    MapboxAudioGuidanceController.setVoiceVolume(volume)
   }
 
   fun setCameraPitch(pitch: Double) {
@@ -296,7 +422,9 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   fun setRouteAlternatives(enabled: Boolean) {
     routeAlternatives = enabled
-    startNavigationIfReady()
+    if (navigationEnabled) {
+      startNavigationIfReady()
+    }
   }
 
   fun setShowsSpeedLimits(enabled: Boolean) {
@@ -344,7 +472,9 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   fun setShowsContinuousAlternatives(enabled: Boolean) {
     showsContinuousAlternatives = enabled
-    startNavigationIfReady()
+    if (navigationEnabled) {
+      startNavigationIfReady()
+    }
   }
 
   fun setUsesNightStyleWhileInTunnel(enabled: Boolean) {
@@ -398,15 +528,24 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   fun setLanguage(lang: String) {
     language = lang
+    MapboxAudioGuidanceController.setLanguage(lang)
   }
 
   private fun createNavigationViewIfNeeded() {
+    if (!navigationEnabled) {
+      return
+    }
     if (navigationView != null) {
+      return
+    }
+    if (Looper.myLooper() != Looper.getMainLooper()) {
+      mainHandler.post { createNavigationViewIfNeeded() }
       return
     }
 
     val accessToken = runCatching { getMapboxAccessToken() }
       .getOrElse { throwable ->
+        Log.e(TAG, "Missing mapbox_access_token string resource ($EMBEDDED_BUILD)", throwable)
         onError(
           mapOf(
             "code" to "MISSING_ACCESS_TOKEN",
@@ -416,19 +555,158 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         return
       }
 
-    val view = NavigationView(context, null, accessToken)
+    val activity = expoAppContext.currentActivity
+    val navContext = activity ?: context
+    if (activity == null) {
+      Log.w(TAG, "currentActivity is null; creating NavigationView with non-Activity context ($EMBEDDED_BUILD)")
+    }
+
+    val view = runCatching { NavigationView(navContext, null, accessToken) }
+      .getOrElse { throwable ->
+        Log.e(TAG, "Failed to create embedded NavigationView", throwable)
+        onError(
+          mapOf(
+            "code" to "EMBEDDED_VIEW_INIT_FAILED",
+            "message" to (throwable.message ?: "Failed to create embedded navigation view.")
+          )
+        )
+        return
+      }
+    view.id = View.generateViewId()
     view.layoutParams = LayoutParams(
       ViewGroup.LayoutParams.MATCH_PARENT,
       ViewGroup.LayoutParams.MATCH_PARENT
     )
+    view.visibility = View.VISIBLE
+    view.alpha = 1f
     view.addListener(navigationViewListener)
     navigationView = view
-    addView(view)
+    val root = FrameLayout(context).apply {
+      layoutParams = LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.MATCH_PARENT
+      )
+      clipChildren = false
+      clipToPadding = false
+    }
+    navigationRoot = root
+    root.addView(
+      view,
+      FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.MATCH_PARENT,
+        FrameLayout.LayoutParams.MATCH_PARENT
+      )
+    )
+    addView(
+      root,
+      LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.MATCH_PARENT
+      )
+    )
+    Log.i(TAG, "NavigationView created and added ($EMBEDDED_BUILD). childCount=$childCount")
+    view.requestLayout()
+    requestLayout()
+    mainHandler.post {
+      if (navigationEnabled) {
+        forceMeasureAndLayoutNavigationView(width, height)
+      }
+    }
+    // Some OEM + RN combinations can leave the Drop-In NavigationView's internal MapView measured at a
+    // tiny fallback size (e.g. 64x64) until a few frames after attach. Retry a few times.
+    for (i in 1..8) {
+      mainHandler.postDelayed({
+        if (!navigationEnabled) return@postDelayed
+        val hostW = width
+        val hostH = height
+        if (hostW <= 0 || hostH <= 0) return@postDelayed
+        val nav = navigationView ?: return@postDelayed
+        if (!nav.isAttachedToWindow) return@postDelayed
+        if (nav.width < hostW || nav.height < hostH) {
+          forceMeasureAndLayoutNavigationView(hostW, hostH)
+        }
+      }, (i * 90L))
+    }
     applyViewOptions()
-    view.api.routeReplayEnabled(shouldSimulateRoute)
+    applySimulationIfNeeded()
+  }
+
+  private fun forceMeasureAndLayoutNavigationView(hostW: Int, hostH: Int) {
+    if (hostW <= 0 || hostH <= 0) {
+      return
+    }
+    val nav = navigationView ?: return
+    val wSpec = View.MeasureSpec.makeMeasureSpec(hostW, View.MeasureSpec.EXACTLY)
+    val hSpec = View.MeasureSpec.makeMeasureSpec(hostH, View.MeasureSpec.EXACTLY)
+    nav.measure(wSpec, hSpec)
+    nav.layout(0, 0, hostW, hostH)
+    nav.invalidate()
+    Log.i(TAG, "force layout ($EMBEDDED_BUILD): host=${hostW}x${hostH} nav=${nav.width}x${nav.height} vis=${nav.visibility}")
+  }
+
+  private fun applySimulationIfNeeded() {
+    if (!shouldSimulateRoute) {
+      return
+    }
+    // Some Drop-In builds can throw if routeReplayEnabled is called too early.
+    // Apply it only when simulation is enabled and only after the view is attached.
+    mainHandler.postDelayed({
+      if (!navigationEnabled) {
+        return@postDelayed
+      }
+      val view = navigationView ?: return@postDelayed
+      if (!view.isAttachedToWindow) {
+        return@postDelayed
+      }
+      runCatching { view.api.routeReplayEnabled(true) }
+        .onFailure { throwable ->
+          Log.e(TAG, "routeReplayEnabled(true) failed", throwable)
+          onError(
+            mapOf(
+              "code" to "SIMULATION_ENABLE_FAILED",
+              "message" to (throwable.message ?: "Failed to enable route simulation.")
+            )
+          )
+        }
+    }, 350L)
+  }
+
+  private fun showPermissionPlaceholderIfNeeded(message: String) {
+    if (permissionPlaceholderView != null) {
+      permissionPlaceholderView?.text = message
+      return
+    }
+    val view = TextView(context).apply {
+      text = message
+      setTextColor(Color.WHITE)
+      setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+      gravity = Gravity.CENTER
+      setPadding(dpToPx(16f), dpToPx(16f), dpToPx(16f), dpToPx(16f))
+      setBackgroundColor(Color.parseColor("#0b1020"))
+      layoutParams = LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT,
+        ViewGroup.LayoutParams.MATCH_PARENT
+      )
+    }
+    permissionPlaceholderView = view
+    addView(view)
+  }
+
+  private fun hidePermissionPlaceholderIfNeeded() {
+    permissionPlaceholderView?.let { existing ->
+      removeView(existing)
+    }
+    permissionPlaceholderView = null
+  }
+
+  private fun dpToPx(dp: Float): Int {
+    return (dp * context.resources.displayMetrics.density).toInt()
   }
 
   private fun startNavigationIfReady() {
+    if (!navigationEnabled) {
+      return
+    }
     val view = navigationView ?: return
     val destinationPoint = destination.toAnyPointOrNull() ?: return
 
@@ -449,11 +727,39 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       hasPendingSessionConflict = false
     }
 
-    hasStartedGuidance = false
-    hasEmittedArrival = false
-
     val waypointPoints = parseWaypoints(waypoints)
     val originPoint = startOrigin.toAnyPointOrNull()
+
+    if (originPoint == null && waypointPoints.isNotEmpty()) {
+      onError(
+        mapOf(
+          "code" to "INVALID_COORDINATES",
+          "message" to "waypoints require startOrigin when using embedded Android navigation."
+        )
+      )
+      releaseNavigationSession()
+      hasStartedDestinationPreview = false
+      lastStartSignature = null
+      return
+    }
+
+    val startSignature = buildStartSignature(
+      destinationPoint = destinationPoint,
+      originPoint = originPoint,
+      waypointPoints = waypointPoints,
+      routeAlternatives = routeAlternatives,
+      showsContinuousAlternatives = showsContinuousAlternatives
+    )
+
+    // React Native can re-send props frequently even when values are unchanged.
+    // Keep embedded navigation idempotent so it doesn't restart on re-render.
+    if (hasStartedDestinationPreview && startSignature == lastStartSignature) {
+      return
+    }
+    lastStartSignature = startSignature
+    hasStartedDestinationPreview = true
+    hasStartedGuidance = false
+    hasEmittedArrival = false
 
     if (originPoint != null) {
       view.setRouteOptionsInterceptor(
@@ -469,20 +775,27 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
           builder.alternatives(routeAlternatives || showsContinuousAlternatives)
         }
       )
-    } else if (waypointPoints.isNotEmpty()) {
-      onError(
-        mapOf(
-          "code" to "INVALID_COORDINATES",
-          "message" to "waypoints require startOrigin when using embedded Android navigation."
-        )
-      )
-      releaseNavigationSession()
-      return
     }
 
-    mainHandler.post {
-      view.api.startDestinationPreview(destinationPoint)
-    }
+    mainHandler.postDelayed({
+      if (!navigationEnabled) {
+        return@postDelayed
+      }
+      val activeView = navigationView ?: return@postDelayed
+      if (!activeView.isAttachedToWindow) {
+        return@postDelayed
+      }
+      runCatching { activeView.api.startDestinationPreview(destinationPoint) }
+        .onFailure { throwable ->
+          Log.e(TAG, "startDestinationPreview failed", throwable)
+          onError(
+            mapOf(
+              "code" to "DESTINATION_PREVIEW_FAILED",
+              "message" to (throwable.message ?: "Failed to start destination preview.")
+            )
+          )
+        }
+    }, 350L)
   }
 
   private fun applyViewOptions() {
@@ -524,6 +837,11 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     navigation.registerLocationObserver(locationObserver)
     navigation.registerRouteProgressObserver(routeProgressObserver)
     navigation.registerBannerInstructionsObserver(bannerInstructionsObserver)
+
+    // Apply best-effort audio settings once the shared MapboxNavigation instance exists.
+    MapboxAudioGuidanceController.setMuted(mute)
+    MapboxAudioGuidanceController.setVoiceVolume(voiceVolume)
+    MapboxAudioGuidanceController.setLanguage(language)
   }
 
   private fun detachNavigationObservers() {
@@ -606,6 +924,25 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     val formatter = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
     formatter.timeZone = java.util.TimeZone.getTimeZone("UTC")
     return formatter.format(java.util.Date(timestampMillis))
+  }
+
+  private fun buildStartSignature(
+    destinationPoint: Point,
+    originPoint: Point?,
+    waypointPoints: List<Point>,
+    routeAlternatives: Boolean,
+    showsContinuousAlternatives: Boolean
+  ): String {
+    val parts = mutableListOf<String>()
+    originPoint?.let { parts.add("o:${it.longitude()},${it.latitude()}") } ?: parts.add("o:null")
+    parts.add("d:${destinationPoint.longitude()},${destinationPoint.latitude()}")
+    if (waypointPoints.isNotEmpty()) {
+      parts.add("w:" + waypointPoints.joinToString("|") { "${it.longitude()},${it.latitude()}" })
+    } else {
+      parts.add("w:none")
+    }
+    parts.add("alt:${routeAlternatives || showsContinuousAlternatives}")
+    return parts.joinToString(";")
   }
 
   private fun getMapboxAccessToken(): String {

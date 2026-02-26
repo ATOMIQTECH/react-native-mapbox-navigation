@@ -1,6 +1,6 @@
 import { requireNativeModule, requireNativeViewManager } from "expo-modules-core";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Pressable, StyleSheet, Text, View, ViewProps } from "react-native";
+import { Fragment, isValidElement, useEffect, useMemo, useRef, useState } from "react";
+import { PanResponder, Platform, Pressable, StyleSheet, Text, View, ViewProps } from "react-native";
 
 import type {
   ArrivalEvent,
@@ -22,6 +22,8 @@ import type {
 const MapboxNavigationModule = requireNativeModule<MapboxNavigationModuleType>(
   "MapboxNavigationModule",
 );
+
+const MapboxNavigationNativeView = requireNativeViewManager("MapboxNavigationModule");
 
 const emitter = MapboxNavigationModule as unknown as {
   addListener: (
@@ -150,6 +152,15 @@ function normalizeNavigationOptions(options: NavigationOptions): NavigationOptio
       mode: "customNative",
     };
   }
+  if (normalizedBottomSheet && normalizedBottomSheet.enabled !== false) {
+    const normalizedMode = normalizedBottomSheet.mode?.trim();
+    if (!normalizedMode) {
+      normalizedBottomSheet = {
+        ...normalizedBottomSheet,
+        mode: "customNative",
+      };
+    }
+  }
 
   return {
     ...options,
@@ -207,6 +218,7 @@ function normalizeViewProps(
   let showsTripProgress = props.showsTripProgress;
   let showsManeuverView = props.showsManeuverView;
   let showsActionButtons = props.showsActionButtons;
+  let showCancelButton = props.showCancelButton;
   if (props.bottomSheet) {
     const enabled = props.bottomSheet.enabled;
     if (enabled === false) {
@@ -224,6 +236,15 @@ function normalizeViewProps(
         showsActionButtons = props.bottomSheet.showsActionButtons;
       }
     }
+  }
+
+  // Embedded overlay mode is intended to let React render the "banner" UI.
+  // Hide the native SDK banner sections by default (unless explicitly requested).
+  if (props.bottomSheet?.enabled !== false && props.bottomSheet?.mode === "overlay") {
+    if (showsTripProgress == null) showsTripProgress = false;
+    if (showsManeuverView == null) showsManeuverView = false;
+    if (showsActionButtons == null) showsActionButtons = false;
+    if (showCancelButton == null) showCancelButton = false;
   }
 
   const wrappedOnLocationChange = props.onLocationChange
@@ -282,14 +303,19 @@ function normalizeViewProps(
         }
       }
     : undefined;
-  const wrappedOnError = props.onError
-    ? (event: unknown) => {
-        const payload = unwrapNativeEventPayload<NavigationError>(event);
-        if (payload) {
-          props.onError?.(payload);
-        }
-      }
-    : undefined;
+  const wrappedOnError = (event: unknown) => {
+    const payload = unwrapNativeEventPayload<NavigationError>(event);
+    if (!payload) {
+      return;
+    }
+    if (props.onError) {
+      props.onError(payload);
+      return;
+    }
+    console.warn(
+      `[react-native-mapbox-navigation] embedded onError: ${payload.code}: ${payload.message}`,
+    );
+  };
   const wrappedOnCancelNavigation = props.onCancelNavigation
     ? () => {
         props.onCancelNavigation?.();
@@ -305,11 +331,13 @@ function normalizeViewProps(
 
   return {
     ...props,
+    enabled: props.enabled === true,
     startOrigin: sanitizedStartOrigin,
     routeAlternatives: props.routeAlternatives ?? props.showsContinuousAlternatives,
     showsTripProgress,
     showsManeuverView,
     showsActionButtons,
+    showCancelButton,
     androidActionButtons: undefined,
     bottomSheet: undefined,
     onLocationChange: wrappedOnLocationChange,
@@ -552,15 +580,13 @@ export function addBottomSheetActionPressListener(
 }
 
 /**
- * @deprecated Embedded runtime support has been removed. Use `startNavigation()` full-screen flow.
+ * Embedded native navigation component.
+ *
+ * Set `enabled={true}` to start embedded navigation. Default is disabled to avoid accidental session conflicts.
  */
 export function MapboxNavigationView(
   props: MapboxNavigationViewProps & ViewProps,
 ) {
-  throw new Error(
-    "MapboxNavigationView (embedded mode) has been removed due session-conflict instability. Use startNavigation() full-screen flow.",
-  );
-
   const bottomSheet = props.bottomSheet;
   const useOverlayBottomSheet = !!bottomSheet?.enabled &&
     bottomSheet?.mode === "overlay";
@@ -574,8 +600,14 @@ export function MapboxNavigationView(
   );
   const collapsedHeight = Math.max(56, Math.min(bottomSheet?.collapsedHeight ?? 112, 400));
   const expandedHeight = Math.max(collapsedHeight, Math.min(bottomSheet?.expandedHeight ?? 280, 700));
-  const initialExpanded = bottomSheet?.initialState === "expanded";
-  const [expanded, setExpanded] = useState(initialExpanded);
+  const initialState =
+    bottomSheet?.initialState === "hidden" ||
+      bottomSheet?.initialState === "expanded" ||
+      bottomSheet?.initialState === "collapsed"
+      ? bottomSheet.initialState
+      : (useOverlayBottomSheet ? "hidden" : "collapsed");
+  const [sheetState, setSheetState] = useState<"hidden" | "collapsed" | "expanded">(initialState);
+  const expanded = sheetState === "expanded";
   const [overlayBanner, setOverlayBanner] = useState<BannerInstruction | undefined>(undefined);
   const [overlayProgress, setOverlayProgress] = useState<RouteProgress | undefined>(undefined);
   const [overlayLocation, setOverlayLocation] = useState<LocationUpdate | undefined>(undefined);
@@ -586,9 +618,56 @@ export function MapboxNavigationView(
     progressAtMs: 0,
     bannerKey: "",
   });
+  const revealHotzoneHeight = useOverlayBottomSheet
+    ? Math.max(56, Math.min(bottomSheet?.revealGestureHotzoneHeight ?? 100, 220))
+    : 0;
+  const rightExclusionWidth = useOverlayBottomSheet
+    ? Math.max(0, Math.min(bottomSheet?.revealGestureRightExclusionWidth ?? 0, 220))
+    : 0;
+  const hotzoneWidthRef = useRef(0);
+  const hotzoneResponder = useMemo(
+    () =>
+      PanResponder.create({
+        // Important: don't claim the responder on touch start, otherwise we block taps on any SDK/React
+        // buttons that happen to live under the hotzone.
+        onStartShouldSetPanResponder: () => false,
+        onMoveShouldSetPanResponder: (_evt, gesture) => {
+          if (!useOverlayBottomSheet || sheetState !== "hidden") return false;
+          const verticalEnough = Math.abs(gesture.dy) > Math.abs(gesture.dx);
+          const upward = gesture.dy < -8;
+          return verticalEnough && upward;
+        },
+        onPanResponderRelease: (evt, gesture) => {
+          if (!useOverlayBottomSheet || sheetState !== "hidden") return;
+          const width = hotzoneWidthRef.current;
+          if (width > 0 && rightExclusionWidth > 0) {
+            const x = evt.nativeEvent.locationX ?? 0;
+            if (x > width - rightExclusionWidth) {
+              return;
+            }
+          }
+          // Upward swipe reveals the sheet.
+          const fastEnough = gesture.vy < -0.5;
+          const farEnough = gesture.dy < -36;
+          if (farEnough || (fastEnough && gesture.dy < -18)) {
+            setSheetState("expanded");
+          }
+        },
+      }),
+    [rightExclusionWidth, sheetState, useOverlayBottomSheet],
+  );
 
   useEffect(() => {
-    setExpanded(bottomSheet?.initialState === "expanded");
+    if (!useOverlayBottomSheet) {
+      return;
+    }
+    const next =
+      bottomSheet?.initialState === "hidden" ||
+        bottomSheet?.initialState === "expanded" ||
+        bottomSheet?.initialState === "collapsed"
+        ? bottomSheet.initialState
+        : "hidden";
+    setSheetState(next);
   }, [bottomSheet?.initialState]);
 
   useEffect(() => {
@@ -656,7 +735,6 @@ export function MapboxNavigationView(
     overlayLocationMinIntervalMs,
     overlayProgressMinIntervalMs,
   ]);
-  const NativeView = requireNativeViewManager("MapboxNavigationModule");
   const renderOverlaySheet = () => {
     if (!useOverlayBottomSheet) {
       return null;
@@ -703,10 +781,14 @@ export function MapboxNavigationView(
     };
 
     const context = {
-      expanded,
-      expand: () => setExpanded(true),
-      collapse: () => setExpanded(false),
-      toggle: () => setExpanded((v) => !v),
+      state: sheetState,
+      hidden: sheetState === "hidden",
+      expanded: sheetState === "expanded",
+      show: (next: "collapsed" | "expanded" = "collapsed") => setSheetState(next),
+      hide: () => setSheetState("hidden"),
+      expand: () => setSheetState("expanded"),
+      collapse: () => setSheetState("collapsed"),
+      toggle: () => setSheetState((v) => (v === "expanded" ? "collapsed" : "expanded")),
       bannerInstruction: overlayBanner,
       routeProgress: overlayProgress,
       location: overlayLocation,
@@ -714,7 +796,14 @@ export function MapboxNavigationView(
       emitAction: (actionId: string) => emitAction(actionId, "custom"),
     };
 
-    const customSheet = props.renderBottomSheet?.(context);
+    let customSheet = props.renderBottomSheet?.(context);
+    if (
+      isValidElement(customSheet) &&
+      customSheet.type === Fragment &&
+      (customSheet.props as any)?.children == null
+    ) {
+      customSheet = null;
+    }
     const staticSheet = props.bottomSheetContent;
     const builtInQuickActions: Array<{
       id: string;
@@ -875,7 +964,8 @@ export function MapboxNavigationView(
       </View>
     );
     const content = customSheet ?? staticSheet ?? (bottomSheet?.showDefaultContent === false ? null : defaultSheet);
-    const currentHeight = expanded ? expandedHeight : collapsedHeight;
+    const currentHeight =
+      sheetState === "hidden" ? 0 : (expanded ? expandedHeight : collapsedHeight);
     const canToggle = bottomSheet?.enableTapToToggle !== false;
     const showHandle = bottomSheet?.showHandle !== false;
 
@@ -892,14 +982,49 @@ export function MapboxNavigationView(
       Math.min(bottomSheet?.contentTopSpacing ?? 0, 24),
     );
 
+    const backdropPress = () => {
+      if (sheetState === "expanded") {
+        setSheetState("collapsed");
+      } else if (sheetState === "collapsed" && bottomSheet?.initialState === "hidden") {
+        setSheetState("hidden");
+      }
+    };
+
+    const backdropVisible = sheetState !== "hidden";
+
     return (
       <View pointerEvents="box-none" style={styles.overlayRoot}>
+        {sheetState === "hidden" ? (
+          <View
+            pointerEvents="box-none"
+            style={[
+              styles.revealHotzone,
+              { height: revealHotzoneHeight, marginRight: rightExclusionWidth },
+            ]}
+          >
+            <View
+              {...hotzoneResponder.panHandlers}
+              onLayout={(e) => {
+                hotzoneWidthRef.current = e.nativeEvent.layout.width;
+              }}
+              style={styles.revealHotzoneTouchable}
+            />
+          </View>
+        ) : null}
+        {backdropVisible ? (
+          <Pressable
+            onPress={backdropPress}
+            style={styles.overlayBackdrop}
+          />
+        ) : null}
         <View
           style={[
             styles.sheetContainer,
             { height: currentHeight },
             bottomSheet?.containerStyle,
+            sheetState === "hidden" && styles.sheetHidden,
           ]}
+          pointerEvents={sheetState === "hidden" ? "none" : "auto"}
         >
           {showHandle ? (
             <Pressable
@@ -927,12 +1052,12 @@ export function MapboxNavigationView(
   };
 
   if (!props.children && !useOverlayBottomSheet) {
-    return <NativeView {...nativePropsWithOverlay} />;
+    return <MapboxNavigationNativeView {...nativePropsWithOverlay} />;
   }
 
   return (
     <View style={props.style}>
-      <NativeView
+      <MapboxNavigationNativeView
         {...nativePropsWithOverlay}
         style={StyleSheet.absoluteFill}
       />
@@ -951,11 +1076,27 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     justifyContent: "flex-end",
   },
+  overlayBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.35)",
+  },
+  revealHotzone: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  revealHotzoneTouchable: {
+    flex: 1,
+  },
   sheetContainer: {
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     backgroundColor: "rgba(12, 18, 32, 0.94)",
     overflow: "hidden",
+  },
+  sheetHidden: {
+    opacity: 0,
   },
   sheetHandle: {
     alignSelf: "center",

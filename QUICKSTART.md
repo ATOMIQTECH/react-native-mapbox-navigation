@@ -44,5 +44,17 @@ await startNavigation({
   startOrigin: { latitude: 37.7749, longitude: -122.4194 },
   shouldSimulateRoute: true,
   cameraMode: 'following',
+  bottomSheet: {
+    enabled: true,
+    mode: 'customNative',
+    initialState: 'hidden',
+    backgroundColor: '#0f172a',
+    primaryTextColor: '#ffffff',
+    primaryTextFontWeight: '700',
+    actionButtonTitle: 'End Navigation',
+    actionButtonCornerRadius: 12,
+  },
 });
 ```
+
+For full bottom-sheet styling controls and embedded `renderBottomSheet` React-node usage, see [docs/USAGE.md](docs/USAGE.md).

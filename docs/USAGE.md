@@ -2,7 +2,13 @@
 
 Applies to package version: `1.1.6`.
 
+## Scope
+
+This package wraps Mapbox Navigation “drop-in” UI for turn-by-turn guidance. It is **not** a full Mapbox Maps SDK wrapper (layers, annotations, 3D lights, offline tile management, etc.). For those map-rendering examples/features, use a dedicated Mapbox Maps SDK React Native library alongside this package.
+
 ## Full-Screen Navigation
+
+Use full-screen `startNavigation()` when you want the simplest integration (native UI, quick start).
 
 ```ts
 import { startNavigation } from "@atomiqlab/react-native-mapbox-navigation";
@@ -53,6 +59,10 @@ await startNavigation({
     handleColor: "#93c5fd",
     primaryTextColor: "#ffffff",
     secondaryTextColor: "#bfdbfe",
+    primaryTextFontSize: 16,
+    primaryTextFontWeight: "700",
+    secondaryTextFontSize: 13,
+    secondaryTextFontWeight: "500",
     cornerRadius: 16,
 
     actionButtonTitle: "End Navigation",
@@ -67,6 +77,7 @@ await startNavigation({
     actionButtonBorderWidth: 1,
     actionButtonCornerRadius: 12,
     actionButtonFontSize: 14,
+    actionButtonFontWeight: "700",
     actionButtonHeight: 42,
     actionButtonsBottomPadding: 2,
 
@@ -83,12 +94,22 @@ await startNavigation({
     quickActionBorderColor: "#334155",
     quickActionBorderWidth: 1,
     quickActionCornerRadius: 12,
+    quickActionFontWeight: "700",
 
     headerTitle: "Trip",
     headerSubtitle: "Swipe up from bottom zone",
+    headerTitleFontSize: 16,
+    headerTitleFontWeight: "700",
+    headerSubtitleFontSize: 12,
+    headerSubtitleFontWeight: "500",
     headerBadgeText: "PRO",
+    headerBadgeFontSize: 11,
+    headerBadgeFontWeight: "700",
     headerBadgeBackgroundColor: "#2563eb",
     headerBadgeTextColor: "#ffffff",
+    headerBadgeCornerRadius: 10,
+    headerBadgeBorderColor: "#1d4ed8",
+    headerBadgeBorderWidth: 1,
 
     customRows: [
       {
@@ -214,9 +235,66 @@ subscriptions.forEach((s) => s.remove());
 - `bottomSheet.mode` full-screen support:
   - `native`
   - `customNative`
+- If `bottomSheet.enabled !== false` and `bottomSheet.mode` is omitted, full-screen defaults to `customNative` (recommended).
 - `onDestinationPreview` and `onDestinationChanged` are Android-only.
 - iOS `customRows.iconSystemName` supports SF Symbols.
 
-## Embedded View
+## Embedded View (Opt-in)
 
-`MapboxNavigationView` embedded runtime usage is removed in this version due to session-conflict instability. Use full-screen `startNavigation()`.
+Use embedded `MapboxNavigationView` when you want maximum UI customization (React overlay sheet/banner) and tighter composition inside your own screens.
+
+Embedded mode is available with explicit opt-in to avoid accidental session conflicts.
+
+```tsx
+import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation";
+
+export function EmbeddedScreen() {
+  return (
+    <MapboxNavigationView
+      enabled
+      style={{ flex: 1 }}
+      startOrigin={{ latitude: 37.7749, longitude: -122.4194 }}
+      destination={{ latitude: 37.7847, longitude: -122.4073, name: "Downtown" }}
+      shouldSimulateRoute
+      bottomSheet={{ enabled: true, mode: "overlay", initialState: "hidden" }}
+    />
+  );
+}
+```
+
+Important:
+
+- `enabled` defaults to `false`.
+- keep one mode active at a time (full-screen or embedded).
+- call `stopNavigation()` before switching modes.
+- embedded mode is designed to be re-render safe; it should only (re)start when coordinates/options change.
+- embedded iOS + Android support hiding the SDK top/bottom banner sections via:
+  - `showsManeuverView`, `showsTripProgress`, `showsActionButtons`, `showCancelButton`
+- Android: you must request runtime location permission before mounting with `enabled={true}`.
+- If you pass `renderBottomSheet`, it replaces the default overlay content. Return `null` (or omit `renderBottomSheet`) to keep the built-in sheet UI.
+- If you wrap the embedded view in `SafeAreaView`, consider disabling the bottom edge (for example `edges={["top","left","right"]}`) if you want the bottom sheet to sit flush to the screen like full-screen navigation.
+- Embedded overlay supports a full-screen-like reveal interaction:
+  - When `bottomSheet.mode="overlay"` and `initialState` is omitted, it defaults to `hidden`.
+  - Swipe up in the bottom hotzone (`bottomSheet.revealGestureHotzoneHeight`) to reveal the sheet.
+  - Tap the backdrop to collapse (or to hide if it started hidden).
+
+## React Node in `startNavigation`
+
+Direct React Node injection into native full-screen bottom banner is not currently possible.
+Use embedded `MapboxNavigationView` + `bottomSheet.mode = "overlay"` for complex React UI.
+
+For full-screen `customNative`, the package now exposes native style controls for:
+
+- colors (container/text/buttons/badge/borders)
+- typography (`fontSize`, `fontFamily`, `fontWeight`) for primary/secondary/action/quick/header text
+- radii and borders for container, action buttons, quick actions, and header badge
+
+## Mapbox SDK Banner Customization (iOS)
+
+The Mapbox Navigation iOS SDK supports custom `topBanner` / `bottomBanner` view controllers in `NavigationOptions` (as in the SDK examples).
+This package does not currently expose that level of iOS-only banner composition through `startNavigation()` (the bridge is cross-platform and uses a consistent option surface).
+
+If you need a fully custom “pro” UI:
+
+- Prefer embedded `MapboxNavigationView` + `bottomSheet.mode = "overlay"` and render your banner/bottom sheet as React UI.
+- Or fork the package and add an iOS-only option that wires custom banner controllers into `NavigationOptions` natively.
