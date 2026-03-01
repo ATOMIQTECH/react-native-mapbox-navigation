@@ -2,24 +2,25 @@ apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 
 group = 'expo.modules.mapboxnavigation'
-version = '1.1.0'
+version = '1.1.6'
 
 def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
 apply from: expoModulesCorePlugin
 applyKotlinExpoModulesCorePlugin()
 
 def mapboxNavigationVersion = "2.21.0"
+def mapboxMapsVersion = "10.19.0"
 def mapboxDownloadsToken = (project.findProperty("MAPBOX_DOWNLOADS_TOKEN") ?: System.getenv("MAPBOX_DOWNLOADS_TOKEN") ?: "")
   .toString()
   .replace('"', '')
   .trim()
 
 android {
-  compileSdkVersion 35
+  compileSdkVersion 36
 
   defaultConfig {
     minSdkVersion 24
-    targetSdkVersion 35
+    targetSdkVersion 36
   }
 
   compileOptions {
@@ -61,4 +62,8 @@ dependencies {
   // Mapbox Navigation SDK (NDK 27 artifacts for better native compatibility).
   // Mapbox docs recommend -ndk27 variants when 16 KB page-size support is needed.
   implementation "com.mapbox.navigation:ui-dropin-ndk27:$mapboxNavigationVersion"
+  // Map-based UI components (route line, navigation camera, etc) used by embedded mode.
+  implementation "com.mapbox.navigation:ui-maps-ndk27:$mapboxNavigationVersion"
+  // Mapbox Maps SDK is required for the Android embedded view implementation.
+  implementation "com.mapbox.maps:android-ndk27:$mapboxMapsVersion"
 }

@@ -187,7 +187,6 @@ export default function NavigationTestScreen() {
     initialState: "hidden",
     revealOnNativeBannerGesture: true,
     revealGestureHotzoneHeight: 100,
-    revealGestureRightExclusionWidth: 80,
     collapsedHeight: 118,
     expandedHeight: 340,
     showsTripProgress,

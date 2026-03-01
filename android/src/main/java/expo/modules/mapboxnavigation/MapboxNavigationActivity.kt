@@ -49,12 +49,15 @@ class MapboxNavigationActivity : AppCompatActivity() {
     private var activeSessionCount: Int = 0
     @Volatile
     private var activeActivityRef: WeakReference<MapboxNavigationActivity>? = null
+    @Volatile
+    private var stopRequested: Boolean = false
 
     fun hasActiveSession(): Boolean {
       return activeSessionCount > 0 && activeActivityRef?.get() != null
     }
 
     fun finishActiveSession() {
+      stopRequested = true
       val activity = activeActivityRef?.get() ?: return
       activity.runOnUiThread {
         if (!activity.isFinishing && !activity.isDestroyed) {
@@ -983,10 +986,32 @@ class MapboxNavigationActivity : AppCompatActivity() {
           }
         }
         setOnClickListener {
+          val actionId = customNativeQuickActionIds[index]
           MapboxNavigationEventBridge.emit(
             "onBottomSheetActionPress",
-            mapOf("actionId" to customNativeQuickActionIds[index])
+            mapOf("actionId" to actionId)
           )
+          when (actionId) {
+            "stop" -> finish()
+            "toggleMute" -> {
+              mute = !mute
+              MapboxAudioGuidanceController.setMuted(mute)
+            }
+            "overview" -> tryInvokeNavigationApi(
+              "overview",
+              "setCameraToOverview",
+              "requestCameraToOverview",
+              "setCameraMode",
+              arg = "overview"
+            )
+            "recenter" -> tryInvokeNavigationApi(
+              "recenter",
+              "setCameraToFollowing",
+              "requestCameraToFollowing",
+              "setCameraMode",
+              arg = "following"
+            )
+          }
         }
       }
       val params = LinearLayout.LayoutParams(0, dpToPx((customNativeActionButtonHeight ?: 38.0).toFloat()), 1f)
@@ -997,6 +1022,28 @@ class MapboxNavigationActivity : AppCompatActivity() {
     }
 
     container.addView(row)
+  }
+
+  private fun tryInvokeNavigationApi(vararg methodNames: String, arg: String? = null) {
+    val view = navigationView ?: return
+    val api = view.api
+    runCatching {
+      for (name in methodNames) {
+        val m = api.javaClass.methods.firstOrNull { it.name == name }
+        if (m != null) {
+          if (arg != null && m.parameterTypes.size == 1) {
+            m.invoke(api, arg)
+            return
+          }
+          if (m.parameterTypes.isEmpty()) {
+            m.invoke(api)
+            return
+          }
+        }
+      }
+    }.onFailure { throwable ->
+      Log.w(TAG, "Quick action API invoke failed", throwable)
+    }
   }
 
   private fun addCustomNativeBottomButtons(container: LinearLayout) {
@@ -1337,6 +1384,12 @@ class MapboxNavigationActivity : AppCompatActivity() {
       activeActivityRef = null
     }
     NavigationSessionRegistry.release(SESSION_OWNER)
+    // Mirror iOS behavior: emit cancel when navigation is dismissed by the user.
+    // Suppress cancel when closed via explicit stopNavigation() call.
+    if (!stopRequested && hasStartedGuidance) {
+      MapboxNavigationEventBridge.emit("onCancelNavigation", emptyMap())
+    }
+    stopRequested = false
     navigationView = null
     rootContainer = null
     customNativeAttachPending = false

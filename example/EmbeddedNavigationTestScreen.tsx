@@ -63,7 +63,6 @@ export default function EmbeddedNavigationTestScreen() {
       mode: "overlay" as const,
       initialState: "hidden" as const,
       revealGestureHotzoneHeight: 120,
-      revealGestureRightExclusionWidth: 80,
       collapsedHeight: 124,
       expandedHeight: 340,
       showHandle: true,

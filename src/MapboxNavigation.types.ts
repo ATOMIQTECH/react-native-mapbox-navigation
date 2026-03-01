@@ -25,15 +25,11 @@ export type BottomSheetOptions = {
   /** Show default bottom action buttons. */
   showsActionButtons?: boolean;
   /** Rendering mode.
-   * - `native`: use SDK native banner UI.
-   * - `customNative`: use package-built modern native sheet (full-screen iOS + Android).
-   * - `overlay`: embedded-only React overlay mode.
+   * - `overlay`: embedded React overlay mode.
    *
-   * Default:
-   * - Full-screen `startNavigation`: when `bottomSheet.enabled !== false` and `mode` is omitted, defaults to `customNative`.
-   * - Embedded `MapboxNavigationView`: use `overlay` to render React UI via `renderBottomSheet`.
+   * This package uses custom-sheet overlay mode for embedded navigation.
    */
-  mode?: "native" | "customNative" | "overlay";
+  mode?: "overlay";
   /** Initial overlay/custom-native state. */
   initialState?: "hidden" | "collapsed" | "expanded";
   /** Overlay collapsed height in points. */
@@ -242,70 +238,6 @@ export type AndroidActionButtonsOptions = {
   showEndNavigationFeedbackButton?: boolean;
 };
 
-/**
- * Options passed to `startNavigation`.
- */
-export type NavigationOptions = {
-  /** Optional route origin. If omitted, native layer may resolve current location. */
-  startOrigin?: Coordinate;
-  /** Final destination waypoint (required). */
-  destination: Waypoint;
-  /** Optional intermediate waypoints. */
-  waypoints?: Waypoint[];
-  /** Enable route simulation for testing without physical movement. */
-  shouldSimulateRoute?: boolean;
-  /** UI theme selection for native UI. */
-  uiTheme?: 'system' | 'light' | 'dark' | 'day' | 'night';
-  /** Request alternative routes when available. */
-  routeAlternatives?: boolean;
-  /** Distance unit for guidance. */
-  distanceUnit?: 'metric' | 'imperial';
-  /** Guidance language (for example `en`, `fr`). */
-  language?: string;
-  /** Start muted. */
-  mute?: boolean;
-  /** Voice volume range `0..1`. */
-  voiceVolume?: number;
-  /** Camera pitch range `0..85`. */
-  cameraPitch?: number;
-  /** Camera zoom range `1..22`. */
-  cameraZoom?: number;
-  /** Camera behavior mode. */
-  cameraMode?: 'following' | 'overview';
-  /** One style URI used for both day/night fallback. */
-  mapStyleUri?: string;
-  /** Day style URI override. */
-  mapStyleUriDay?: string;
-  /** Night style URI override. */
-  mapStyleUriNight?: string;
-  /** Show speed limit panel when supported. */
-  showsSpeedLimits?: boolean;
-  /** Show current road name label. */
-  showsWayNameLabel?: boolean;
-  /** Show trip progress summary. */
-  showsTripProgress?: boolean;
-  /** Show maneuver/instruction view. */
-  showsManeuverView?: boolean;
-  /** Show default action buttons in native UI. */
-  showsActionButtons?: boolean;
-  /** Show report feedback action when supported by native SDK. */
-  showsReportFeedback?: boolean;
-  /** Show end-of-route feedback action when supported by native SDK. */
-  showsEndOfRouteFeedback?: boolean;
-  /** Show continuous alternatives in native UI when supported. */
-  showsContinuousAlternatives?: boolean;
-  /** Keep night style when entering tunnels when supported. */
-  usesNightStyleWhileInTunnel?: boolean;
-  /** Draw traversed route line differently when supported. */
-  routeLineTracksTraversal?: boolean;
-  /** Annotate intersections along route when supported. */
-  annotatesIntersectionsAlongRoute?: boolean;
-  /** Fine-grained Android Drop-In action button controls. */
-  androidActionButtons?: AndroidActionButtonsOptions;
-  /** Bottom sheet controls (expanded into section visibility toggles). */
-  bottomSheet?: BottomSheetOptions;
-};
-
 /** Runtime settings/state returned by `getNavigationSettings()`. */
 export type NavigationSettings = {
   isNavigating: boolean;
@@ -396,13 +328,10 @@ export type Subscription = {
 
 /** Native module interface bridged from iOS/Android. */
 export interface MapboxNavigationModule {
-  startNavigation(options: NavigationOptions): Promise<void>;
-  stopNavigation(): Promise<void>;
   setMuted(muted: boolean): Promise<void>;
   setVoiceVolume(volume: number): Promise<void>;
   setDistanceUnit(unit: 'metric' | 'imperial'): Promise<void>;
   setLanguage(language: string): Promise<void>;
-  isNavigating(): Promise<boolean>;
   getNavigationSettings(): Promise<NavigationSettings>;
 }
 

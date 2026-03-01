@@ -1497,6 +1497,26 @@ public class MapboxNavigationModule: Module {
     sendEvent("onBottomSheetActionPress", [
       "actionId": actionId
     ])
+
+    // Built-in behavior (best effort) so quick actions work out of the box.
+    switch actionId {
+    case "stop":
+      dismissActiveNavigation(emitCancelEvent: true)
+    case "toggleMute":
+      NavigationSettings.shared.voiceMuted = !NavigationSettings.shared.voiceMuted
+    case "overview":
+      if let navVC = navigationViewController {
+        applyCameraConfiguration(to: navVC, mode: "overview", pitch: nil, zoom: nil)
+        currentCameraMode = "overview"
+      }
+    case "recenter":
+      if let navVC = navigationViewController {
+        applyCameraConfiguration(to: navVC, mode: "following", pitch: nil, zoom: nil)
+        currentCameraMode = "following"
+      }
+    default:
+      break
+    }
   }
 
   private func makeCustomNativeRowView(
