@@ -89,20 +89,6 @@ public class MapboxNavigationModule: Module {
       "onBottomSheetActionPress"
     )
     
-    // Start navigation
-    AsyncFunction("startNavigation") { (options: NavigationStartOptions, promise: Promise) in
-      DispatchQueue.main.async {
-        self.startNavigation(options: options, promise: promise)
-      }
-    }
-    
-    // Stop navigation
-    AsyncFunction("stopNavigation") { (promise: Promise) in
-      DispatchQueue.main.async {
-        self.stopNavigation(promise: promise)
-      }
-    }
-    
     // Set muted state
     AsyncFunction("setMuted") { (muted: Bool, promise: Promise) in
       DispatchQueue.main.async {
@@ -128,15 +114,10 @@ public class MapboxNavigationModule: Module {
       }
     }
     
-    // Check if navigating
-    AsyncFunction("isNavigating") { (promise: Promise) in
-      promise.resolve(self.isCurrentlyNavigating)
-    }
-
     AsyncFunction("getNavigationSettings") { (promise: Promise) in
       let unit: String = NavigationSettings.shared.distanceUnit == .mile ? "imperial" : "metric"
       promise.resolve([
-        "isNavigating": self.isCurrentlyNavigating,
+        "isNavigating": false,
         "mute": NavigationSettings.shared.voiceMuted,
         "voiceVolume": NavigationSettings.shared.voiceVolume,
         "distanceUnit": unit,
