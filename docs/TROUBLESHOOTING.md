@@ -30,7 +30,7 @@ Check `MAPBOX_DOWNLOADS_TOKEN`:
 ## Need Complex React UI Inside Full-screen Bottom Banner
 
 `startNavigation` full-screen bottom banner is native-only (no direct React Node injection).
-Use embedded `MapboxNavigationView` with `enabled` and `renderBottomSheet` for custom React Node content.
+Use embedded `MapboxNavigationView` if you want Mapbox’s Drop-In UI inside your own screen, and overlay your own React UI carefully (overlays can cover the Mapbox bottom sheet/buttons).
 
 ## Embedded View Restarts / Loops
 
@@ -54,17 +54,20 @@ Also make sure you’re actually running a build that includes the latest native
 
 ## Android Embedded View Is Blank / Dark Screen
 
-If `startNavigation()` works but `MapboxNavigationView` is blank on Android, it is typically **layout/measurement** (the underlying map can be measured at a tiny fallback size like `64x64`).
+If `startNavigation()` works but `MapboxNavigationView` is blank on Android, it is usually one of:
+
+- **Layout/measurement:** the underlying map can be measured at a tiny fallback size like `64x64`.
+- **SurfaceView rendering in RN:** Mapbox Maps can render via `SurfaceView` in some builds, which can appear blank behind `ReactRootView`. The embedded view uses Mapbox’s Drop-In `NavigationView` and applies best-effort `SurfaceView` z-order tweaks when detected.
 
 Fix checklist:
 
 - Rebuild native so you’re not running stale code: `npx expo prebuild --clean` then `expo run:android`.
 - Ensure `enabled={true}` is only set **after** location permission is granted.
-- Capture logs and look for `MapboxNavigationView` lines:
+- Capture logs and look for `MapboxNavigationView` lines (token, permission, route request, and map composition):
 
 ```bash
 adb logcat -c
-adb logcat --pid=$(adb shell pidof -s com.your.app) -v time | rg -n "MapboxNavigationView\\(|force layout|layout changed|MISSING_ACCESS_TOKEN|EMBEDDED_VIEW_INIT_FAILED|DESTINATION_PREVIEW_FAILED|AndroidRuntime|FATAL EXCEPTION"
+adb logcat --pid=$(adb shell pidof -s com.your.app) -v time | rg -n "MapboxNavigationView\\(|mapbox_access_token resolved|startIfReady|requestRoutes|onRoutesReady|LOCATION_PERMISSION_REQUIRED|NAVIGATION_SESSION_CONFLICT|NAVIGATION_INIT_FAILED|ROUTE_ERROR|NO_ROUTE|mapView composition|AndroidRuntime|FATAL EXCEPTION"
 ```
 
 If you see Mapbox messages like `ViewportDataSourceProcessor` complaining about padding not fitting a `64x64` map, it confirms the issue is view sizing rather than permission.

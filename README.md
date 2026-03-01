@@ -56,7 +56,7 @@ This package provides full-screen navigation and embedded navigation view option
 - this reduces session-conflict loops between embedded and full-screen modes
 - keep one mode active at a time
 - if you wrap it in `SafeAreaView`, consider disabling the bottom edge if you want the bottom sheet flush to the screen
-- use embedded mode for maximum UI customization (React-rendered overlay sheet/banner)
+- embedded mode uses Mapbox’s native Drop-In UI (route preview + Start button + turn-by-turn UI) inside your own screens
 - use `startNavigation()` for the simplest, quickest integration (full-screen native)
 - Android: request runtime location permission before `enabled={true}` (for example via `react-native-permissions` or `PermissionsAndroid`)
 
@@ -85,9 +85,12 @@ import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation"
   startOrigin={{ latitude: 37.7749, longitude: -122.4194 }}
   destination={{ latitude: 37.7847, longitude: -122.4073, name: "Downtown" }}
   shouldSimulateRoute
-  bottomSheet={{ enabled: true, mode: "overlay", initialState: "hidden" }}
 />;
 ```
+
+Notes:
+
+- If you render React children inside `MapboxNavigationView`, they will appear above the native UI and can cover the Mapbox bottom sheet/buttons.
 
 Test screen (recommended while integrating):
 

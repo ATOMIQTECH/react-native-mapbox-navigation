@@ -6,7 +6,6 @@ Current package version: `1.1.6`
 
 ```bash
 npm install @atomiqlab/react-native-mapbox-navigation
-npx expo install expo-build-properties
 ```
 
 ## 2. Configure plugin
@@ -34,27 +33,24 @@ In `app.json` / `app.config.js`:
 npx expo prebuild --clean
 ```
 
-## 5. Start navigation
+## 5. Render embedded navigation
 
 ```ts
-import { startNavigation } from '@atomiqlab/react-native-mapbox-navigation';
+import { MapboxNavigationView } from '@atomiqlab/react-native-mapbox-navigation';
 
-await startNavigation({
-  destination: { latitude: 37.7847, longitude: -122.4073, name: 'Downtown' },
-  startOrigin: { latitude: 37.7749, longitude: -122.4194 },
-  shouldSimulateRoute: true,
-  cameraMode: 'following',
-  bottomSheet: {
+<MapboxNavigationView
+  enabled
+  style={{ flex: 1 }}
+  startOrigin={{ latitude: 37.7749, longitude: -122.4194 }}
+  destination={{ latitude: 37.7847, longitude: -122.4073, name: 'Downtown' }}
+  shouldSimulateRoute
+  bottomSheet={{
     enabled: true,
-    mode: 'customNative',
+    mode: 'overlay',
     initialState: 'hidden',
-    backgroundColor: '#0f172a',
-    primaryTextColor: '#ffffff',
-    primaryTextFontWeight: '700',
-    actionButtonTitle: 'End Navigation',
-    actionButtonCornerRadius: 12,
-  },
-});
+    builtInQuickActions: ['overview', 'recenter', 'toggleMute', 'stop'],
+  }}
+/>;
 ```
 
-For full bottom-sheet styling controls and embedded `renderBottomSheet` React-node usage, see [docs/USAGE.md](docs/USAGE.md).
+For overlay bottom-sheet customization and embedded usage, see [docs/USAGE.md](docs/USAGE.md).

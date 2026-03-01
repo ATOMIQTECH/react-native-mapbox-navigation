@@ -9,6 +9,10 @@ class MapboxNavigationModule : Module() {
   private val sessionOwner = "fullscreen"
   private var isNavigating = false
   private var isStartInProgress = false
+  private var mute = false
+  private var voiceVolume = 1.0
+  private var distanceUnit = "metric"
+  private var language = "en"
 
   override fun definition() = ModuleDefinition {
     Name("MapboxNavigationModule")
@@ -46,20 +50,32 @@ class MapboxNavigationModule : Module() {
 
     AsyncFunction("setMuted") { muted: Boolean, promise: Promise ->
       // Best-effort integration via MapboxAudioGuidance.
+      this@MapboxNavigationModule.mute = muted
       MapboxAudioGuidanceController.setMuted(muted)
       promise.resolve(null)
     }
 
     AsyncFunction("setVoiceVolume") { volume: Double, promise: Promise ->
+      this@MapboxNavigationModule.voiceVolume = volume
       MapboxAudioGuidanceController.setVoiceVolume(volume)
       promise.resolve(null)
     }
 
-    AsyncFunction("setDistanceUnit") { _: String, promise: Promise ->
+    AsyncFunction("setDistanceUnit") { unit: String, promise: Promise ->
+      // Drop-In SDK unit preference is not currently wired through.
+      // Keep state so JS getNavigationSettings() returns consistent values.
+      val normalized = unit.trim().lowercase()
+      if (normalized == "metric" || normalized == "imperial") {
+        this@MapboxNavigationModule.distanceUnit = normalized
+      }
       promise.resolve(null)
     }
 
     AsyncFunction("setLanguage") { language: String, promise: Promise ->
+      val trimmed = language.trim()
+      if (trimmed.isNotEmpty()) {
+        this@MapboxNavigationModule.language = trimmed
+      }
       MapboxAudioGuidanceController.setLanguage(language)
       promise.resolve(null)
     }
@@ -70,13 +86,15 @@ class MapboxNavigationModule : Module() {
     }
 
     AsyncFunction("getNavigationSettings") { promise: Promise ->
+      val active = MapboxNavigationActivity.hasActiveSession()
+      isNavigating = active
       promise.resolve(
         mapOf(
-          "isNavigating" to isNavigating,
-          "mute" to false,
-          "voiceVolume" to 1.0,
-          "distanceUnit" to "metric",
-          "language" to "en"
+          "isNavigating" to active,
+          "mute" to mute,
+          "voiceVolume" to voiceVolume.coerceIn(0.0, 1.0),
+          "distanceUnit" to distanceUnit,
+          "language" to language
         )
       )
     }

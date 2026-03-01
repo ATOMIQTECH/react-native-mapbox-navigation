@@ -35,8 +35,8 @@
   "scripts": {
     "build": "expo-module build",
     "clean": "expo-module clean",
-    "lint": "expo-module lint",
-    "test": "expo-module test",
+    "lint": "expo-module lint -- --ext .ts,.tsx",
+    "test": "expo-module test --passWithNoTests",
     "verify": "node ./scripts/verify-release.mjs"
   },
   "keywords": [

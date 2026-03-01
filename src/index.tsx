@@ -1,6 +1,6 @@
 import { requireNativeModule, requireNativeViewManager } from "expo-modules-core";
 import { Fragment, isValidElement, useEffect, useMemo, useRef, useState } from "react";
-import { PanResponder, Platform, Pressable, StyleSheet, Text, View, ViewProps } from "react-native";
+import { PanResponder, Pressable, StyleSheet, Text, View, ViewProps } from "react-native";
 
 import type {
   ArrivalEvent,
@@ -14,7 +14,6 @@ import type {
   MapboxNavigationViewProps,
   NavigationSettings,
   NavigationError,
-  NavigationOptions,
   RouteProgress,
   Subscription,
 } from "./MapboxNavigation.types";
@@ -32,10 +31,6 @@ const emitter = MapboxNavigationModule as unknown as {
   ) => Subscription;
 };
 
-const VALID_DISTANCE_UNITS = new Set(["metric", "imperial"]);
-const VALID_CAMERA_MODES = new Set(["following", "overview"]);
-const VALID_UI_THEMES = new Set(["system", "light", "dark", "day", "night"]);
-
 function unwrapNativeEventPayload<T>(payload: unknown): T | undefined {
   if (payload == null) {
     return undefined;
@@ -52,134 +47,6 @@ function unwrapNativeEventPayload<T>(payload: unknown): T | undefined {
     }
   }
   return payload as T;
-}
-
-function assertCoordinate(
-  coordinate: { latitude: number; longitude: number },
-  fieldName: string,
-) {
-  if (!Number.isFinite(coordinate.latitude) || !Number.isFinite(coordinate.longitude)) {
-    throw new Error(`${fieldName} must contain finite latitude/longitude numbers.`);
-  }
-  if (coordinate.latitude < -90 || coordinate.latitude > 90) {
-    throw new Error(`${fieldName}.latitude must be between -90 and 90.`);
-  }
-  if (coordinate.longitude < -180 || coordinate.longitude > 180) {
-    throw new Error(`${fieldName}.longitude must be between -180 and 180.`);
-  }
-}
-
-function normalizeNavigationOptions(options: NavigationOptions): NavigationOptions {
-  if (!options || typeof options !== "object") {
-    throw new Error("startNavigation options must be an object.");
-  }
-
-  assertCoordinate(options.destination, "destination");
-  if (options.startOrigin) {
-    assertCoordinate(options.startOrigin, "startOrigin");
-  }
-
-  if (options.waypoints?.length) {
-    options.waypoints.forEach((waypoint, index) => {
-      assertCoordinate(waypoint, `waypoints[${index}]`);
-    });
-  }
-
-  if (options.distanceUnit && !VALID_DISTANCE_UNITS.has(options.distanceUnit)) {
-    throw new Error("distanceUnit must be 'metric' or 'imperial'.");
-  }
-
-  if (options.cameraMode && !VALID_CAMERA_MODES.has(options.cameraMode)) {
-    throw new Error("cameraMode must be 'following' or 'overview'.");
-  }
-
-  if (options.uiTheme && !VALID_UI_THEMES.has(options.uiTheme)) {
-    throw new Error("uiTheme must be one of: system, light, dark, day, night.");
-  }
-
-  if (options.voiceVolume != null) {
-    if (!Number.isFinite(options.voiceVolume) || options.voiceVolume < 0 || options.voiceVolume > 1) {
-      throw new Error("voiceVolume must be a finite number between 0 and 1.");
-    }
-  }
-
-  if (options.cameraPitch != null) {
-    if (!Number.isFinite(options.cameraPitch) || options.cameraPitch < 0 || options.cameraPitch > 85) {
-      throw new Error("cameraPitch must be a finite number between 0 and 85.");
-    }
-  }
-
-  if (options.cameraZoom != null) {
-    if (!Number.isFinite(options.cameraZoom) || options.cameraZoom < 1 || options.cameraZoom > 22) {
-      throw new Error("cameraZoom must be a finite number between 1 and 22.");
-    }
-  }
-
-  const trimmedLanguage = options.language?.trim();
-  if (trimmedLanguage != null && trimmedLanguage.length === 0) {
-    throw new Error("language cannot be an empty string.");
-  }
-
-  let showsTripProgress = options.showsTripProgress;
-  let showsManeuverView = options.showsManeuverView;
-  let showsActionButtons = options.showsActionButtons;
-  if (options.bottomSheet) {
-    const enabled = options.bottomSheet.enabled;
-    if (enabled === false) {
-      showsTripProgress = false;
-      showsManeuverView = false;
-      showsActionButtons = false;
-    } else {
-      if (showsTripProgress == null) {
-        showsTripProgress = options.bottomSheet.showsTripProgress;
-      }
-      if (showsManeuverView == null) {
-        showsManeuverView = options.bottomSheet.showsManeuverView;
-      }
-      if (showsActionButtons == null) {
-        showsActionButtons = options.bottomSheet.showsActionButtons;
-      }
-    }
-  }
-
-  let normalizedBottomSheet = options.bottomSheet;
-  if (Platform.OS === "ios" && normalizedBottomSheet?.mode === "overlay") {
-    console.warn(
-      "[react-native-mapbox-navigation] iOS full-screen startNavigation() does not support React overlay mode. Mapping bottomSheet.mode='overlay' to 'customNative'.",
-    );
-    normalizedBottomSheet = {
-      ...normalizedBottomSheet,
-      mode: "customNative",
-    };
-  }
-  if (normalizedBottomSheet && normalizedBottomSheet.enabled !== false) {
-    const normalizedMode = normalizedBottomSheet.mode?.trim();
-    if (!normalizedMode) {
-      normalizedBottomSheet = {
-        ...normalizedBottomSheet,
-        mode: "customNative",
-      };
-    }
-  }
-
-  return {
-    ...options,
-    startOrigin: options.startOrigin
-      ? {
-          latitude: options.startOrigin.latitude,
-          longitude: options.startOrigin.longitude,
-        }
-      : undefined,
-    routeAlternatives: options.routeAlternatives ?? options.showsContinuousAlternatives,
-    showsTripProgress,
-    showsManeuverView,
-    showsActionButtons,
-    language: trimmedLanguage || options.language,
-    mapStyleUri: options.mapStyleUri?.trim() || options.mapStyleUri,
-    mapStyleUriDay: options.mapStyleUriDay?.trim() || options.mapStyleUriDay,
-    mapStyleUriNight: options.mapStyleUriNight?.trim() || options.mapStyleUriNight,
-    bottomSheet: normalizedBottomSheet,
-  };
 }
 
 function normalizeNativeError(error: unknown, fallbackCode = "NATIVE_ERROR"): Error {
@@ -353,34 +220,6 @@ function normalizeViewProps(
 }
 
 /**
- * Start full-screen native turn-by-turn navigation.
- *
- * @param options Navigation settings such as destination, camera mode, simulation, and map UI options.
- * @throws Error if options are invalid or native route/token setup fails.
- */
-export async function startNavigation(
-  options: NavigationOptions,
-): Promise<void> {
-  const normalizedOptions = normalizeNavigationOptions(options);
-  try {
-    await MapboxNavigationModule.startNavigation(normalizedOptions);
-  } catch (error) {
-    throw normalizeNativeError(error, "START_NAVIGATION_FAILED");
-  }
-}
-
-/**
- * Stop/dismiss native navigation if active.
- */
-export async function stopNavigation(): Promise<void> {
-  try {
-    await MapboxNavigationModule.stopNavigation();
-  } catch (error) {
-    throw normalizeNativeError(error, "STOP_NAVIGATION_FAILED");
-  }
-}
-
-/**
  * Enable or disable voice guidance.
  *
  * @param muted `true` to mute voice instructions.
@@ -423,17 +262,6 @@ export async function setLanguage(language: string): Promise<void> {
     await MapboxNavigationModule.setLanguage(language);
   } catch (error) {
     throw normalizeNativeError(error, "SET_LANGUAGE_FAILED");
-  }
-}
-
-/**
- * Check whether full-screen native navigation is currently active.
- */
-export async function isNavigating(): Promise<boolean> {
-  try {
-    return await MapboxNavigationModule.isNavigating();
-  } catch (error) {
-    throw normalizeNativeError(error, "IS_NAVIGATING_FAILED");
   }
 }
 
@@ -566,7 +394,7 @@ export function addBannerInstructionListener(
 }
 
 /**
- * Subscribe to full-screen bottom-sheet action button presses.
+ * Subscribe to native bottom-sheet action button presses.
  */
 export function addBottomSheetActionPressListener(
   listener: (event: BottomSheetActionEvent) => void,
@@ -587,7 +415,25 @@ export function addBottomSheetActionPressListener(
 export function MapboxNavigationView(
   props: MapboxNavigationViewProps & ViewProps,
 ) {
-  const bottomSheet = props.bottomSheet;
+  const warnedCustomSheetOnlyRef = useRef(false);
+  const bottomSheet = (props.bottomSheet && props.bottomSheet.enabled !== false)
+    ? ({
+        ...props.bottomSheet,
+        mode: "overlay" as const,
+      })
+    : props.bottomSheet;
+  if (
+    props.bottomSheet?.enabled !== false &&
+    props.bottomSheet &&
+    props.bottomSheet.mode !== "overlay" &&
+    !warnedCustomSheetOnlyRef.current
+  ) {
+    warnedCustomSheetOnlyRef.current = true;
+    console.warn(
+      "[react-native-mapbox-navigation] Embedded mode is custom-sheet-only. Forcing bottomSheet.mode='overlay'.",
+    );
+  }
+  const propsWithBottomSheet = bottomSheet === props.bottomSheet ? props : { ...props, bottomSheet };
   const useOverlayBottomSheet = !!bottomSheet?.enabled &&
     bottomSheet?.mode === "overlay";
   const overlayLocationMinIntervalMs = Math.max(
@@ -624,29 +470,37 @@ export function MapboxNavigationView(
   const rightExclusionWidth = useOverlayBottomSheet
     ? Math.max(0, Math.min(bottomSheet?.revealGestureRightExclusionWidth ?? 0, 220))
     : 0;
-  const hotzoneWidthRef = useRef(0);
-  const hotzoneResponder = useMemo(
+
+  // To avoid blocking taps on buttons that live near the bottom of the screen, we do NOT render an
+  // overlay "hotzone" View on top. Instead we observe swipes from the wrapper View via responder capture.
+  const wrapperSizeRef = useRef({ width: 0, height: 0 });
+  const wrapperStartRef = useRef({ x: 0, y: 0 });
+  const wrapperResponder = useMemo(
     () =>
       PanResponder.create({
-        // Important: don't claim the responder on touch start, otherwise we block taps on any SDK/React
-        // buttons that happen to live under the hotzone.
         onStartShouldSetPanResponder: () => false,
-        onMoveShouldSetPanResponder: (_evt, gesture) => {
+        onStartShouldSetPanResponderCapture: (evt) => {
+          wrapperStartRef.current = {
+            x: evt.nativeEvent.locationX ?? 0,
+            y: evt.nativeEvent.locationY ?? 0,
+          };
+          return false;
+        },
+        onMoveShouldSetPanResponder: () => false,
+        onMoveShouldSetPanResponderCapture: (_evt, gesture) => {
           if (!useOverlayBottomSheet || sheetState !== "hidden") return false;
+          const { width, height } = wrapperSizeRef.current;
+          if (width <= 0 || height <= 0) return false;
+          const { x, y } = wrapperStartRef.current;
+          const inBottomZone = y >= height - revealHotzoneHeight;
+          const inAllowedX = rightExclusionWidth <= 0 || x <= width - rightExclusionWidth;
+          if (!inBottomZone || !inAllowedX) return false;
           const verticalEnough = Math.abs(gesture.dy) > Math.abs(gesture.dx);
           const upward = gesture.dy < -8;
           return verticalEnough && upward;
         },
-        onPanResponderRelease: (evt, gesture) => {
+        onPanResponderRelease: (_evt, gesture) => {
           if (!useOverlayBottomSheet || sheetState !== "hidden") return;
-          const width = hotzoneWidthRef.current;
-          if (width > 0 && rightExclusionWidth > 0) {
-            const x = evt.nativeEvent.locationX ?? 0;
-            if (x > width - rightExclusionWidth) {
-              return;
-            }
-          }
-          // Upward swipe reveals the sheet.
           const fastEnough = gesture.vy < -0.5;
           const farEnough = gesture.dy < -36;
           if (farEnough || (fastEnough && gesture.dy < -18)) {
@@ -654,7 +508,7 @@ export function MapboxNavigationView(
           }
         },
       }),
-    [rightExclusionWidth, sheetState, useOverlayBottomSheet],
+    [revealHotzoneHeight, rightExclusionWidth, sheetState, useOverlayBottomSheet],
   );
 
   useEffect(() => {
@@ -678,7 +532,7 @@ export function MapboxNavigationView(
     setOverlayCameraMode(undefined);
   }, [props.cameraMode]);
 
-  const nativeProps = useMemo(() => normalizeViewProps(props), [props]);
+  const nativeProps = useMemo(() => normalizeViewProps(propsWithBottomSheet), [propsWithBottomSheet]);
   const nativePropsWithOverlay = useMemo(() => {
     if (!useOverlayBottomSheet) {
       return nativeProps;
@@ -772,7 +626,6 @@ export function MapboxNavigationView(
           break;
         }
         case "stop":
-          await stopNavigation();
           emitAction(actionId, "builtin");
           break;
         default:
@@ -784,15 +637,17 @@ export function MapboxNavigationView(
       state: sheetState,
       hidden: sheetState === "hidden",
       expanded: sheetState === "expanded",
-      show: (next: "collapsed" | "expanded" = "collapsed") => setSheetState(next),
+      show: (_next: "collapsed" | "expanded" = "collapsed") => setSheetState("expanded"),
       hide: () => setSheetState("hidden"),
       expand: () => setSheetState("expanded"),
-      collapse: () => setSheetState("collapsed"),
-      toggle: () => setSheetState((v) => (v === "expanded" ? "collapsed" : "expanded")),
+      collapse: () => setSheetState("hidden"),
+      toggle: () => setSheetState((v) => (v === "hidden" ? "expanded" : "hidden")),
       bannerInstruction: overlayBanner,
       routeProgress: overlayProgress,
       location: overlayLocation,
-      stopNavigation,
+      stopNavigation: async () => {
+        emitAction("stop", "builtin");
+      },
       emitAction: (actionId: string) => emitAction(actionId, "custom"),
     };
 
@@ -963,9 +818,11 @@ export function MapboxNavigationView(
         ) : null}
       </View>
     );
-    const content = customSheet ?? staticSheet ?? (bottomSheet?.showDefaultContent === false ? null : defaultSheet);
-    const currentHeight =
-      sheetState === "hidden" ? 0 : (expanded ? expandedHeight : collapsedHeight);
+    const showDefault =
+      // In overlay mode, devs usually want full control. Default to no built-in content unless explicitly enabled.
+      bottomSheet?.showDefaultContent === true;
+    const content = customSheet ?? staticSheet ?? (showDefault ? defaultSheet : null);
+    const currentHeight = sheetState === "hidden" ? 0 : expandedHeight;
     const canToggle = bottomSheet?.enableTapToToggle !== false;
     const showHandle = bottomSheet?.showHandle !== false;
 
@@ -983,34 +840,13 @@ export function MapboxNavigationView(
     );
 
     const backdropPress = () => {
-      if (sheetState === "expanded") {
-        setSheetState("collapsed");
-      } else if (sheetState === "collapsed" && bottomSheet?.initialState === "hidden") {
-        setSheetState("hidden");
-      }
+      setSheetState("hidden");
     };
 
     const backdropVisible = sheetState !== "hidden";
 
     return (
       <View pointerEvents="box-none" style={styles.overlayRoot}>
-        {sheetState === "hidden" ? (
-          <View
-            pointerEvents="box-none"
-            style={[
-              styles.revealHotzone,
-              { height: revealHotzoneHeight, marginRight: rightExclusionWidth },
-            ]}
-          >
-            <View
-              {...hotzoneResponder.panHandlers}
-              onLayout={(e) => {
-                hotzoneWidthRef.current = e.nativeEvent.layout.width;
-              }}
-              style={styles.revealHotzoneTouchable}
-            />
-          </View>
-        ) : null}
         {backdropVisible ? (
           <Pressable
             onPress={backdropPress}
@@ -1056,7 +892,16 @@ export function MapboxNavigationView(
   }
 
   return (
-    <View style={props.style}>
+    <View
+      {...(useOverlayBottomSheet ? wrapperResponder.panHandlers : {})}
+      onLayout={(e) => {
+        wrapperSizeRef.current = {
+          width: e.nativeEvent.layout.width,
+          height: e.nativeEvent.layout.height,
+        };
+      }}
+      style={props.style}
+    >
       <MapboxNavigationNativeView
         {...nativePropsWithOverlay}
         style={StyleSheet.absoluteFill}
@@ -1079,15 +924,6 @@ const styles = StyleSheet.create({
   overlayBackdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.35)",
-  },
-  revealHotzone: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-  },
-  revealHotzoneTouchable: {
-    flex: 1,
   },
   sheetContainer: {
     borderTopLeftRadius: 16,
@@ -1168,13 +1004,10 @@ const styles = StyleSheet.create({
 export * from "./MapboxNavigation.types";
 
 export default {
-  startNavigation,
-  stopNavigation,
   setMuted,
   setVoiceVolume,
   setDistanceUnit,
   setLanguage,
-  isNavigating,
   getNavigationSettings,
   addLocationChangeListener,
   addRouteProgressChangeListener,

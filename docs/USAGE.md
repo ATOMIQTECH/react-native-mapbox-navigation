@@ -39,7 +39,6 @@ await startNavigation({
     initialState: "hidden",
     revealOnNativeBannerGesture: true,
     revealGestureHotzoneHeight: 100,
-    revealGestureRightExclusionWidth: 80,
     collapsedHeight: 118,
     expandedHeight: 340,
 
@@ -241,7 +240,7 @@ subscriptions.forEach((s) => s.remove());
 
 ## Embedded View (Opt-in)
 
-Use embedded `MapboxNavigationView` when you want maximum UI customization (React overlay sheet/banner) and tighter composition inside your own screens.
+Use embedded `MapboxNavigationView` to embed Mapbox’s official Drop-In UI (route preview panel + Start button + turn-by-turn UI) inside your own screens.
 
 Embedded mode is available with explicit opt-in to avoid accidental session conflicts.
 
@@ -256,7 +255,6 @@ export function EmbeddedScreen() {
       startOrigin={{ latitude: 37.7749, longitude: -122.4194 }}
       destination={{ latitude: 37.7847, longitude: -122.4073, name: "Downtown" }}
       shouldSimulateRoute
-      bottomSheet={{ enabled: true, mode: "overlay", initialState: "hidden" }}
     />
   );
 }
@@ -271,17 +269,13 @@ Important:
 - embedded iOS + Android support hiding the SDK top/bottom banner sections via:
   - `showsManeuverView`, `showsTripProgress`, `showsActionButtons`, `showCancelButton`
 - Android: you must request runtime location permission before mounting with `enabled={true}`.
-- If you pass `renderBottomSheet`, it replaces the default overlay content. Return `null` (or omit `renderBottomSheet`) to keep the built-in sheet UI.
 - If you wrap the embedded view in `SafeAreaView`, consider disabling the bottom edge (for example `edges={["top","left","right"]}`) if you want the bottom sheet to sit flush to the screen like full-screen navigation.
-- Embedded overlay supports a full-screen-like reveal interaction:
-  - When `bottomSheet.mode="overlay"` and `initialState` is omitted, it defaults to `hidden`.
-  - Swipe up in the bottom hotzone (`bottomSheet.revealGestureHotzoneHeight`) to reveal the sheet.
-  - Tap the backdrop to collapse (or to hide if it started hidden).
+ - If you render React children inside `MapboxNavigationView`, they will appear above the native UI and can cover the Mapbox bottom sheet/buttons.
 
 ## React Node in `startNavigation`
 
 Direct React Node injection into native full-screen bottom banner is not currently possible.
-Use embedded `MapboxNavigationView` + `bottomSheet.mode = "overlay"` for complex React UI.
+Use your own React UI outside the full-screen native session (or consider embedding the Drop-In UI with `MapboxNavigationView` and overlaying your own controls carefully).
 
 For full-screen `customNative`, the package now exposes native style controls for:
 
@@ -296,5 +290,5 @@ This package does not currently expose that level of iOS-only banner composition
 
 If you need a fully custom “pro” UI:
 
-- Prefer embedded `MapboxNavigationView` + `bottomSheet.mode = "overlay"` and render your banner/bottom sheet as React UI.
+- Prefer embedding the Drop-In UI with `MapboxNavigationView` and overlaying your own controls (keeping in mind overlays can cover the Mapbox bottom sheet/buttons).
 - Or fork the package and add an iOS-only option that wires custom banner controllers into `NavigationOptions` natively.
