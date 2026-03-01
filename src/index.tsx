@@ -105,15 +105,6 @@ function normalizeViewProps(
     }
   }
 
-  // Embedded overlay mode is intended to let React render the "banner" UI.
-  // Hide the native SDK banner sections by default (unless explicitly requested).
-  if (props.bottomSheet?.enabled !== false && props.bottomSheet?.mode === "overlay") {
-    if (showsTripProgress == null) showsTripProgress = false;
-    if (showsManeuverView == null) showsManeuverView = false;
-    if (showsActionButtons == null) showsActionButtons = false;
-    if (showCancelButton == null) showCancelButton = false;
-  }
-
   const wrappedOnLocationChange = props.onLocationChange
     ? (event: unknown) => {
         const payload = unwrapNativeEventPayload<LocationUpdate>(event);
@@ -468,11 +459,11 @@ export function MapboxNavigationView(
     ? Math.max(56, Math.min(bottomSheet?.revealGestureHotzoneHeight ?? 100, 220))
     : 0;
   const rightExclusionWidth = useOverlayBottomSheet
-    ? Math.max(0, Math.min(bottomSheet?.revealGestureRightExclusionWidth ?? 0, 220))
+    ? Math.max(0, Math.min(bottomSheet?.revealGestureRightExclusionWidth ?? 88, 220))
     : 0;
 
-  // To avoid blocking taps on buttons that live near the bottom of the screen, we do NOT render an
-  // overlay "hotzone" View on top. Instead we observe swipes from the wrapper View via responder capture.
+  // To avoid blocking taps on native SDK buttons (including iOS/Android bottom-right controls), we do NOT
+  // render a touch-blocking overlay hotzone. Swipe detection is handled by wrapper responder capture only.
   const wrapperSizeRef = useRef({ width: 0, height: 0 });
   const wrapperStartRef = useRef({ x: 0, y: 0 });
   const wrapperResponder = useMemo(
@@ -751,30 +742,142 @@ export function MapboxNavigationView(
     if (overlayProgress && showCompletionPercent) {
       tripSecondaryParts.push(`${Math.round((overlayProgress.fractionTraveled || 0) * 100)}% completed`);
     }
+    const sheetBackgroundColor = bottomSheet?.backgroundColor ?? "rgba(12, 18, 32, 0.94)";
+    const sheetCornerRadius = Math.max(0, Math.min(bottomSheet?.cornerRadius ?? 16, 28));
+    const handleColor = bottomSheet?.handleColor ?? "rgba(255,255,255,0.35)";
+    const primaryTextColor = bottomSheet?.primaryTextColor ?? "#ffffff";
+    const secondaryTextColor = bottomSheet?.secondaryTextColor ?? "rgba(255,255,255,0.8)";
+    const labelTextColor = bottomSheet?.secondaryTextColor ?? "rgba(255,255,255,0.72)";
+    const primaryFontSize = Math.max(10, Math.min(bottomSheet?.primaryTextFontSize ?? 14, 32));
+    const secondaryFontSize = Math.max(10, Math.min(bottomSheet?.secondaryTextFontSize ?? 12, 26));
+    const actionButtonFontSize = Math.max(10, Math.min(bottomSheet?.actionButtonFontSize ?? 12, 24));
+    const actionButtonFontFamily = bottomSheet?.actionButtonFontFamily;
+    const actionButtonFontWeight = bottomSheet?.actionButtonFontWeight ?? "700";
+    const primaryFontFamily = bottomSheet?.primaryTextFontFamily;
+    const primaryFontWeight = bottomSheet?.primaryTextFontWeight ?? "700";
+    const secondaryFontFamily = bottomSheet?.secondaryTextFontFamily;
+    const secondaryFontWeight = bottomSheet?.secondaryTextFontWeight ?? "500";
+    const quickActionRadius = Math.max(0, Math.min(
+      bottomSheet?.quickActionCornerRadius ??
+      bottomSheet?.actionButtonCornerRadius ??
+      999,
+      999,
+    ));
+    const quickActionBorderWidth = Math.max(0, Math.min(
+      bottomSheet?.quickActionBorderWidth ??
+      bottomSheet?.actionButtonBorderWidth ??
+      0,
+      6,
+    ));
+    const quickActionBorderColor = bottomSheet?.quickActionBorderColor ??
+      bottomSheet?.actionButtonBorderColor ??
+      "rgba(255,255,255,0.35)";
+    const quickPrimaryBackground = bottomSheet?.quickActionBackgroundColor ??
+      bottomSheet?.actionButtonBackgroundColor ??
+      "#2563eb";
+    const quickSecondaryBackground = bottomSheet?.quickActionSecondaryBackgroundColor ??
+      bottomSheet?.secondaryActionButtonBackgroundColor ??
+      "#1d4ed8";
+    const quickGhostText = bottomSheet?.quickActionGhostTextColor ??
+      bottomSheet?.secondaryActionButtonTextColor ??
+      "rgba(255,255,255,0.92)";
+    const quickPrimaryText = bottomSheet?.quickActionTextColor ??
+      bottomSheet?.actionButtonTextColor ??
+      "#ffffff";
+    const quickSecondaryText = bottomSheet?.quickActionSecondaryTextColor ??
+      bottomSheet?.secondaryActionButtonTextColor ??
+      "#ffffff";
+    const defaultCardColor = "rgba(255,255,255,0.08)";
     const defaultSheet = (
       <View style={styles.defaultSheet}>
         {nativeProps.showsManeuverView !== false ? (
-          <View style={styles.defaultCard}>
-            <Text style={styles.defaultLabel}>{bottomSheet?.defaultManeuverTitle ?? "Maneuver"}</Text>
-            <Text style={styles.defaultPrimary} numberOfLines={2}>
+          <View style={[styles.defaultCard, { backgroundColor: defaultCardColor }]}>
+            <Text
+              style={[
+                styles.defaultLabel,
+                {
+                  color: labelTextColor,
+                  fontSize: secondaryFontSize - 1,
+                  fontFamily: secondaryFontFamily,
+                  fontWeight: secondaryFontWeight as any,
+                },
+              ]}
+            >
+              {bottomSheet?.defaultManeuverTitle ?? "Maneuver"}
+            </Text>
+            <Text
+              style={[
+                styles.defaultPrimary,
+                {
+                  color: primaryTextColor,
+                  fontSize: primaryFontSize,
+                  fontFamily: primaryFontFamily,
+                  fontWeight: primaryFontWeight as any,
+                },
+              ]}
+              numberOfLines={2}
+            >
               {overlayBanner?.primaryText ?? "Waiting for route instructions..."}
             </Text>
             {overlayBanner?.secondaryText ? (
-              <Text style={styles.defaultSecondary} numberOfLines={1}>
+              <Text
+                style={[
+                  styles.defaultSecondary,
+                  {
+                    color: secondaryTextColor,
+                    fontSize: secondaryFontSize,
+                    fontFamily: secondaryFontFamily,
+                    fontWeight: secondaryFontWeight as any,
+                  },
+                ]}
+                numberOfLines={1}
+              >
                 {overlayBanner.secondaryText}
               </Text>
             ) : null}
           </View>
         ) : null}
         {nativeProps.showsTripProgress !== false ? (
-          <View style={styles.defaultCard}>
-            <Text style={styles.defaultLabel}>{bottomSheet?.defaultTripProgressTitle ?? "Trip Progress"}</Text>
-            <Text style={styles.defaultPrimary}>
+          <View style={[styles.defaultCard, { backgroundColor: defaultCardColor }]}>
+            <Text
+              style={[
+                styles.defaultLabel,
+                {
+                  color: labelTextColor,
+                  fontSize: secondaryFontSize - 1,
+                  fontFamily: secondaryFontFamily,
+                  fontWeight: secondaryFontWeight as any,
+                },
+              ]}
+            >
+              {bottomSheet?.defaultTripProgressTitle ?? "Trip Progress"}
+            </Text>
+            <Text
+              style={[
+                styles.defaultPrimary,
+                {
+                  color: primaryTextColor,
+                  fontSize: primaryFontSize,
+                  fontFamily: primaryFontFamily,
+                  fontWeight: primaryFontWeight as any,
+                },
+              ]}
+            >
               {overlayProgress
                 ? (tripPrimaryParts.length > 0 ? tripPrimaryParts.join(" • ") : "Progress available")
                 : "Waiting for progress..."}
             </Text>
-            <Text style={styles.defaultSecondary}>
+            <Text
+              style={[
+                styles.defaultSecondary,
+                {
+                  color: secondaryTextColor,
+                  fontSize: secondaryFontSize,
+                  fontFamily: secondaryFontFamily,
+                  fontWeight: secondaryFontWeight as any,
+                },
+              ]}
+            >
               {overlayProgress
                 ? (tripSecondaryParts.length > 0 ? tripSecondaryParts.join(" • ") : "On route")
                 : (overlayLocation
@@ -799,14 +902,37 @@ export function MapboxNavigationView(
                 }}
                 style={[
                   styles.quickActionButton,
-                  action?.variant === "secondary" && styles.quickActionButtonSecondary,
-                  action?.variant === "ghost" && styles.quickActionButtonGhost,
+                  {
+                    borderRadius: quickActionRadius,
+                    borderWidth: quickActionBorderWidth,
+                    borderColor: quickActionBorderColor,
+                    minHeight: Math.max(30, Math.min(bottomSheet?.actionButtonHeight ?? 34, 64)),
+                    backgroundColor: quickPrimaryBackground,
+                  },
+                  action?.variant === "secondary" && [
+                    styles.quickActionButtonSecondary,
+                    { backgroundColor: quickSecondaryBackground },
+                  ],
+                  action?.variant === "ghost" && [
+                    styles.quickActionButtonGhost,
+                    { backgroundColor: "transparent" },
+                  ],
                 ]}
               >
                 <Text
                   style={[
                     styles.quickActionLabel,
-                    action?.variant === "ghost" && styles.quickActionLabelGhost,
+                    {
+                      fontSize: actionButtonFontSize,
+                      fontFamily: actionButtonFontFamily,
+                      fontWeight: actionButtonFontWeight as any,
+                      color: quickPrimaryText,
+                    },
+                    action?.variant === "secondary" && { color: quickSecondaryText },
+                    action?.variant === "ghost" && [
+                      styles.quickActionLabelGhost,
+                      { color: quickGhostText },
+                    ],
                   ]}
                   numberOfLines={1}
                 >
@@ -856,7 +982,12 @@ export function MapboxNavigationView(
         <View
           style={[
             styles.sheetContainer,
-            { height: currentHeight },
+            {
+              height: currentHeight,
+              backgroundColor: sheetBackgroundColor,
+              borderTopLeftRadius: sheetCornerRadius,
+              borderTopRightRadius: sheetCornerRadius,
+            },
             bottomSheet?.containerStyle,
             sheetState === "hidden" && styles.sheetHidden,
           ]}
@@ -866,7 +997,7 @@ export function MapboxNavigationView(
             <Pressable
               accessibilityRole="button"
               onPress={canToggle ? context.toggle : undefined}
-              style={[styles.sheetHandle, bottomSheet?.handleStyle]}
+              style={[styles.sheetHandle, { backgroundColor: handleColor }, bottomSheet?.handleStyle]}
             />
           ) : null}
           <View
