@@ -40,6 +40,7 @@ import com.mapbox.navigation.core.trip.session.LocationMatcherResult
 import com.mapbox.navigation.core.trip.session.LocationObserver
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
 import com.mapbox.navigation.dropin.NavigationView
+import com.mapbox.navigation.dropin.RouteOptionsInterceptor
 import com.mapbox.navigation.dropin.map.MapViewObserver
 import com.mapbox.navigation.dropin.map.MapViewBinder
 import com.mapbox.navigation.dropin.navigationview.NavigationViewListener
@@ -57,7 +58,7 @@ import java.util.UUID
 class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
   companion object {
     private const val TAG = "MapboxNavigationView"
-    private const val EMBEDDED_BUILD = "1.1.6-embedded-2026-03-01-r2"
+    private const val EMBEDDED_BUILD = "2.0.0-embedded-2026-03-02-r1"
   }
 
   private val expoAppContext: AppContext = appContext
@@ -109,6 +110,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private var navigationView: NavigationView? = null
   private var placeholderView: TextView? = null
+  private var attachedMapView: com.mapbox.maps.MapView? = null
 
   private var mapboxNavigation: MapboxNavigation? = null
   private var hasRequestedRoute = false
@@ -131,6 +133,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private val mapViewObserver = object : MapViewObserver() {
     override fun onAttached(mapView: com.mapbox.maps.MapView) {
+      attachedMapView = mapView
       // If Drop-In uses SurfaceView, it can render behind RN in some hierarchies.
       // Make SurfaceView explicitly top/overlay when present.
       val (textureCount, surfaceCount) = countTextureAndSurfaceViews(mapView)
@@ -149,7 +152,11 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       primeTextureViewIfPresent(mapView)
     }
 
-    override fun onDetached(mapView: com.mapbox.maps.MapView) = Unit
+    override fun onDetached(mapView: com.mapbox.maps.MapView) {
+      if (attachedMapView === mapView) {
+        attachedMapView = null
+      }
+    }
   }
 
   private val navigationViewListener = object : NavigationViewListener() {
@@ -162,13 +169,21 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       onDestinationPreview(mapOf("active" to true))
     }
 
-    override fun onActiveNavigation() = Unit
+    override fun onActiveNavigation() {
+      // Re-apply options once active guidance starts to ensure maneuver/top UI is visible.
+      applyDropInOptions()
+      applyPuckSafeCameraPadding()
+      hidePlaceholder()
+    }
 
     override fun onFreeDrive() {
-      if (enabled) {
-        // In embedded mode, free-drive usually means the session ended.
-        onCancelNavigation(emptyMap())
-      }
+      // Hardening: in some RN/gesture scenarios Drop-In may bounce back to free-drive unexpectedly.
+      // If navigation is still enabled and we have a destination, automatically rebuild preview.
+      if (!enabled) return
+      if (destination.toAnyPointOrNull() == null) return
+      if (hasEmittedArrival) return
+      hasRequestedRoute = false
+      mainHandler.postDelayed({ if (enabled) startIfReady() }, 250)
     }
 
     override fun onRouteFetchFailed(reasons: List<RouterFailure>, routeOptions: RouteOptions) {
@@ -233,6 +248,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
     emitBannerInstruction(progress.bannerInstructions)
     emitJourneyData(banner = progress.bannerInstructions, progress = progress)
+    applyPuckSafeCameraPadding()
   }
 
   private val arrivalObserver = object : ArrivalObserver {
@@ -263,6 +279,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   fun setStartOrigin(origin: Map<String, Any>?) {
     startOrigin = origin
+    hasRequestedRoute = false
     if (enabled) startIfReady()
   }
 
@@ -417,7 +434,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       onError(
         mapOf(
           "code" to "NAVIGATION_SESSION_CONFLICT",
-          "message" to "Another navigation session is already active. Stop full-screen or other embedded navigation before mounting this view."
+          "message" to "Another embedded navigation session is already active. Stop other embedded navigation before mounting this view."
         )
       )
       return false
@@ -603,32 +620,82 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       Log.w(TAG, "startIfReady ($EMBEDDED_BUILD): missing destination")
       return
     }
-    if (origin == null) {
-      // Fall back to Drop-In destination preview when origin is not provided (uses device location).
-      hasRequestedRoute = true
-      hidePlaceholder()
-      view.api.routeReplayEnabled(shouldSimulateRoute)
-      view.api.startDestinationPreview(dest)
-      val preview = view.api.startRoutePreview()
-      if (preview.isError) {
-        onError(mapOf("code" to "ROUTE_ERROR", "message" to "Failed to start route preview: ${preview.error?.message}"))
-      }
-      Log.i(TAG, "startIfReady ($EMBEDDED_BUILD): started preview (origin=device)")
-      return
-    }
-
     if (hasRequestedRoute) return
     hasRequestedRoute = true
     hasEmittedArrival = false
     hidePlaceholder()
 
-    val midPoints = parseWaypoints(waypoints)
-    val coordinates = buildList {
-      add(origin)
-      addAll(midPoints)
-      add(dest)
+    if (origin != null) {
+      val midPoints = parseWaypoints(waypoints)
+      val coordinates = buildList {
+        add(origin)
+        addAll(midPoints)
+        add(dest)
+      }
+      Log.i(
+        TAG,
+        "startIfReady ($EMBEDDED_BUILD): configuring dropin route interceptor coords=${coordinates.size} alt=$routeAlternatives"
+      )
+      view.setRouteOptionsInterceptor(
+        RouteOptionsInterceptor { builder ->
+          builder
+            .applyDefaultNavigationOptions()
+            .applyLanguageAndVoiceUnitOptions(context)
+            .coordinatesList(coordinates)
+            .alternatives(routeAlternatives)
+            .steps(true)
+            .bannerInstructions(true)
+            .voiceInstructions(true)
+            .layersList(MutableList(coordinates.size) { 0 })
+        }
+      )
+    } else {
+      Log.i(TAG, "startIfReady ($EMBEDDED_BUILD): preview with device origin")
     }
-    Log.i(TAG, "startIfReady ($EMBEDDED_BUILD): requesting routes: coords=${coordinates.size} alt=$routeAlternatives")
+
+    view.api.routeReplayEnabled(shouldSimulateRoute)
+    view.api.startDestinationPreview(dest)
+    val preview = view.api.startRoutePreview()
+    if (preview.isError) {
+      val message = preview.error?.message ?: "unknown"
+      val shouldFallback = origin != null && message.contains("cannot be empty", ignoreCase = true)
+      if (shouldFallback) {
+        Log.w(TAG, "Drop-In preview returned empty routes; falling back to explicit route request ($EMBEDDED_BUILD)")
+        val midPoints = parseWaypoints(waypoints)
+        val coordinates = buildList {
+          add(origin)
+          addAll(midPoints)
+          add(dest)
+        }
+        requestAndStartPreviewFromCoordinates(view, nav, coordinates)
+      } else {
+        hasRequestedRoute = false
+        onError(
+          mapOf(
+            "code" to "ROUTE_ERROR",
+            "message" to "Failed to start route preview: $message"
+          )
+        )
+        showPlaceholder("Failed to start route preview.")
+        return
+      }
+    } else {
+      applyDropInOptions()
+      mainHandler.postDelayed({ applyDropInOptions() }, 180)
+    }
+  }
+
+  private fun requestAndStartPreviewFromCoordinates(
+    view: NavigationView,
+    nav: MapboxNavigation,
+    coordinates: List<Point>,
+  ) {
+    if (coordinates.size < 2) {
+      hasRequestedRoute = false
+      onError(mapOf("code" to "ROUTE_ERROR", "message" to "At least origin and destination are required."))
+      showPlaceholder("Missing origin/destination for route preview.")
+      return
+    }
 
     val routeOptions = RouteOptions.builder()
       .applyDefaultNavigationOptions()
@@ -650,12 +717,19 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
             showPlaceholder("No route found.")
             return
           }
-          view.api.routeReplayEnabled(shouldSimulateRoute)
           val expected = view.api.startRoutePreview(routes)
           if (expected.isError) {
             hasRequestedRoute = false
-            onError(mapOf("code" to "ROUTE_ERROR", "message" to "Failed to start route preview: ${expected.error?.message}"))
+            onError(
+              mapOf(
+                "code" to "ROUTE_ERROR",
+                "message" to "Failed to start route preview: ${expected.error?.message}"
+              )
+            )
             showPlaceholder("Failed to start route preview.")
+          } else {
+            applyDropInOptions()
+            mainHandler.postDelayed({ applyDropInOptions() }, 180)
           }
         }
 
@@ -702,7 +776,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private fun applyDropInOptions() {
     val view = navigationView ?: return
-    val normalizedTheme = uiTheme.trim().lowercase()
     val single = mapStyleUri.trim().takeIf { it.isNotEmpty() }
     val day = mapStyleUriDay.trim().takeIf { it.isNotEmpty() } ?: single
     val night = mapStyleUriNight.trim().takeIf { it.isNotEmpty() } ?: day
@@ -718,12 +791,30 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       showActionButtons = showsActionButtons
       showRoadName = showsWayNameLabel
       showSpeedLimit = showsSpeedLimits
+      showArrivalText = true
+      enableMapLongClickIntercept = false
 
       // Ensure Start button is visible in embedded route preview.
       showStartNavigationButton = true
       showEndNavigationButton = true
       showRoutePreviewButton = true
       showMapScalebar = true
+    }
+  }
+
+  private fun applyPuckSafeCameraPadding() {
+    val mapView = attachedMapView ?: return
+    runCatching {
+      val edgeInsets = com.mapbox.maps.EdgeInsets(
+        180.0, // top
+        32.0,  // left
+        300.0, // bottom
+        32.0   // right
+      )
+      val camera = com.mapbox.maps.CameraOptions.Builder()
+        .padding(edgeInsets)
+        .build()
+      mapView.getMapboxMap().setCamera(camera)
     }
   }
 

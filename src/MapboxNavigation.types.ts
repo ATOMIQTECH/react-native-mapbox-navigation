@@ -50,11 +50,11 @@ export type BottomSheetOptions = {
   overlayLocationUpdateIntervalMs?: number;
   /** Embedded overlay mode: minimum interval for progress-driven overlay rerenders (ms). */
   overlayProgressUpdateIntervalMs?: number;
-  /** iOS full-screen customNative: reveal custom sheet when user taps/swipes native Mapbox bottom banner. */
+  /** Overlay mode: reveal custom sheet when user swipes up from the bottom hot-zone. */
   revealOnNativeBannerGesture?: boolean;
-  /** Full-screen customNative: hidden gesture-reveal zone height in points/dp (default `100`). */
+  /** Hidden gesture-reveal zone height in points/dp (default `100`). */
   revealGestureHotzoneHeight?: number;
-  /** Full-screen customNative: right-side exclusion width for native end/camera buttons (points/dp, default `80`). */
+  /** Right-side exclusion width (points/dp, default `80`) to avoid blocking native buttons. */
   revealGestureRightExclusionWidth?: number;
   /** Show built-in default content cards when custom content is not provided. */
   showDefaultContent?: boolean;
@@ -84,10 +84,10 @@ export type BottomSheetOptions = {
   actionButtonTitle?: string;
   /** Overlay sheet: optional secondary action button label. */
   secondaryActionButtonTitle?: string;
-  /** Overlay sheet: primary action behavior. Defaults to `stopNavigation`. */
-  primaryActionButtonBehavior?: "stopNavigation" | "emitEvent";
-  /** Overlay sheet: secondary action behavior. Defaults to `emitEvent`. */
-  secondaryActionButtonBehavior?: "none" | "stopNavigation" | "emitEvent";
+  /** Overlay sheet: primary action behavior. */
+  primaryActionButtonBehavior?: "emitEvent";
+  /** Overlay sheet: secondary action behavior. */
+  secondaryActionButtonBehavior?: "none" | "emitEvent";
   /** Overlay sheet: action button border color. */
   actionButtonBorderColor?: string;
   /** Overlay sheet: action button border width. */
@@ -156,41 +156,41 @@ export type BottomSheetOptions = {
   quickActions?: BottomSheetQuickAction[];
   /** Overlay prebuilt quick actions with package-managed behavior. */
   builtInQuickActions?: BottomSheetBuiltInQuickAction[];
-  /** iOS full-screen `customNative`: extra native content rows below progress/instruction. */
+  /** Extra content rows for package-rendered overlay sheet. */
   customRows?: BottomSheetCustomRow[];
-  /** iOS full-screen `customNative`: optional top header title. */
+  /** Optional top header title. */
   headerTitle?: string;
-  /** Full-screen custom-native header title font size. */
+  /** Header title font size. */
   headerTitleFontSize?: number;
-  /** Full-screen custom-native header title font family name. */
+  /** Header title font family name. */
   headerTitleFontFamily?: string;
-  /** Full-screen custom-native header title font weight. */
+  /** Header title font weight. */
   headerTitleFontWeight?: string;
-  /** iOS full-screen `customNative`: optional top header subtitle. */
+  /** Optional top header subtitle. */
   headerSubtitle?: string;
-  /** Full-screen custom-native header subtitle font size. */
+  /** Header subtitle font size. */
   headerSubtitleFontSize?: number;
-  /** Full-screen custom-native header subtitle font family name. */
+  /** Header subtitle font family name. */
   headerSubtitleFontFamily?: string;
-  /** Full-screen custom-native header subtitle font weight. */
+  /** Header subtitle font weight. */
   headerSubtitleFontWeight?: string;
-  /** iOS full-screen `customNative`: optional header badge text on trailing side. */
+  /** Optional header badge text on trailing side. */
   headerBadgeText?: string;
-  /** Full-screen custom-native header badge font size. */
+  /** Header badge font size. */
   headerBadgeFontSize?: number;
-  /** Full-screen custom-native header badge font family name. */
+  /** Header badge font family name. */
   headerBadgeFontFamily?: string;
-  /** Full-screen custom-native header badge font weight. */
+  /** Header badge font weight. */
   headerBadgeFontWeight?: string;
-  /** iOS full-screen `customNative`: optional header badge background color. */
+  /** Optional header badge background color. */
   headerBadgeBackgroundColor?: string;
-  /** iOS full-screen `customNative`: optional header badge text color. */
+  /** Optional header badge text color. */
   headerBadgeTextColor?: string;
-  /** Full-screen custom-native header badge corner radius. */
+  /** Header badge corner radius. */
   headerBadgeCornerRadius?: number;
-  /** Full-screen custom-native header badge border color. */
+  /** Header badge border color. */
   headerBadgeBorderColor?: string;
-  /** Full-screen custom-native header badge border width. */
+  /** Header badge border width. */
   headerBadgeBorderWidth?: number;
 };
 
@@ -201,7 +201,7 @@ export type BottomSheetQuickAction = {
   variant?: "primary" | "secondary" | "ghost";
 };
 
-/** Extra row item for iOS full-screen custom native sheet. */
+/** Extra row item for package overlay sheet. */
 export type BottomSheetCustomRow = {
   id: string;
   /** Optional SF Symbol name for native icon (for example: `car.fill`). */
@@ -243,7 +243,7 @@ export type NavigationSettings = {
   isNavigating: boolean;
   mute: boolean;
   voiceVolume: number;
-  distanceUnit: 'metric' | 'imperial';
+  distanceUnit: "metric" | "imperial";
   language: string;
 };
 
@@ -316,7 +316,7 @@ export type BannerInstruction = {
   stepDistanceRemaining?: number;
 };
 
-/** Full-screen bottom-sheet action event payload. */
+/** Overlay bottom-sheet action event payload. */
 export type BottomSheetActionEvent = {
   actionId: "primary" | "secondary" | "cancel" | string;
 };
@@ -330,7 +330,7 @@ export type Subscription = {
 export interface MapboxNavigationModule {
   setMuted(muted: boolean): Promise<void>;
   setVoiceVolume(volume: number): Promise<void>;
-  setDistanceUnit(unit: 'metric' | 'imperial'): Promise<void>;
+  setDistanceUnit(unit: "metric" | "imperial"): Promise<void>;
   setLanguage(language: string): Promise<void>;
   getNavigationSettings(): Promise<NavigationSettings>;
 }
@@ -344,14 +344,14 @@ export interface MapboxNavigationViewProps {
   waypoints?: Waypoint[];
   shouldSimulateRoute?: boolean;
   showCancelButton?: boolean;
-  uiTheme?: 'system' | 'light' | 'dark' | 'day' | 'night';
-  distanceUnit?: 'metric' | 'imperial';
+  uiTheme?: "system" | "light" | "dark" | "day" | "night";
+  distanceUnit?: "metric" | "imperial";
   language?: string;
   mute?: boolean;
   voiceVolume?: number;
   cameraPitch?: number;
   cameraZoom?: number;
-  cameraMode?: 'following' | 'overview';
+  cameraMode?: "following" | "overview";
   mapStyleUri?: string;
   mapStyleUriDay?: string;
   mapStyleUriNight?: string;
@@ -385,7 +385,6 @@ export interface MapboxNavigationViewProps {
     bannerInstruction?: BannerInstruction;
     routeProgress?: RouteProgress;
     location?: LocationUpdate;
-    stopNavigation: () => Promise<void>;
     emitAction: (actionId: string) => void;
   }) => ReactNode;
   /** Optional children overlayed above native navigation view. */

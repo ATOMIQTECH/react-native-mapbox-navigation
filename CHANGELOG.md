@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.0
+
+- Breaking: package is now embedded-only on both iOS and Android.
+- Removed full-screen API surface: `startNavigation`, `stopNavigation`, `isNavigating`.
+- Removed Android full-screen activity implementation and manifest entry.
+- Simplified iOS module bridge to embedded-only runtime + `MapboxNavigationView` props.
+- Updated JS/types/docs/examples for embedded-only usage and overlay custom sheet flow.
+- Android embedded: switched route preview startup to Drop-In route preview pipeline with route options interceptor.
+- Android embedded: adjusted session-conflict messages to embedded-only wording.
+- Overlay custom sheet: fixed state handling (`collapsed` height now distinct from `expanded`) and changed default right exclusion to `0` to avoid blocking native right-side controls.
+
 ## 1.1.6
 
 - Android embedded: switch to Mapbox’s official Drop-In `NavigationView` UI (route preview panel + Start button + turn-by-turn UI) to match the SDK look/feel (and iOS embedded behavior).
