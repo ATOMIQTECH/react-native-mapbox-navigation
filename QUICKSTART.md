@@ -1,46 +1,47 @@
-# Quick Start
+# Quickstart
 
 ## 1. Install
 
 ```bash
 npm install @atomiqlab/react-native-mapbox-navigation
-npx expo install expo-build-properties
 ```
 
-## 2. Configure plugin
+## 2. Configure Mapbox token
 
-In `app.json` / `app.config.js`:
+Set `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN` and run prebuild so native token resources are generated.
 
-```json
-{
-  "expo": {
-    "plugins": [
-      "@atomiqlab/react-native-mapbox-navigation"
-    ]
-  }
-}
+## 3. Render embedded navigation
+
+```tsx
+import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation";
+
+<MapboxNavigationView
+  enabled
+  style={{ flex: 1 }}
+  destination={{ latitude: 37.7847, longitude: -122.4073 }}
+  shouldSimulateRoute
+/>
 ```
 
-## 3. Set tokens
+## 4. Optional custom overlay sheet
 
-- Public token: `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN=pk...`
-- Downloads token: `MAPBOX_DOWNLOADS_TOKEN=sk...` (`DOWNLOADS:READ` required)
-
-## 4. Regenerate native projects
-
-```bash
-npx expo prebuild --clean
+```tsx
+<MapboxNavigationView
+  enabled
+  destination={{ latitude: 37.7847, longitude: -122.4073 }}
+  bottomSheet={{
+    enabled: true,
+    mode: "overlay",
+    initialState: "hidden",
+    revealGestureHotzoneHeight: 120,
+    revealGestureRightExclusionWidth: 0,
+  }}
+  renderBottomSheet={({ bannerInstruction, routeProgress }) => (
+    <YourSheet bannerInstruction={bannerInstruction} routeProgress={routeProgress} />
+  )}
+/>
 ```
 
-## 5. Start navigation
+## 2.0.0 Note
 
-```ts
-import { startNavigation } from '@atomiqlab/react-native-mapbox-navigation';
-
-await startNavigation({
-  destination: { latitude: 37.7847, longitude: -122.4073, name: 'Downtown' },
-  startOrigin: { latitude: 37.7749, longitude: -122.4194 },
-  shouldSimulateRoute: true,
-  cameraMode: 'following',
-});
-```
+This package is embedded-only. Full-screen APIs were removed.

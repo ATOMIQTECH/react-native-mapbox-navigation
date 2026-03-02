@@ -1,561 +1,108 @@
 # @atomiqlab/react-native-mapbox-navigation
 
-Native Mapbox turn-by-turn navigation for Expo apps on iOS and Android.
+Embedded Mapbox turn-by-turn navigation for Expo and React Native (iOS + Android).
 
----
+## 2.0.0 Breaking Change
 
-## Features
+This package is now **embedded-only**.
 
-- Full-screen native navigation via `startNavigation`
-- Embedded native navigation UI via `MapboxNavigationView`
-- Real-time events: location, route progress, banner instruction, arrival, cancel, and error
-- Runtime controls for mute, voice volume, distance unit, and language
-- Navigation customization: camera mode/pitch/zoom, theme, map style, and UI visibility toggles
-- Expo config plugin that applies required Android and iOS native setup
+Removed from v1 full-screen API:
+- `startNavigation(...)`
+- `isNavigating()`
+- full-screen navigation activity/controller flow
 
----
+Use `MapboxNavigationView` for both platforms.
 
-# Screenshots
-
-<p align="center">
-  <strong>iOS</strong>
-  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <strong>Android</strong>
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/ios.png" alt="iOS Navigation Screenshot" width="320" />
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="docs/screenshots/android.png" alt="Android Navigation Screenshot" width="320" />
-</p>
-
----
-
-# Support Us
-
-<p align="center">
-  <a href="https://ko-fi.com/atomiqlabs" target="_blank">
-    <img 
-      src="docs/imgs/support_me_on_kofi_badge_red.png" 
-      alt="Support on Ko-fi"
-      width="260"
-    />
-  </a>
-</p>
-
-<p align="center">
-  If this package helps your work, consider supporting its development.  
-  Your support helps maintain, improve, and expand this project.
-</p>
-
----
-
-## Requirements
-
-- Expo SDK `>=50`
-- iOS `14+`
-- Mapbox access credentials:
-  - Public token (`pk...`)
-  - Downloads token (`sk...`) with `DOWNLOADS:READ`
-
----
-
-## Installation
+## Install
 
 ```bash
 npm install @atomiqlab/react-native-mapbox-navigation
 ```
 
----
-
-## Expo Setup
-
-Add the plugin in your app config (`app.json` or `app.config.js`):
-
-```json
-{
-  "expo": {
-    "plugins": ["@atomiqlab/react-native-mapbox-navigation"]
-  }
-}
-```
-
-Set these environment variables:
-
-- `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN`
-- `MAPBOX_DOWNLOADS_TOKEN`
-
-Regenerate native projects:
-
-```bash
-npx expo prebuild --clean
-```
-
----
-
-### Token Validation Behavior
-
-The config plugin fails fast during prebuild/build when tokens are missing or malformed:
-
-- Missing/invalid public token (`pk...`)
-- Missing/invalid downloads token (`sk...`)
-
-This prevents silent runtime failures and surfaces setup issues early.
-
----
-
-## Quick Start
-
-```ts
-import {
-  startNavigation,
-  stopNavigation,
-  addLocationChangeListener,
-  addRouteProgressChangeListener,
-  addBannerInstructionListener,
-  addArriveListener,
-  addCancelNavigationListener,
-  addErrorListener,
-} from "@atomiqlab/react-native-mapbox-navigation";
-
-await startNavigation({
-  destination: { latitude: 37.7847, longitude: -122.4073, name: "Downtown" },
-  startOrigin: { latitude: 37.7749, longitude: -122.4194 },
-  shouldSimulateRoute: true,
-  routeAlternatives: true,
-  cameraMode: "following",
-  uiTheme: "system",
-  distanceUnit: "metric",
-  language: "en",
-});
-
-const subscriptions = [
-  addLocationChangeListener((location) => console.log(location)),
-  addRouteProgressChangeListener((progress) => console.log(progress)),
-  addBannerInstructionListener((instruction) =>
-    console.log(instruction.primaryText),
-  ),
-  addArriveListener((arrival) => console.log(arrival)),
-  addCancelNavigationListener(() => console.log("cancelled")),
-  addErrorListener((error) => console.warn(error)),
-];
-
-// Cleanup
-subscriptions.forEach((sub) => sub.remove());
-await stopNavigation();
-```
-
----
-
-## Embedded Navigation View
+## Minimal Usage
 
 ```tsx
-import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation";
+import { MapboxNavigationView, type Waypoint } from "@atomiqlab/react-native-mapbox-navigation";
+
+const start: Waypoint = { latitude: 37.7749, longitude: -122.4194 };
+const destination: Waypoint = { latitude: 37.7847, longitude: -122.4073 };
 
 <MapboxNavigationView
+  enabled
   style={{ flex: 1 }}
-  destination={{ latitude: 37.7847, longitude: -122.4073, name: "Downtown" }}
-  startOrigin={{ latitude: 37.7749, longitude: -122.4194 }}
+  startOrigin={start}
+  destination={destination}
   shouldSimulateRoute
-  cameraMode="following"
-  showsTripProgress
-  onBannerInstruction={(instruction) => console.log(instruction.primaryText)}
-  onRouteProgressChange={(progress) => console.log(progress.fractionTraveled)}
-  onError={(error) => console.warn(error.message)}
-/>;
+/>
 ```
 
----
+## Overlay Custom Bottom Sheet
 
-## Example
+`bottomSheet.mode` is overlay-only. The package renders your custom sheet above the native map/navigation UI.
 
 ```tsx
-import React, { useEffect, useMemo, useState } from "react";
-import {
-  addArriveListener,
-  addBannerInstructionListener,
-  addCancelNavigationListener,
-  addErrorListener,
-  addLocationChangeListener,
-  addRouteProgressChangeListener,
-  getNavigationSettings,
-  isNavigating,
-  MapboxNavigationView,
-  setDistanceUnit,
-  setLanguage,
-  setMuted,
-  setVoiceVolume,
-  startNavigation,
-  stopNavigation,
-  type Waypoint,
-} from "@atomiqlab/react-native-mapbox-navigation";
-import {
-  Platform,
-  Pressable,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
-
-const START: Waypoint = {
-  latitude: 37.7749,
-  longitude: -122.4194,
-  name: "San Francisco",
-};
-const DEST: Waypoint = {
-  latitude: 37.7847,
-  longitude: -122.4073,
-  name: "Downtown",
-};
-
-export default function Index() {
-  const [logs, setLogs] = useState<string[]>([]);
-  const [navigating, setNavigating] = useState(false);
-  const [showEmbedded, setShowEmbedded] = useState(false);
-
-  const [mute, setMuteState] = useState(false);
-  const [unit, setUnit] = useState<"metric" | "imperial">("metric");
-  const [language, setLanguageState] = useState("en");
-  const [volumeInput, setVolumeInput] = useState("1");
-
-  const pushLog = (line: string) =>
-    setLogs((prev) =>
-      [`${new Date().toLocaleTimeString()}  ${line}`, ...prev].slice(0, 40),
-    );
-
-  useEffect(() => {
-    const s1 = addLocationChangeListener((e) =>
-      pushLog(`location: ${e.latitude.toFixed(5)}, ${e.longitude.toFixed(5)}`),
-    );
-    const s2 = addRouteProgressChangeListener((e) =>
-      pushLog(`progress: ${(e.fractionTraveled * 100).toFixed(1)}%`),
-    );
-    const s3 = addBannerInstructionListener((e) =>
-      pushLog(`banner: ${e.primaryText}`),
-    );
-    const s4 = addArriveListener((e) => {
-      pushLog(`arrive: ${e.name ?? "destination"}`);
-      setNavigating(false);
-    });
-    const s5 = addCancelNavigationListener(() => {
-      pushLog("cancelled");
-      setNavigating(false);
-    });
-    const s6 = addErrorListener((e) =>
-      pushLog(`error: ${e.message ?? e.code}`),
-    );
-
-    (async () => {
-      try {
-        setNavigating(await isNavigating());
-        pushLog(`isNavigating() loaded`);
-      } catch (e: any) {
-        pushLog(`isNavigating failed: ${e?.message ?? "unknown"}`);
-      }
-    })();
-
-    return () => {
-      s1.remove();
-      s2.remove();
-      s3.remove();
-      s4.remove();
-      s5.remove();
-      s6.remove();
-    };
-  }, []);
-
-  const canRun = useMemo(
-    () => Platform.OS === "ios" || Platform.OS === "android",
-    [],
-  );
-
-  if (!canRun) {
-    return (
-      <SafeAreaView style={styles.center}>
-        <Text style={styles.title}>Run on iOS/Android only</Text>
-      </SafeAreaView>
-    );
-  }
-
-  return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.title}>Mapbox Navigation Full API Test</Text>
-        <Text style={styles.status}>
-          Status: {navigating ? "Navigating" : "Idle"}
-        </Text>
-
-        <View style={styles.row}>
-          <Pressable
-            style={styles.btn}
-            onPress={async () => {
-              try {
-                await startNavigation({
-                  startOrigin: START,
-                  destination: DEST,
-                  shouldSimulateRoute: true,
-                  routeAlternatives: true,
-                  cameraMode: "following",
-                  uiTheme: "system",
-                  mute,
-                  voiceVolume: Math.max(
-                    0,
-                    Math.min(Number(volumeInput) || 1, 1),
-                  ),
-                  distanceUnit: unit,
-                  language,
-                });
-                setNavigating(true);
-                pushLog("startNavigation() ok");
-              } catch (e: any) {
-                pushLog(`startNavigation failed: ${e?.message ?? "unknown"}`);
-              }
-            }}
-          >
-            <Text style={styles.btnText}>startNavigation</Text>
-          </Pressable>
-
-          <Pressable
-            style={styles.btn}
-            onPress={async () => {
-              try {
-                await stopNavigation();
-                setNavigating(false);
-                pushLog("stopNavigation() ok");
-              } catch (e: any) {
-                pushLog(`stopNavigation failed: ${e?.message ?? "unknown"}`);
-              }
-            }}
-          >
-            <Text style={styles.btnText}>stopNavigation</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.row}>
-          <Pressable
-            style={styles.btn}
-            onPress={async () =>
-              pushLog(`isNavigating(): ${await isNavigating()}`)
-            }
-          >
-            <Text style={styles.btnText}>isNavigating</Text>
-          </Pressable>
-
-          <Pressable
-            style={styles.btn}
-            onPress={async () =>
-              pushLog(
-                `getNavigationSettings(): ${JSON.stringify(await getNavigationSettings())}`,
-              )
-            }
-          >
-            <Text style={styles.btnText}>getNavigationSettings</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.label}>mute / setMuted</Text>
-          <View style={styles.row}>
-            <Pressable
-              style={styles.btn}
-              onPress={async () => {
-                const next = !mute;
-                setMuteState(next);
-                await setMuted(next);
-                pushLog(`setMuted(${next})`);
-              }}
-            >
-              <Text style={styles.btnText}>{mute ? "Unmute" : "Mute"}</Text>
-            </Pressable>
-          </View>
-
-          <Text style={styles.label}>setVoiceVolume (0..1)</Text>
-          <View style={styles.row}>
-            <TextInput
-              style={styles.input}
-              value={volumeInput}
-              onChangeText={setVolumeInput}
-              keyboardType="decimal-pad"
-            />
-            <Pressable
-              style={styles.btn}
-              onPress={async () => {
-                const vol = Math.max(0, Math.min(Number(volumeInput) || 1, 1));
-                await setVoiceVolume(vol);
-                pushLog(`setVoiceVolume(${vol})`);
-              }}
-            >
-              <Text style={styles.btnText}>Apply</Text>
-            </Pressable>
-          </View>
-
-          <Text style={styles.label}>setDistanceUnit</Text>
-          <View style={styles.row}>
-            <Pressable
-              style={styles.btn}
-              onPress={async () => {
-                setUnit("metric");
-                await setDistanceUnit("metric");
-                pushLog("setDistanceUnit(metric)");
-              }}
-            >
-              <Text style={styles.btnText}>Metric</Text>
-            </Pressable>
-            <Pressable
-              style={styles.btn}
-              onPress={async () => {
-                setUnit("imperial");
-                await setDistanceUnit("imperial");
-                pushLog("setDistanceUnit(imperial)");
-              }}
-            >
-              <Text style={styles.btnText}>Imperial</Text>
-            </Pressable>
-          </View>
-
-          <Text style={styles.label}>setLanguage</Text>
-          <View style={styles.row}>
-            <TextInput
-              style={styles.input}
-              value={language}
-              onChangeText={setLanguageState}
-            />
-            <Pressable
-              style={styles.btn}
-              onPress={async () => {
-                await setLanguage(language.trim() || "en");
-                pushLog(`setLanguage(${language.trim() || "en"})`);
-              }}
-            >
-              <Text style={styles.btnText}>Apply</Text>
-            </Pressable>
-          </View>
-        </View>
-
-        <Pressable
-          style={styles.btn}
-          onPress={() => setShowEmbedded((v) => !v)}
-        >
-          <Text style={styles.btnText}>
-            {showEmbedded ? "Hide" : "Show"} Embedded MapboxNavigationView
-          </Text>
-        </Pressable>
-
-        {showEmbedded ? (
-          <View style={styles.embeddedWrap}>
-            <MapboxNavigationView
-              style={{ flex: 1 }}
-              destination={DEST}
-              startOrigin={START}
-              shouldSimulateRoute
-              cameraMode="overview"
-              uiTheme="system"
-              onError={(e) => pushLog(`embedded error: ${e.message ?? e.code}`)}
-              onBannerInstruction={(e) =>
-                pushLog(`embedded banner: ${e.primaryText}`)
-              }
-              onArrive={(e) =>
-                pushLog(`embedded arrive: ${e.name ?? "destination"}`)
-              }
-              onCancelNavigation={() => pushLog("embedded cancelled")}
-            />
-          </View>
-        ) : null}
-
-        <View style={styles.card}>
-          <Text style={styles.label}>Event Logs</Text>
-          {logs.map((l, i) => (
-            <Text key={`${l}-${i}`} style={styles.log}>
-              {l}
-            </Text>
-          ))}
-        </View>
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0b1020" },
-  center: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#0b1020",
-  },
-  content: { padding: 14, gap: 10, paddingBottom: 28 },
-  title: { color: "#fff", fontSize: 22, fontWeight: "800" },
-  status: { color: "#8ec5ff", fontSize: 13 },
-  row: { flexDirection: "row", gap: 8, alignItems: "center" },
-  card: { backgroundColor: "#131a2d", borderRadius: 12, padding: 10, gap: 8 },
-  label: { color: "#cde4ff", fontSize: 12, fontWeight: "700" },
-  input: {
-    flex: 1,
-    backgroundColor: "#0e1426",
-    borderColor: "#2b3a5d",
-    borderWidth: 1,
-    borderRadius: 8,
-    color: "#fff",
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  btn: {
-    flex: 1,
-    backgroundColor: "#2563eb",
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    alignItems: "center",
-  },
-  btnText: { color: "#fff", fontWeight: "700", fontSize: 12 },
-  embeddedWrap: { height: 320, borderRadius: 12, overflow: "hidden" },
-  log: { color: "#dbeafe", fontSize: 11, marginBottom: 2 },
-});
+<MapboxNavigationView
+  enabled
+  style={{ flex: 1 }}
+  destination={destination}
+  bottomSheet={{
+    enabled: true,
+    mode: "overlay",
+    initialState: "hidden",
+    collapsedHeight: 124,
+    expandedHeight: 340,
+    collapsedBottomOffset: 24,
+    showHandle: true,
+    colorMode: "dark",
+    builtInQuickActions: ["overview", "recenter", "toggleMute", "stop"],
+  }}
+  renderBottomSheet={({ state, bannerInstruction, routeProgress, show, hide }) => (
+    <YourCustomSheet
+      state={state}
+      bannerInstruction={bannerInstruction}
+      routeProgress={routeProgress}
+      onShow={show}
+      onHide={hide}
+    />
+  )}
+/>
 ```
 
----
+## Runtime APIs
 
-## API Overview
-
-### Core Functions
-
-- `startNavigation(options)`
-- `stopNavigation()`
-- `isNavigating()`
+- `setMuted(muted: boolean)`
+- `setVoiceVolume(volume: number)`
+- `setDistanceUnit("metric" | "imperial")`
+- `setLanguage(language: string)`
 - `getNavigationSettings()`
-- `setMuted(muted)`
-- `setVoiceVolume(volume)`
-- `setDistanceUnit(unit)`
-- `setLanguage(language)`
+- `stopNavigation()` stop active embedded session
 
-### Event Listeners
+## Events
 
-- `addLocationChangeListener(listener)`
-- `addRouteProgressChangeListener(listener)`
-- `addBannerInstructionListener(listener)`
-- `addArriveListener(listener)`
-- `addCancelNavigationListener(listener)`
-- `addErrorListener(listener)`
-
----
-
-## ⚠️ Common Error Codes
-
-- `MAPBOX_TOKEN_INVALID`
-- `MAPBOX_TOKEN_FORBIDDEN`
-- `MAPBOX_RATE_LIMITED`
-- `ROUTE_FETCH_FAILED`
-- `CURRENT_LOCATION_UNAVAILABLE`
-- `INVALID_COORDINATES`
-
-Subscribe via `addErrorListener` or `onError` to surface these during development and production diagnostics.
-
----
+Use listeners or component callbacks:
+- `onLocationChange`
+- `onRouteProgressChange`
+- `onRouteChange`
+- `onJourneyDataChange`
+- `onBannerInstruction`
+- `onArrive`
+- `onDestinationPreview` (Android)
+- `onDestinationChanged` (Android)
+- `onCancelNavigation`
+- `onError`
+- `onOverlayBottomSheetActionPress`
 
 ## Platform Notes
 
-- Android: `startOrigin` optional (current location supported)
-- iOS: `startOrigin` optional (resolved at runtime with location permission)
+- Android uses Mapbox Drop-In `NavigationView` in embedded mode.
+- Android overlay mode keeps custom sheet in `collapsed/expanded`.
+- iOS overlay mode uses `hidden/expanded`.
+- Android full-screen activity has been removed.
+- iOS full-screen module flow has been removed; embedded view is the only mode.
+
+## Docs
+
+- [QUICKSTART.md](./QUICKSTART.md)
+- [docs/USAGE.md](./docs/USAGE.md)
+- [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)
+- [CHANGELOG.md](./CHANGELOG.md)
