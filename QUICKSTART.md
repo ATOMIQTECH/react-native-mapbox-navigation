@@ -1,6 +1,4 @@
-# Quick Start
-
-Current package version: `1.1.6`
+# Quickstart
 
 ## 1. Install
 
@@ -8,49 +6,42 @@ Current package version: `1.1.6`
 npm install @atomiqlab/react-native-mapbox-navigation
 ```
 
-## 2. Configure plugin
+## 2. Configure Mapbox token
 
-In `app.json` / `app.config.js`:
+Set `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN` and run prebuild so native token resources are generated.
 
-```json
-{
-  "expo": {
-    "plugins": [
-      "@atomiqlab/react-native-mapbox-navigation"
-    ]
-  }
-}
-```
+## 3. Render embedded navigation
 
-## 3. Set tokens
-
-- Public token: `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN=pk...`
-- Downloads token: `MAPBOX_DOWNLOADS_TOKEN=sk...` (`DOWNLOADS:READ` required)
-
-## 4. Regenerate native projects
-
-```bash
-npx expo prebuild --clean
-```
-
-## 5. Render embedded navigation
-
-```ts
-import { MapboxNavigationView } from '@atomiqlab/react-native-mapbox-navigation';
+```tsx
+import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation";
 
 <MapboxNavigationView
   enabled
   style={{ flex: 1 }}
-  startOrigin={{ latitude: 37.7749, longitude: -122.4194 }}
-  destination={{ latitude: 37.7847, longitude: -122.4073, name: 'Downtown' }}
+  destination={{ latitude: 37.7847, longitude: -122.4073 }}
   shouldSimulateRoute
-  bottomSheet={{
-    enabled: true,
-    mode: 'overlay',
-    initialState: 'hidden',
-    builtInQuickActions: ['overview', 'recenter', 'toggleMute', 'stop'],
-  }}
-/>;
+/>
 ```
 
-For overlay bottom-sheet customization and embedded usage, see [docs/USAGE.md](docs/USAGE.md).
+## 4. Optional custom overlay sheet
+
+```tsx
+<MapboxNavigationView
+  enabled
+  destination={{ latitude: 37.7847, longitude: -122.4073 }}
+  bottomSheet={{
+    enabled: true,
+    mode: "overlay",
+    initialState: "hidden",
+    revealGestureHotzoneHeight: 120,
+    revealGestureRightExclusionWidth: 0,
+  }}
+  renderBottomSheet={({ bannerInstruction, routeProgress }) => (
+    <YourSheet bannerInstruction={bannerInstruction} routeProgress={routeProgress} />
+  )}
+/>
+```
+
+## 2.0.0 Note
+
+This package is embedded-only. Full-screen APIs were removed.

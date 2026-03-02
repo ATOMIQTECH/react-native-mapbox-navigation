@@ -116,7 +116,7 @@ class MapboxNavigationView: ExpoView {
         hasPendingSessionConflict = true
         onError([
           "code": "NAVIGATION_SESSION_CONFLICT",
-          "message": "Another navigation session is already active. Stop full-screen or other embedded navigation before mounting this view."
+          "message": "Another embedded navigation session is already active. Stop other embedded navigation before mounting this view."
         ])
       }
       return

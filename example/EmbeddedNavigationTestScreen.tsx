@@ -1,5 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { PermissionsAndroid, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  PermissionsAndroid,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import {
   MapboxNavigationView,
   type BannerInstruction,
@@ -7,8 +14,16 @@ import {
   type Waypoint,
 } from "@atomiqlab/react-native-mapbox-navigation";
 
-const START: Waypoint = { latitude: 37.7749, longitude: -122.4194, name: "Start" };
-const DEST: Waypoint = { latitude: 37.7847, longitude: -122.4073, name: "Downtown" };
+const START: Waypoint = {
+  latitude: 37.7749,
+  longitude: -122.4194,
+  name: "Start",
+};
+const DEST: Waypoint = {
+  latitude: 37.7847,
+  longitude: -122.4073,
+  name: "Downtown",
+};
 
 function formatInstruction(instruction?: BannerInstruction): string {
   const primary = instruction?.primaryText?.trim();
@@ -26,16 +41,20 @@ function formatRemaining(progress?: RouteProgress): string {
 }
 
 export default function EmbeddedNavigationTestScreen() {
-  const [permissionGranted, setPermissionGranted] = useState(Platform.OS !== "android");
+  const [permissionGranted, setPermissionGranted] = useState(
+    Platform.OS !== "android",
+  );
   const [enabled, setEnabled] = useState(Platform.OS !== "android");
-  const [useCustomSheet, setUseCustomSheet] = useState(false);
+  const [useCustomSheet, setUseCustomSheet] = useState(true);
   const [lastError, setLastError] = useState<string>("");
 
   useEffect(() => {
     if (Platform.OS !== "android") {
       return;
     }
-    PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION)
+    PermissionsAndroid.check(
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+    )
       .then((has) => {
         setPermissionGranted(has);
         setEnabled(has);
@@ -61,12 +80,50 @@ export default function EmbeddedNavigationTestScreen() {
     () => ({
       enabled: true,
       mode: "overlay" as const,
-      initialState: "hidden" as const,
+      initialState: "collapsed" as const,
       revealGestureHotzoneHeight: 120,
+      revealGestureRightExclusionWidth: 0,
       collapsedHeight: 124,
       expandedHeight: 340,
       showHandle: true,
       enableTapToToggle: true,
+      cornerRadius: 20,
+      backgroundColor: "rgba(8, 15, 30, 0.96)",
+      handleColor: "#93c5fd",
+      contentHorizontalPadding: 16,
+      contentTopSpacing: 4,
+      contentBottomPadding: 18,
+      primaryTextColor: "#ffffff",
+      secondaryTextColor: "rgba(191, 219, 254, 0.95)",
+      primaryTextFontSize: 16,
+      primaryTextFontWeight: "800" as const,
+      secondaryTextFontSize: 12,
+      secondaryTextFontWeight: "600" as const,
+      actionButtonFontSize: 13,
+      actionButtonFontWeight: "800" as const,
+      actionButtonBackgroundColor: "#2563eb",
+      actionButtonTextColor: "#ffffff",
+      actionButtonBorderColor: "#1d4ed8",
+      actionButtonBorderWidth: 1,
+      actionButtonCornerRadius: 12,
+      secondaryActionButtonBackgroundColor: "#0f172a",
+      secondaryActionButtonTextColor: "#bfdbfe",
+      quickActionBackgroundColor: "#1d4ed8",
+      quickActionTextColor: "#ffffff",
+      quickActionSecondaryBackgroundColor: "#0f172a",
+      quickActionSecondaryTextColor: "#bfdbfe",
+      quickActionGhostTextColor: "#93c5fd",
+      quickActionBorderColor: "rgba(148, 163, 184, 0.5)",
+      quickActionBorderWidth: 1,
+      quickActionCornerRadius: 12,
+      showDefaultContent: true,
+      defaultManeuverTitle: "Next turn",
+      defaultTripProgressTitle: "ETA & progress",
+      showCurrentStreet: true,
+      showRemainingDistance: true,
+      showRemainingDuration: true,
+      showETA: true,
+      showCompletionPercent: true,
       builtInQuickActions: ["overview", "recenter", "toggleMute", "stop"],
     }),
     [],
@@ -84,7 +141,14 @@ export default function EmbeddedNavigationTestScreen() {
         onError={(e) => setLastError(`${e.code}: ${e.message}`)}
         renderBottomSheet={
           useCustomSheet
-            ? ({ state, show, hide, toggle, bannerInstruction, routeProgress }) => (
+            ? ({
+                state,
+                show,
+                hide,
+                toggle,
+                bannerInstruction,
+                routeProgress,
+              }) => (
                 <View style={styles.sheet}>
                   <View style={styles.sheetHeader}>
                     <Text style={styles.sheetTitle}>Embedded Sheet</Text>
@@ -97,7 +161,10 @@ export default function EmbeddedNavigationTestScreen() {
                     {formatRemaining(routeProgress)}
                   </Text>
                   <View style={styles.sheetRow}>
-                    <Pressable style={styles.sheetBtn} onPress={() => show("collapsed")}>
+                    <Pressable
+                      style={styles.sheetBtn}
+                      onPress={() => show("collapsed")}
+                    >
                       <Text style={styles.sheetBtnText}>Show</Text>
                     </Pressable>
                     <Pressable style={styles.sheetBtn} onPress={toggle}>
@@ -115,28 +182,46 @@ export default function EmbeddedNavigationTestScreen() {
         <View pointerEvents="box-none" style={styles.overlayTop}>
           <View style={styles.card}>
             <Text style={styles.title}>Embedded Navigation Test</Text>
-            <Text style={styles.meta}>permissionGranted: {String(permissionGranted)}</Text>
+            <Text style={styles.meta}>
+              permissionGranted: {String(permissionGranted)}
+            </Text>
             <Text style={styles.meta}>enabled: {String(enabled)}</Text>
-            <Text style={styles.meta}>custom sheet: {String(useCustomSheet)}</Text>
-            {lastError ? <Text style={styles.error}>error: {lastError}</Text> : null}
+            <Text style={styles.meta}>
+              custom sheet: {String(useCustomSheet)}
+            </Text>
+            {lastError ? (
+              <Text style={styles.error}>error: {lastError}</Text>
+            ) : null}
             {!permissionGranted ? (
               <Pressable style={styles.btn} onPress={requestPermission}>
                 <Text style={styles.btnText}>Grant Location Permission</Text>
               </Pressable>
             ) : (
               <View style={styles.row}>
-                <Pressable style={styles.btn} onPress={() => setEnabled((v) => !v)}>
-                  <Text style={styles.btnText}>{enabled ? "Disable" : "Enable"}</Text>
-                </Pressable>
-                <Pressable style={styles.btn} onPress={() => setUseCustomSheet((v) => !v)}>
+                <Pressable
+                  style={styles.btn}
+                  onPress={() => setEnabled((v) => !v)}
+                >
                   <Text style={styles.btnText}>
-                    {useCustomSheet ? "Use Default Sheet" : "Use Custom Sheet"}
+                    {enabled ? "Disable" : "Enable"}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={styles.btn}
+                  onPress={() => setUseCustomSheet((v) => !v)}
+                >
+                  <Text style={styles.btnText}>
+                    {useCustomSheet
+                      ? "Disable Custom Sheet"
+                      : "Enable Custom Sheet"}
                   </Text>
                 </Pressable>
               </View>
             )}
             <Text style={styles.hint}>
-              Swipe up in the bottom hotzone to reveal the sheet. Tap backdrop to collapse/hide.
+              Swipe up from the bottom handle to reveal the custom sheet. This
+              screen also demonstrates bottomSheet styling props (colors, text,
+              spacing, corners, quick actions, typography).
             </Text>
           </View>
         </View>
@@ -173,7 +258,11 @@ const styles = StyleSheet.create({
   },
   btnText: { color: "#fff", fontSize: 12, fontWeight: "800" },
   sheet: { flex: 1, gap: 8 },
-  sheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  sheetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   sheetTitle: { color: "#fff", fontSize: 14, fontWeight: "800" },
   sheetBadge: {
     color: "#fff",
@@ -185,7 +274,11 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   sheetPrimary: { color: "#fff", fontSize: 14, fontWeight: "800" },
-  sheetSecondary: { color: "rgba(255,255,255,0.8)", fontSize: 12, fontWeight: "600" },
+  sheetSecondary: {
+    color: "rgba(255,255,255,0.8)",
+    fontSize: 12,
+    fontWeight: "600",
+  },
   sheetRow: { flexDirection: "row", gap: 8 },
   sheetBtn: {
     flex: 1,

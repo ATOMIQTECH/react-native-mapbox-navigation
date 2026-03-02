@@ -1,6 +1,23 @@
-import { requireNativeModule, requireNativeViewManager } from "expo-modules-core";
-import { Fragment, isValidElement, useEffect, useMemo, useRef, useState } from "react";
-import { PanResponder, Pressable, StyleSheet, Text, View, ViewProps } from "react-native";
+import {
+  requireNativeModule,
+  requireNativeViewManager,
+} from "expo-modules-core";
+import {
+  Fragment,
+  isValidElement,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  PanResponder,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  ViewProps,
+} from "react-native";
 
 import type {
   ArrivalEvent,
@@ -22,7 +39,9 @@ const MapboxNavigationModule = requireNativeModule<MapboxNavigationModuleType>(
   "MapboxNavigationModule",
 );
 
-const MapboxNavigationNativeView = requireNativeViewManager("MapboxNavigationModule");
+const MapboxNavigationNativeView = requireNativeViewManager(
+  "MapboxNavigationModule",
+);
 
 const emitter = MapboxNavigationModule as unknown as {
   addListener: (
@@ -49,7 +68,10 @@ function unwrapNativeEventPayload<T>(payload: unknown): T | undefined {
   return payload as T;
 }
 
-function normalizeNativeError(error: unknown, fallbackCode = "NATIVE_ERROR"): Error {
+function normalizeNativeError(
+  error: unknown,
+  fallbackCode = "NATIVE_ERROR",
+): Error {
   if (error instanceof Error) {
     return error;
   }
@@ -74,19 +96,27 @@ function formatEta(durationRemainingSeconds?: number): string | undefined {
   if (!Number.isFinite(durationRemainingSeconds ?? NaN)) {
     return undefined;
   }
-  const etaDate = new Date(Date.now() + (durationRemainingSeconds as number) * 1000);
-  const time = etaDate.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const etaDate = new Date(
+    Date.now() + (durationRemainingSeconds as number) * 1000,
+  );
+  const time = etaDate.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
   return `Arrive ${time}`;
 }
 
 function normalizeViewProps(
   props: MapboxNavigationViewProps & ViewProps,
 ): MapboxNavigationViewProps & ViewProps {
+  const overlayModeActive =
+    props.bottomSheet?.enabled !== false &&
+    props.bottomSheet?.mode === "overlay";
   let showsTripProgress = props.showsTripProgress;
   let showsManeuverView = props.showsManeuverView;
   let showsActionButtons = props.showsActionButtons;
   let showCancelButton = props.showCancelButton;
-  if (props.bottomSheet) {
+  if (props.bottomSheet && !overlayModeActive) {
     const enabled = props.bottomSheet.enabled;
     if (enabled === false) {
       showsTripProgress = false;
@@ -103,6 +133,13 @@ function normalizeViewProps(
         showsActionButtons = props.bottomSheet.showsActionButtons;
       }
     }
+  }
+
+  if (overlayModeActive) {
+    showsTripProgress = true;
+    showsManeuverView = true;
+    showsActionButtons = true;
+    showCancelButton = true;
   }
 
   const wrappedOnLocationChange = props.onLocationChange
@@ -147,7 +184,8 @@ function normalizeViewProps(
     : undefined;
   const wrappedOnDestinationPreview = props.onDestinationPreview
     ? (event: unknown) => {
-        const payload = unwrapNativeEventPayload<DestinationPreviewEvent>(event);
+        const payload =
+          unwrapNativeEventPayload<DestinationPreviewEvent>(event);
         if (payload) {
           props.onDestinationPreview?.(payload);
         }
@@ -155,7 +193,8 @@ function normalizeViewProps(
     : undefined;
   const wrappedOnDestinationChanged = props.onDestinationChanged
     ? (event: unknown) => {
-        const payload = unwrapNativeEventPayload<DestinationChangedEvent>(event);
+        const payload =
+          unwrapNativeEventPayload<DestinationChangedEvent>(event);
         if (payload) {
           props.onDestinationChanged?.(payload);
         }
@@ -191,7 +230,8 @@ function normalizeViewProps(
     ...props,
     enabled: props.enabled === true,
     startOrigin: sanitizedStartOrigin,
-    routeAlternatives: props.routeAlternatives ?? props.showsContinuousAlternatives,
+    routeAlternatives:
+      props.routeAlternatives ?? props.showsContinuousAlternatives,
     showsTripProgress,
     showsManeuverView,
     showsActionButtons,
@@ -237,7 +277,9 @@ export async function setVoiceVolume(volume: number): Promise<void> {
 /**
  * Set spoken and displayed distance units.
  */
-export async function setDistanceUnit(unit: "metric" | "imperial"): Promise<void> {
+export async function setDistanceUnit(
+  unit: "metric" | "imperial",
+): Promise<void> {
   try {
     await MapboxNavigationModule.setDistanceUnit(unit);
   } catch (error) {
@@ -312,7 +354,9 @@ export function addJourneyDataChangeListener(
 /**
  * Subscribe to arrival events.
  */
-export function addArriveListener(listener: (point: ArrivalEvent) => void): Subscription {
+export function addArriveListener(
+  listener: (point: ArrivalEvent) => void,
+): Subscription {
   return emitter.addListener("onArrive", (event: unknown) => {
     const payload = unwrapNativeEventPayload<ArrivalEvent>(event);
     if (payload) {
@@ -352,7 +396,9 @@ export function addDestinationChangedListener(
 /**
  * Subscribe to cancellation events.
  */
-export function addCancelNavigationListener(listener: () => void): Subscription {
+export function addCancelNavigationListener(
+  listener: () => void,
+): Subscription {
   return emitter.addListener("onCancelNavigation", () => {
     listener();
   });
@@ -361,7 +407,9 @@ export function addCancelNavigationListener(listener: () => void): Subscription 
 /**
  * Subscribe to native errors (token issues, route fetch failures, permission failures, etc.).
  */
-export function addErrorListener(listener: (error: NavigationError) => void): Subscription {
+export function addErrorListener(
+  listener: (error: NavigationError) => void,
+): Subscription {
   return emitter.addListener("onError", (event: unknown) => {
     const payload = unwrapNativeEventPayload<NavigationError>(event);
     if (payload) {
@@ -407,12 +455,13 @@ export function MapboxNavigationView(
   props: MapboxNavigationViewProps & ViewProps,
 ) {
   const warnedCustomSheetOnlyRef = useRef(false);
-  const bottomSheet = (props.bottomSheet && props.bottomSheet.enabled !== false)
-    ? ({
-        ...props.bottomSheet,
-        mode: "overlay" as const,
-      })
-    : props.bottomSheet;
+  const bottomSheet =
+    props.bottomSheet && props.bottomSheet.enabled !== false
+      ? {
+          ...props.bottomSheet,
+          mode: "overlay" as const,
+        }
+      : props.bottomSheet;
   if (
     props.bottomSheet?.enabled !== false &&
     props.bottomSheet &&
@@ -424,9 +473,10 @@ export function MapboxNavigationView(
       "[react-native-mapbox-navigation] Embedded mode is custom-sheet-only. Forcing bottomSheet.mode='overlay'.",
     );
   }
-  const propsWithBottomSheet = bottomSheet === props.bottomSheet ? props : { ...props, bottomSheet };
-  const useOverlayBottomSheet = !!bottomSheet?.enabled &&
-    bottomSheet?.mode === "overlay";
+  const propsWithBottomSheet =
+    bottomSheet === props.bottomSheet ? props : { ...props, bottomSheet };
+  const useOverlayBottomSheet =
+    !!bottomSheet?.enabled && bottomSheet?.mode === "overlay";
   const overlayLocationMinIntervalMs = Math.max(
     0,
     Math.min(bottomSheet?.overlayLocationUpdateIntervalMs ?? 300, 3000),
@@ -435,71 +485,62 @@ export function MapboxNavigationView(
     0,
     Math.min(bottomSheet?.overlayProgressUpdateIntervalMs ?? 300, 3000),
   );
-  const collapsedHeight = Math.max(56, Math.min(bottomSheet?.collapsedHeight ?? 112, 400));
-  const expandedHeight = Math.max(collapsedHeight, Math.min(bottomSheet?.expandedHeight ?? 280, 700));
+  const collapsedHeight = Math.max(
+    56,
+    Math.min(bottomSheet?.collapsedHeight ?? 112, 400),
+  );
+  const expandedHeight = Math.max(
+    collapsedHeight,
+    Math.min(bottomSheet?.expandedHeight ?? 280, 700),
+  );
   const initialState =
     bottomSheet?.initialState === "hidden" ||
-      bottomSheet?.initialState === "expanded" ||
-      bottomSheet?.initialState === "collapsed"
+    bottomSheet?.initialState === "expanded" ||
+    bottomSheet?.initialState === "collapsed"
       ? bottomSheet.initialState
-      : (useOverlayBottomSheet ? "hidden" : "collapsed");
-  const [sheetState, setSheetState] = useState<"hidden" | "collapsed" | "expanded">(initialState);
-  const expanded = sheetState === "expanded";
-  const [overlayBanner, setOverlayBanner] = useState<BannerInstruction | undefined>(undefined);
-  const [overlayProgress, setOverlayProgress] = useState<RouteProgress | undefined>(undefined);
-  const [overlayLocation, setOverlayLocation] = useState<LocationUpdate | undefined>(undefined);
+      : useOverlayBottomSheet
+        ? "hidden"
+        : "collapsed";
+  const [sheetState, setSheetState] = useState<
+    "hidden" | "collapsed" | "expanded"
+  >(initialState);
+  const [overlayBanner, setOverlayBanner] = useState<
+    BannerInstruction | undefined
+  >(undefined);
+  const [overlayProgress, setOverlayProgress] = useState<
+    RouteProgress | undefined
+  >(undefined);
+  const [overlayLocation, setOverlayLocation] = useState<
+    LocationUpdate | undefined
+  >(undefined);
   const [overlayMuted, setOverlayMuted] = useState(!!props.mute);
-  const [overlayCameraMode, setOverlayCameraMode] = useState<"following" | "overview" | undefined>(undefined);
+  const [overlayCameraMode, setOverlayCameraMode] = useState<
+    "following" | "overview" | undefined
+  >(undefined);
   const overlayThrottleRef = useRef({
     locationAtMs: 0,
     progressAtMs: 0,
     bannerKey: "",
   });
-  const revealHotzoneHeight = useOverlayBottomSheet
-    ? Math.max(56, Math.min(bottomSheet?.revealGestureHotzoneHeight ?? 100, 220))
-    : 0;
-  const rightExclusionWidth = useOverlayBottomSheet
-    ? Math.max(0, Math.min(bottomSheet?.revealGestureRightExclusionWidth ?? 88, 220))
-    : 0;
-
-  // To avoid blocking taps on native SDK buttons (including iOS/Android bottom-right controls), we do NOT
-  // render a touch-blocking overlay hotzone. Swipe detection is handled by wrapper responder capture only.
-  const wrapperSizeRef = useRef({ width: 0, height: 0 });
-  const wrapperStartRef = useRef({ x: 0, y: 0 });
-  const wrapperResponder = useMemo(
+  const hiddenGrabberResponder = useMemo(
     () =>
       PanResponder.create({
-        onStartShouldSetPanResponder: () => false,
-        onStartShouldSetPanResponderCapture: (evt) => {
-          wrapperStartRef.current = {
-            x: evt.nativeEvent.locationX ?? 0,
-            y: evt.nativeEvent.locationY ?? 0,
-          };
-          return false;
+        onStartShouldSetPanResponder: () => {
+          return useOverlayBottomSheet && sheetState === "hidden";
         },
-        onMoveShouldSetPanResponder: () => false,
-        onMoveShouldSetPanResponderCapture: (_evt, gesture) => {
-          if (!useOverlayBottomSheet || sheetState !== "hidden") return false;
-          const { width, height } = wrapperSizeRef.current;
-          if (width <= 0 || height <= 0) return false;
-          const { x, y } = wrapperStartRef.current;
-          const inBottomZone = y >= height - revealHotzoneHeight;
-          const inAllowedX = rightExclusionWidth <= 0 || x <= width - rightExclusionWidth;
-          if (!inBottomZone || !inAllowedX) return false;
-          const verticalEnough = Math.abs(gesture.dy) > Math.abs(gesture.dx);
-          const upward = gesture.dy < -8;
-          return verticalEnough && upward;
+        onMoveShouldSetPanResponder: () => {
+          return useOverlayBottomSheet && sheetState === "hidden";
         },
         onPanResponderRelease: (_evt, gesture) => {
           if (!useOverlayBottomSheet || sheetState !== "hidden") return;
           const fastEnough = gesture.vy < -0.5;
-          const farEnough = gesture.dy < -36;
-          if (farEnough || (fastEnough && gesture.dy < -18)) {
+          const farEnough = gesture.dy < -10;
+          if (farEnough || (fastEnough && gesture.dy < -12)) {
             setSheetState("expanded");
           }
         },
       }),
-    [revealHotzoneHeight, rightExclusionWidth, sheetState, useOverlayBottomSheet],
+    [sheetState, useOverlayBottomSheet],
   );
 
   useEffect(() => {
@@ -508,8 +549,8 @@ export function MapboxNavigationView(
     }
     const next =
       bottomSheet?.initialState === "hidden" ||
-        bottomSheet?.initialState === "expanded" ||
-        bottomSheet?.initialState === "collapsed"
+      bottomSheet?.initialState === "expanded" ||
+      bottomSheet?.initialState === "collapsed"
         ? bottomSheet.initialState
         : "hidden";
     setSheetState(next);
@@ -523,7 +564,10 @@ export function MapboxNavigationView(
     setOverlayCameraMode(undefined);
   }, [props.cameraMode]);
 
-  const nativeProps = useMemo(() => normalizeViewProps(propsWithBottomSheet), [propsWithBottomSheet]);
+  const nativeProps = useMemo(
+    () => normalizeViewProps(propsWithBottomSheet),
+    [propsWithBottomSheet],
+  );
   const nativePropsWithOverlay = useMemo(() => {
     if (!useOverlayBottomSheet) {
       return nativeProps;
@@ -533,7 +577,10 @@ export function MapboxNavigationView(
       const payload = unwrapNativeEventPayload<LocationUpdate>(event);
       if (payload) {
         const now = Date.now();
-        if (now - overlayThrottleRef.current.locationAtMs >= overlayLocationMinIntervalMs) {
+        if (
+          now - overlayThrottleRef.current.locationAtMs >=
+          overlayLocationMinIntervalMs
+        ) {
           overlayThrottleRef.current.locationAtMs = now;
           setOverlayLocation(payload);
         }
@@ -544,7 +591,10 @@ export function MapboxNavigationView(
       const payload = unwrapNativeEventPayload<RouteProgress>(event);
       if (payload) {
         const now = Date.now();
-        if (now - overlayThrottleRef.current.progressAtMs >= overlayProgressMinIntervalMs) {
+        if (
+          now - overlayThrottleRef.current.progressAtMs >=
+          overlayProgressMinIntervalMs
+        ) {
           overlayThrottleRef.current.progressAtMs = now;
           setOverlayProgress(payload);
         }
@@ -585,7 +635,10 @@ export function MapboxNavigationView(
       return null;
     }
 
-    const emitAction = (actionId: string, source: "builtin" | "custom" = "custom") => {
+    const emitAction = (
+      actionId: string,
+      source: "builtin" | "custom" = "custom",
+    ) => {
       props.onOverlayBottomSheetActionPress?.({ actionId, source });
     };
 
@@ -628,17 +681,16 @@ export function MapboxNavigationView(
       state: sheetState,
       hidden: sheetState === "hidden",
       expanded: sheetState === "expanded",
-      show: (_next: "collapsed" | "expanded" = "collapsed") => setSheetState("expanded"),
+      show: (next: "collapsed" | "expanded" = "collapsed") =>
+        setSheetState(next),
       hide: () => setSheetState("hidden"),
       expand: () => setSheetState("expanded"),
-      collapse: () => setSheetState("hidden"),
-      toggle: () => setSheetState((v) => (v === "hidden" ? "expanded" : "hidden")),
+      collapse: () => setSheetState("collapsed"),
+      toggle: () =>
+        setSheetState((v) => (v === "hidden" ? "expanded" : "hidden")),
       bannerInstruction: overlayBanner,
       routeProgress: overlayProgress,
       location: overlayLocation,
-      stopNavigation: async () => {
-        emitAction("stop", "builtin");
-      },
       emitAction: (actionId: string) => emitAction(actionId, "custom"),
     };
 
@@ -651,12 +703,12 @@ export function MapboxNavigationView(
       customSheet = null;
     }
     const staticSheet = props.bottomSheetContent;
-    const builtInQuickActions: Array<{
+    const builtInQuickActions: {
       id: string;
       actionId: string;
       label: string;
       variant: "primary" | "secondary" | "ghost";
-    }> = [];
+    }[] = [];
     (bottomSheet?.builtInQuickActions ?? []).forEach((actionId) => {
       if (actionId === "overview") {
         builtInQuickActions.push({
@@ -702,12 +754,12 @@ export function MapboxNavigationView(
         });
       }
     });
-    const allQuickActions: Array<{
+    const allQuickActions: {
       id: string;
       actionId: string;
       label: string;
       variant: "primary" | "secondary" | "ghost";
-    }> = [
+    }[] = [
       ...builtInQuickActions,
       ...(bottomSheet?.quickActions ?? []).map((action) => ({
         id: action?.id,
@@ -717,9 +769,10 @@ export function MapboxNavigationView(
       })),
     ];
     const etaText = formatEta(overlayProgress?.durationRemaining);
-    const durationText = overlayProgress?.durationRemaining != null
-      ? formatDuration(overlayProgress.durationRemaining)
-      : undefined;
+    const durationText =
+      overlayProgress?.durationRemaining != null
+        ? formatDuration(overlayProgress.durationRemaining)
+        : undefined;
     const showCurrentStreet = bottomSheet?.showCurrentStreet !== false;
     const showRemainingDistance = bottomSheet?.showRemainingDistance !== false;
     const showRemainingDuration = bottomSheet?.showRemainingDuration !== false;
@@ -727,7 +780,9 @@ export function MapboxNavigationView(
     const showCompletionPercent = bottomSheet?.showCompletionPercent !== false;
     const tripPrimaryParts: string[] = [];
     if (overlayProgress && showRemainingDistance) {
-      tripPrimaryParts.push(`${Math.round(overlayProgress.distanceRemaining)} m`);
+      tripPrimaryParts.push(
+        `${Math.round(overlayProgress.distanceRemaining)} m`,
+      );
     }
     if (overlayProgress && showRemainingDuration && durationText) {
       tripPrimaryParts.push(durationText);
@@ -740,58 +795,89 @@ export function MapboxNavigationView(
       tripSecondaryParts.push(overlayBanner.secondaryText);
     }
     if (overlayProgress && showCompletionPercent) {
-      tripSecondaryParts.push(`${Math.round((overlayProgress.fractionTraveled || 0) * 100)}% completed`);
+      tripSecondaryParts.push(
+        `${Math.round((overlayProgress.fractionTraveled || 0) * 100)}% completed`,
+      );
     }
-    const sheetBackgroundColor = bottomSheet?.backgroundColor ?? "rgba(12, 18, 32, 0.94)";
-    const sheetCornerRadius = Math.max(0, Math.min(bottomSheet?.cornerRadius ?? 16, 28));
+    const sheetBackgroundColor =
+      bottomSheet?.backgroundColor ?? "rgba(12, 18, 32, 0.94)";
+    const sheetCornerRadius = Math.max(
+      0,
+      Math.min(bottomSheet?.cornerRadius ?? 16, 28),
+    );
     const handleColor = bottomSheet?.handleColor ?? "rgba(255,255,255,0.35)";
     const primaryTextColor = bottomSheet?.primaryTextColor ?? "#ffffff";
-    const secondaryTextColor = bottomSheet?.secondaryTextColor ?? "rgba(255,255,255,0.8)";
-    const labelTextColor = bottomSheet?.secondaryTextColor ?? "rgba(255,255,255,0.72)";
-    const primaryFontSize = Math.max(10, Math.min(bottomSheet?.primaryTextFontSize ?? 14, 32));
-    const secondaryFontSize = Math.max(10, Math.min(bottomSheet?.secondaryTextFontSize ?? 12, 26));
-    const actionButtonFontSize = Math.max(10, Math.min(bottomSheet?.actionButtonFontSize ?? 12, 24));
+    const secondaryTextColor =
+      bottomSheet?.secondaryTextColor ?? "rgba(255,255,255,0.8)";
+    const labelTextColor =
+      bottomSheet?.secondaryTextColor ?? "rgba(255,255,255,0.72)";
+    const primaryFontSize = Math.max(
+      10,
+      Math.min(bottomSheet?.primaryTextFontSize ?? 14, 32),
+    );
+    const secondaryFontSize = Math.max(
+      10,
+      Math.min(bottomSheet?.secondaryTextFontSize ?? 12, 26),
+    );
+    const actionButtonFontSize = Math.max(
+      10,
+      Math.min(bottomSheet?.actionButtonFontSize ?? 12, 24),
+    );
     const actionButtonFontFamily = bottomSheet?.actionButtonFontFamily;
     const actionButtonFontWeight = bottomSheet?.actionButtonFontWeight ?? "700";
     const primaryFontFamily = bottomSheet?.primaryTextFontFamily;
     const primaryFontWeight = bottomSheet?.primaryTextFontWeight ?? "700";
     const secondaryFontFamily = bottomSheet?.secondaryTextFontFamily;
     const secondaryFontWeight = bottomSheet?.secondaryTextFontWeight ?? "500";
-    const quickActionRadius = Math.max(0, Math.min(
-      bottomSheet?.quickActionCornerRadius ??
-      bottomSheet?.actionButtonCornerRadius ??
-      999,
-      999,
-    ));
-    const quickActionBorderWidth = Math.max(0, Math.min(
-      bottomSheet?.quickActionBorderWidth ??
-      bottomSheet?.actionButtonBorderWidth ??
+    const quickActionRadius = Math.max(
       0,
-      6,
-    ));
-    const quickActionBorderColor = bottomSheet?.quickActionBorderColor ??
+      Math.min(
+        bottomSheet?.quickActionCornerRadius ??
+          bottomSheet?.actionButtonCornerRadius ??
+          999,
+        999,
+      ),
+    );
+    const quickActionBorderWidth = Math.max(
+      0,
+      Math.min(
+        bottomSheet?.quickActionBorderWidth ??
+          bottomSheet?.actionButtonBorderWidth ??
+          0,
+        6,
+      ),
+    );
+    const quickActionBorderColor =
+      bottomSheet?.quickActionBorderColor ??
       bottomSheet?.actionButtonBorderColor ??
       "rgba(255,255,255,0.35)";
-    const quickPrimaryBackground = bottomSheet?.quickActionBackgroundColor ??
+    const quickPrimaryBackground =
+      bottomSheet?.quickActionBackgroundColor ??
       bottomSheet?.actionButtonBackgroundColor ??
       "#2563eb";
-    const quickSecondaryBackground = bottomSheet?.quickActionSecondaryBackgroundColor ??
+    const quickSecondaryBackground =
+      bottomSheet?.quickActionSecondaryBackgroundColor ??
       bottomSheet?.secondaryActionButtonBackgroundColor ??
       "#1d4ed8";
-    const quickGhostText = bottomSheet?.quickActionGhostTextColor ??
+    const quickGhostText =
+      bottomSheet?.quickActionGhostTextColor ??
       bottomSheet?.secondaryActionButtonTextColor ??
       "rgba(255,255,255,0.92)";
-    const quickPrimaryText = bottomSheet?.quickActionTextColor ??
+    const quickPrimaryText =
+      bottomSheet?.quickActionTextColor ??
       bottomSheet?.actionButtonTextColor ??
       "#ffffff";
-    const quickSecondaryText = bottomSheet?.quickActionSecondaryTextColor ??
+    const quickSecondaryText =
+      bottomSheet?.quickActionSecondaryTextColor ??
       bottomSheet?.secondaryActionButtonTextColor ??
       "#ffffff";
     const defaultCardColor = "rgba(255,255,255,0.08)";
     const defaultSheet = (
       <View style={styles.defaultSheet}>
         {nativeProps.showsManeuverView !== false ? (
-          <View style={[styles.defaultCard, { backgroundColor: defaultCardColor }]}>
+          <View
+            style={[styles.defaultCard, { backgroundColor: defaultCardColor }]}
+          >
             <Text
               style={[
                 styles.defaultLabel,
@@ -817,7 +903,8 @@ export function MapboxNavigationView(
               ]}
               numberOfLines={2}
             >
-              {overlayBanner?.primaryText ?? "Waiting for route instructions..."}
+              {overlayBanner?.primaryText ??
+                "Waiting for route instructions..."}
             </Text>
             {overlayBanner?.secondaryText ? (
               <Text
@@ -838,7 +925,9 @@ export function MapboxNavigationView(
           </View>
         ) : null}
         {nativeProps.showsTripProgress !== false ? (
-          <View style={[styles.defaultCard, { backgroundColor: defaultCardColor }]}>
+          <View
+            style={[styles.defaultCard, { backgroundColor: defaultCardColor }]}
+          >
             <Text
               style={[
                 styles.defaultLabel,
@@ -864,7 +953,9 @@ export function MapboxNavigationView(
               ]}
             >
               {overlayProgress
-                ? (tripPrimaryParts.length > 0 ? tripPrimaryParts.join(" • ") : "Progress available")
+                ? tripPrimaryParts.length > 0
+                  ? tripPrimaryParts.join(" • ")
+                  : "Progress available"
                 : "Waiting for progress..."}
             </Text>
             <Text
@@ -879,10 +970,12 @@ export function MapboxNavigationView(
               ]}
             >
               {overlayProgress
-                ? (tripSecondaryParts.length > 0 ? tripSecondaryParts.join(" • ") : "On route")
-                : (overlayLocation
+                ? tripSecondaryParts.length > 0
+                  ? tripSecondaryParts.join(" • ")
+                  : "On route"
+                : overlayLocation
                   ? `${overlayLocation.latitude.toFixed(5)}, ${overlayLocation.longitude.toFixed(5)}`
-                  : "Location not available")}
+                  : "Location not available"}
             </Text>
           </View>
         ) : null}
@@ -906,7 +999,10 @@ export function MapboxNavigationView(
                     borderRadius: quickActionRadius,
                     borderWidth: quickActionBorderWidth,
                     borderColor: quickActionBorderColor,
-                    minHeight: Math.max(30, Math.min(bottomSheet?.actionButtonHeight ?? 34, 64)),
+                    minHeight: Math.max(
+                      30,
+                      Math.min(bottomSheet?.actionButtonHeight ?? 34, 64),
+                    ),
                     backgroundColor: quickPrimaryBackground,
                   },
                   action?.variant === "secondary" && [
@@ -928,7 +1024,9 @@ export function MapboxNavigationView(
                       fontWeight: actionButtonFontWeight as any,
                       color: quickPrimaryText,
                     },
-                    action?.variant === "secondary" && { color: quickSecondaryText },
+                    action?.variant === "secondary" && {
+                      color: quickSecondaryText,
+                    },
                     action?.variant === "ghost" && [
                       styles.quickActionLabelGhost,
                       { color: quickGhostText },
@@ -944,11 +1042,16 @@ export function MapboxNavigationView(
         ) : null}
       </View>
     );
-    const showDefault =
-      // In overlay mode, devs usually want full control. Default to no built-in content unless explicitly enabled.
-      bottomSheet?.showDefaultContent === true;
-    const content = customSheet ?? staticSheet ?? (showDefault ? defaultSheet : null);
-    const currentHeight = sheetState === "hidden" ? 0 : expandedHeight;
+    const content =
+      customSheet ??
+      staticSheet ??
+      (bottomSheet?.showDefaultContent === false ? null : defaultSheet);
+    const currentHeight =
+      sheetState === "hidden"
+        ? 0
+        : sheetState === "collapsed"
+          ? collapsedHeight
+          : expandedHeight;
     const canToggle = bottomSheet?.enableTapToToggle !== false;
     const showHandle = bottomSheet?.showHandle !== false;
 
@@ -973,11 +1076,23 @@ export function MapboxNavigationView(
 
     return (
       <View pointerEvents="box-none" style={styles.overlayRoot}>
+        {sheetState === "hidden" ? (
+          <View pointerEvents="box-none" style={styles.hiddenGrabberWrap}>
+            <View
+              pointerEvents="auto"
+              style={styles.hiddenGrabberTouchArea}
+              {...hiddenGrabberResponder.panHandlers}
+            >
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setSheetState("expanded")}
+                style={[styles.hiddenGrabber, { backgroundColor: handleColor }]}
+              />
+            </View>
+          </View>
+        ) : null}
         {backdropVisible ? (
-          <Pressable
-            onPress={backdropPress}
-            style={styles.overlayBackdrop}
-          />
+          <Pressable onPress={backdropPress} style={styles.overlayBackdrop} />
         ) : null}
         <View
           style={[
@@ -997,7 +1112,11 @@ export function MapboxNavigationView(
             <Pressable
               accessibilityRole="button"
               onPress={canToggle ? context.toggle : undefined}
-              style={[styles.sheetHandle, { backgroundColor: handleColor }, bottomSheet?.handleStyle]}
+              style={[
+                styles.sheetHandle,
+                { backgroundColor: handleColor },
+                bottomSheet?.handleStyle,
+              ]}
             />
           ) : null}
           <View
@@ -1023,16 +1142,7 @@ export function MapboxNavigationView(
   }
 
   return (
-    <View
-      {...(useOverlayBottomSheet ? wrapperResponder.panHandlers : {})}
-      onLayout={(e) => {
-        wrapperSizeRef.current = {
-          width: e.nativeEvent.layout.width,
-          height: e.nativeEvent.layout.height,
-        };
-      }}
-      style={props.style}
-    >
+    <View style={props.style}>
       <MapboxNavigationNativeView
         {...nativePropsWithOverlay}
         style={StyleSheet.absoluteFill}
@@ -1055,6 +1165,26 @@ const styles = StyleSheet.create({
   overlayBackdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.35)",
+  },
+  hiddenGrabberWrap: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 14,
+    alignItems: "center",
+    zIndex: 2,
+  },
+  hiddenGrabberTouchArea: {
+    width: 180,
+    height: 30,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  hiddenGrabber: {
+    width: 112,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.35)",
   },
   sheetContainer: {
     borderTopLeftRadius: 16,
