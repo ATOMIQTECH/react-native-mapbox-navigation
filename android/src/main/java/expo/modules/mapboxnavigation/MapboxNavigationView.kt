@@ -11,6 +11,7 @@ import android.os.Looper
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.graphics.Rect
 import android.view.SurfaceView
 import android.view.TextureView
 import android.view.View
@@ -25,6 +26,7 @@ import androidx.savedstate.SavedStateRegistryOwner
 import com.mapbox.api.directions.v5.models.BannerInstructions
 import com.mapbox.api.directions.v5.models.RouteOptions
 import com.mapbox.geojson.Point
+import com.mapbox.geojson.utils.PolylineUtils
 import com.mapbox.navigation.base.extensions.applyDefaultNavigationOptions
 import com.mapbox.navigation.base.extensions.applyLanguageAndVoiceUnitOptions
 import com.mapbox.navigation.base.route.NavigationRoute
@@ -110,6 +112,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private var navigationView: NavigationView? = null
   private var placeholderView: TextView? = null
+  private var nativeBottomPanelHidden = false
 
   private var mapboxNavigation: MapboxNavigation? = null
   private var hasRequestedRoute = false
@@ -118,6 +121,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   val onLocationChange by EventDispatcher()
   val onRouteProgressChange by EventDispatcher()
   val onJourneyDataChange by EventDispatcher()
+  val onRouteChange by EventDispatcher()
   val onBannerInstruction by EventDispatcher()
   val onArrive by EventDispatcher()
   val onDestinationPreview by EventDispatcher()
@@ -161,11 +165,15 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
     override fun onDestinationPreview() {
       onDestinationPreview(mapOf("active" to true))
+      hideNativeBottomPanelIfRequested(navigationView)
+      scheduleBottomPanelHidePasses()
     }
 
     override fun onActiveNavigation() {
       // Re-apply options once active guidance starts to ensure maneuver/top UI is visible.
       applyDropInOptions()
+      hideNativeBottomPanelIfRequested(navigationView)
+      scheduleBottomPanelHidePasses()
       hidePlaceholder()
     }
 
@@ -189,6 +197,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     override fun onRouteFetchSuccessful(routes: List<NavigationRoute>) {
       // If Drop-In decides to fetch routes internally (e.g. user interaction), that's fine.
       if (routes.isEmpty()) return
+      emitRouteChange(routes.first())
     }
   }
 
@@ -432,6 +441,12 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       return false
     }
     ownsNavigationSession = true
+    NavigationSessionRegistry.registerStopHandler(sessionOwner) {
+      mainHandler.post {
+        enabled = false
+        stopEmbedded(emitCancel = true)
+      }
+    }
     return true
   }
 
@@ -500,9 +515,11 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     view.api.routeReplayEnabled(shouldSimulateRoute)
 
     navigationView = view
+    nativeBottomPanelHidden = false
     nativeLayer.addView(view)
     Log.i(TAG, "Drop-In NavigationView added ($EMBEDDED_BUILD): nativeChildren=${nativeLayer.childCount}")
     scheduleLayoutNudges()
+    scheduleBottomPanelHidePasses()
     hidePlaceholder()
     applyDropInOptions()
   }
@@ -710,6 +727,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
             showPlaceholder("No route found.")
             return
           }
+          emitRouteChange(routes.first())
           val expected = view.api.startRoutePreview(routes)
           if (expected.isError) {
             hasRequestedRoute = false
@@ -751,6 +769,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       runCatching { nativeLayer.removeView(nv) }
     }
     navigationView = null
+    nativeBottomPanelHidden = false
 
     mapboxNavigation?.let { nav ->
       runCatching { nav.unregisterLocationObserver(locationObserver) }
@@ -780,23 +799,35 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       mapStyleUriDay = resolvedDay
       mapStyleUriNight = resolvedNight
 
-      showManeuver = showsManeuverView
-      showTripProgress = showsTripProgress
-      showActionButtons = showsActionButtons
-      showRoadName = showsWayNameLabel
-      showSpeedLimit = showsSpeedLimits
-      // Force top instruction banner visible in active guidance.
+      // Embedded mode is custom-bottom-sheet-only. Keep native top maneuver only.
       showManeuver = true
+      showTripProgress = false
+      showActionButtons = false
+      showRoadName = true
+      showSpeedLimit = showsSpeedLimits
       showArrivalText = true
       enableMapLongClickIntercept = false
 
-      // Ensure Start button is visible in embedded route preview.
-      // We auto-start guidance in embedded mode, so hide native start/preview controls.
+      // Hide all native bottom controls (preview/start/end/action panel).
       showStartNavigationButton = false
-      showEndNavigationButton = true
+      showEndNavigationButton = false
       showRoutePreviewButton = false
       showMapScalebar = true
     }
+
+    hideNativeBottomPanelIfRequested(view)
+  }
+
+  private fun scheduleBottomPanelHidePasses() {
+    val view = navigationView ?: return
+    fun hidePass(reason: String) {
+      hideNativeBottomPanelIfRequested(view)
+      Log.d(TAG, "bottom panel hide pass ($EMBEDDED_BUILD): $reason")
+    }
+    mainHandler.post { hidePass("post") }
+    mainHandler.postDelayed({ hidePass("post+180ms") }, 180)
+    mainHandler.postDelayed({ hidePass("post+650ms") }, 650)
+    mainHandler.postDelayed({ hidePass("post+1400ms") }, 1400)
   }
 
   private fun tryStartActiveGuidance(view: NavigationView) {
@@ -811,6 +842,60 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       val fallback = methods.firstOrNull { it.name == "startNavigation" && it.parameterTypes.isEmpty() }
       fallback?.invoke(api)
     }
+  }
+
+  private fun hideNativeBottomPanelIfRequested(view: NavigationView?) {
+    val target = view ?: return
+    if (nativeBottomPanelHidden) return
+    runCatching {
+      val hiddenCount = hideViewsByClassNameHints(
+        root = target,
+        hints = listOf("infopanel", "tripprogress", "bottombanner", "routepreview", "actionbutton", "bottomsheet")
+      )
+      if (hiddenCount > 0) {
+        nativeBottomPanelHidden = true
+      }
+    }
+  }
+
+  private fun hideViewsByClassNameHints(root: View, hints: List<String>): Int {
+    var hidden = 0
+    val name = root.javaClass.name.lowercase()
+    if (hints.any { hint -> name.contains(hint) } && isInLowerHalf(root)) {
+      root.visibility = View.GONE
+      root.alpha = 0f
+      root.isClickable = false
+      root.isEnabled = false
+      hidden += 1
+    }
+    if (root is ViewGroup) {
+      for (i in 0 until root.childCount) {
+        hidden += hideViewsByClassNameHints(root.getChildAt(i), hints)
+      }
+    }
+    return hidden
+  }
+
+  private fun isInLowerHalf(view: View): Boolean {
+    val parent = navigationView ?: return false
+    val parentLoc = IntArray(2)
+    val viewLoc = IntArray(2)
+    parent.getLocationOnScreen(parentLoc)
+    view.getLocationOnScreen(viewLoc)
+    val parentRect = Rect(
+      parentLoc[0],
+      parentLoc[1],
+      parentLoc[0] + parent.width,
+      parentLoc[1] + parent.height
+    )
+    val viewRect = Rect(
+      viewLoc[0],
+      viewLoc[1],
+      viewLoc[0] + view.width,
+      viewLoc[1] + view.height
+    )
+    val centerY = viewRect.centerY()
+    return centerY >= (parentRect.top + parentRect.height() * 0.55)
   }
 
   private fun attachViewTreeOwnersIfPossible(view: View, activity: android.app.Activity?) {
@@ -918,6 +1003,19 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       payload["completionPercent"] = Math.round(progress.fractionTraveled.toDouble().coerceIn(0.0, 1.0) * 100.0).toInt()
     }
     onJourneyDataChange(payload)
+  }
+
+  private fun emitRouteChange(route: NavigationRoute) {
+    val geometry = route.directionsRoute.geometry() ?: return
+    val points = runCatching { PolylineUtils.decode(geometry, 6) }.getOrElse { return }
+    if (points.isEmpty()) return
+    val coords = points.map { p ->
+      mapOf(
+        "latitude" to p.latitude(),
+        "longitude" to p.longitude()
+      )
+    }
+    onRouteChange(mapOf("coordinates" to coords))
   }
 
   private fun parseWaypoints(value: List<Map<String, Any>>?): List<Point> {

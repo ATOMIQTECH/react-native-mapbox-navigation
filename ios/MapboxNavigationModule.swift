@@ -15,6 +15,7 @@ public class MapboxNavigationModule: Module {
       "onLocationChange",
       "onRouteProgressChange",
       "onJourneyDataChange",
+      "onRouteChange",
       "onBannerInstruction",
       "onArrive",
       "onCancelNavigation",
@@ -61,11 +62,17 @@ public class MapboxNavigationModule: Module {
       ])
     }
 
+    AsyncFunction("stopNavigation") { (promise: Promise) in
+      let stopped = NavigationSessionRegistry.shared.requestStopCurrent()
+      promise.resolve(stopped)
+    }
+
     View(MapboxNavigationView.self) {
       Events(
         "onLocationChange",
         "onRouteProgressChange",
         "onJourneyDataChange",
+        "onRouteChange",
         "onBannerInstruction",
         "onArrive",
         "onCancelNavigation",

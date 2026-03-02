@@ -10,7 +10,15 @@ import {
   useRef,
   useState,
 } from "react";
-import { Pressable, StyleSheet, Text, View, ViewProps } from "react-native";
+import {
+  PanResponder,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  ViewProps,
+} from "react-native";
 
 import type {
   ArrivalEvent,
@@ -24,6 +32,7 @@ import type {
   MapboxNavigationViewProps,
   NavigationSettings,
   NavigationError,
+  RouteChangeEvent,
   RouteProgress,
   Subscription,
 } from "./MapboxNavigation.types";
@@ -161,6 +170,14 @@ function normalizeViewProps(
         }
       }
     : undefined;
+  const wrappedOnRouteChange = props.onRouteChange
+    ? (event: unknown) => {
+        const payload = unwrapNativeEventPayload<RouteChangeEvent>(event);
+        if (payload) {
+          props.onRouteChange?.(payload);
+        }
+      }
+    : undefined;
   const wrappedOnBannerInstruction = props.onBannerInstruction
     ? (event: unknown) => {
         const payload = unwrapNativeEventPayload<BannerInstruction>(event);
@@ -236,6 +253,7 @@ function normalizeViewProps(
     onLocationChange: wrappedOnLocationChange,
     onRouteProgressChange: wrappedOnRouteProgressChange,
     onJourneyDataChange: wrappedOnJourneyDataChange,
+    onRouteChange: wrappedOnRouteChange,
     onBannerInstruction: wrappedOnBannerInstruction,
     onArrive: wrappedOnArrive,
     onDestinationPreview: wrappedOnDestinationPreview,
@@ -304,6 +322,14 @@ export async function getNavigationSettings(): Promise<NavigationSettings> {
   }
 }
 
+export async function stopNavigation(): Promise<boolean> {
+  try {
+    return await MapboxNavigationModule.stopNavigation();
+  } catch (error) {
+    throw normalizeNativeError(error, "STOP_NAVIGATION_FAILED");
+  }
+}
+
 /**
  * Subscribe to location updates from native navigation.
  */
@@ -340,6 +366,17 @@ export function addJourneyDataChangeListener(
 ): Subscription {
   return emitter.addListener("onJourneyDataChange", (event: unknown) => {
     const payload = unwrapNativeEventPayload<JourneyData>(event);
+    if (payload) {
+      listener(payload);
+    }
+  });
+}
+
+export function addRouteChangeListener(
+  listener: (event: RouteChangeEvent) => void,
+): Subscription {
+  return emitter.addListener("onRouteChange", (event: unknown) => {
+    const payload = unwrapNativeEventPayload<RouteChangeEvent>(event);
     if (payload) {
       listener(payload);
     }
@@ -474,12 +511,21 @@ export function MapboxNavigationView(
     !!bottomSheet?.enabled && bottomSheet?.mode === "overlay";
   const overlayLocationMinIntervalMs = Math.max(
     0,
-    Math.min(bottomSheet?.overlayLocationUpdateIntervalMs ?? 300, 3000),
+    Math.min(
+      bottomSheet?.overlayLocationUpdateIntervalMs ??
+        (Platform.OS === "android" ? 900 : 300),
+      3000,
+    ),
   );
   const overlayProgressMinIntervalMs = Math.max(
     0,
-    Math.min(bottomSheet?.overlayProgressUpdateIntervalMs ?? 300, 3000),
+    Math.min(
+      bottomSheet?.overlayProgressUpdateIntervalMs ??
+        (Platform.OS === "android" ? 700 : 300),
+      3000,
+    ),
   );
+  const iosHiddenMode = Platform.OS === "ios";
   const collapsedHeight = Math.max(
     56,
     Math.min(bottomSheet?.collapsedHeight ?? 112, 400),
@@ -488,11 +534,18 @@ export function MapboxNavigationView(
     collapsedHeight,
     Math.min(bottomSheet?.expandedHeight ?? 280, 700),
   );
-  const initialState =
+  const requestedInitialState =
     bottomSheet?.initialState === "expanded" ||
-    bottomSheet?.initialState === "collapsed"
+    bottomSheet?.initialState === "collapsed" ||
+    bottomSheet?.initialState === "hidden"
       ? bottomSheet.initialState
       : "collapsed";
+  const initialState =
+    requestedInitialState === "expanded"
+      ? "expanded"
+      : iosHiddenMode
+        ? "hidden"
+        : "collapsed";
   const [sheetState, setSheetState] = useState<
     "hidden" | "collapsed" | "expanded"
   >(initialState);
@@ -519,12 +572,13 @@ export function MapboxNavigationView(
       return;
     }
     const next =
-      bottomSheet?.initialState === "expanded" ||
-      bottomSheet?.initialState === "collapsed"
-        ? bottomSheet.initialState
-        : "collapsed";
+      bottomSheet?.initialState === "expanded"
+        ? "expanded"
+        : iosHiddenMode
+          ? "hidden"
+          : "collapsed";
     setSheetState(next);
-  }, [bottomSheet?.initialState]);
+  }, [bottomSheet?.initialState, iosHiddenMode]);
 
   useEffect(() => {
     setOverlayMuted(!!props.mute);
@@ -640,6 +694,7 @@ export function MapboxNavigationView(
           break;
         }
         case "stop":
+          await stopNavigation();
           emitAction(actionId, "builtin");
           break;
         default:
@@ -652,15 +707,28 @@ export function MapboxNavigationView(
       hidden: sheetState === "hidden",
       expanded: sheetState === "expanded",
       show: (next: "collapsed" | "expanded" = "collapsed") =>
-        setSheetState(next),
-      hide: () => setSheetState("collapsed"),
+        setSheetState(
+          next === "expanded"
+            ? "expanded"
+            : iosHiddenMode
+              ? "hidden"
+              : "collapsed",
+        ),
+      hide: () => setSheetState(iosHiddenMode ? "hidden" : "collapsed"),
       expand: () => setSheetState("expanded"),
-      collapse: () => setSheetState("collapsed"),
+      collapse: () => setSheetState(iosHiddenMode ? "hidden" : "collapsed"),
       toggle: () =>
-        setSheetState((v) => (v === "expanded" ? "collapsed" : "expanded")),
+        setSheetState((v) =>
+          v === "expanded"
+            ? iosHiddenMode
+              ? "hidden"
+              : "collapsed"
+            : "expanded",
+        ),
       bannerInstruction: overlayBanner,
       routeProgress: overlayProgress,
       location: overlayLocation,
+      stopNavigation,
       emitAction: (actionId: string) => emitAction(actionId, "custom"),
     };
 
@@ -729,15 +797,7 @@ export function MapboxNavigationView(
       actionId: string;
       label: string;
       variant: "primary" | "secondary" | "ghost";
-    }[] = [
-      ...builtInQuickActions,
-      ...(bottomSheet?.quickActions ?? []).map((action) => ({
-        id: action?.id,
-        actionId: action?.id,
-        label: action?.label,
-        variant: action?.variant ?? "primary",
-      })),
-    ];
+    }[] = [...builtInQuickActions];
     const etaText = formatEta(overlayProgress?.durationRemaining);
     const durationText =
       overlayProgress?.durationRemaining != null
@@ -769,79 +829,33 @@ export function MapboxNavigationView(
         `${Math.round((overlayProgress.fractionTraveled || 0) * 100)}% completed`,
       );
     }
-    const sheetBackgroundColor =
-      bottomSheet?.backgroundColor ?? "rgba(12, 18, 32, 0.94)";
-    const sheetCornerRadius = Math.max(
-      0,
-      Math.min(bottomSheet?.cornerRadius ?? 16, 28),
-    );
-    const handleColor = bottomSheet?.handleColor ?? "rgba(255,255,255,0.35)";
-    const primaryTextColor = bottomSheet?.primaryTextColor ?? "#ffffff";
-    const secondaryTextColor =
-      bottomSheet?.secondaryTextColor ?? "rgba(255,255,255,0.8)";
-    const labelTextColor =
-      bottomSheet?.secondaryTextColor ?? "rgba(255,255,255,0.72)";
-    const primaryFontSize = Math.max(
-      10,
-      Math.min(bottomSheet?.primaryTextFontSize ?? 14, 32),
-    );
-    const secondaryFontSize = Math.max(
-      10,
-      Math.min(bottomSheet?.secondaryTextFontSize ?? 12, 26),
-    );
-    const actionButtonFontSize = Math.max(
-      10,
-      Math.min(bottomSheet?.actionButtonFontSize ?? 12, 24),
-    );
-    const actionButtonFontFamily = bottomSheet?.actionButtonFontFamily;
-    const actionButtonFontWeight = bottomSheet?.actionButtonFontWeight ?? "700";
-    const primaryFontFamily = bottomSheet?.primaryTextFontFamily;
-    const primaryFontWeight = bottomSheet?.primaryTextFontWeight ?? "700";
-    const secondaryFontFamily = bottomSheet?.secondaryTextFontFamily;
-    const secondaryFontWeight = bottomSheet?.secondaryTextFontWeight ?? "500";
-    const quickActionRadius = Math.max(
-      0,
-      Math.min(
-        bottomSheet?.quickActionCornerRadius ??
-          bottomSheet?.actionButtonCornerRadius ??
-          999,
-        999,
-      ),
-    );
-    const quickActionBorderWidth = Math.max(
-      0,
-      Math.min(
-        bottomSheet?.quickActionBorderWidth ??
-          bottomSheet?.actionButtonBorderWidth ??
-          0,
-        6,
-      ),
-    );
-    const quickActionBorderColor =
-      bottomSheet?.quickActionBorderColor ??
-      bottomSheet?.actionButtonBorderColor ??
-      "rgba(255,255,255,0.35)";
-    const quickPrimaryBackground =
-      bottomSheet?.quickActionBackgroundColor ??
-      bottomSheet?.actionButtonBackgroundColor ??
-      "#2563eb";
-    const quickSecondaryBackground =
-      bottomSheet?.quickActionSecondaryBackgroundColor ??
-      bottomSheet?.secondaryActionButtonBackgroundColor ??
-      "#1d4ed8";
-    const quickGhostText =
-      bottomSheet?.quickActionGhostTextColor ??
-      bottomSheet?.secondaryActionButtonTextColor ??
-      "rgba(255,255,255,0.92)";
-    const quickPrimaryText =
-      bottomSheet?.quickActionTextColor ??
-      bottomSheet?.actionButtonTextColor ??
-      "#ffffff";
-    const quickSecondaryText =
-      bottomSheet?.quickActionSecondaryTextColor ??
-      bottomSheet?.secondaryActionButtonTextColor ??
-      "#ffffff";
-    const defaultCardColor = "rgba(255,255,255,0.08)";
+    const resolvedColorMode =
+      bottomSheet?.colorMode ??
+      (props.uiTheme === "dark" || props.uiTheme === "night"
+        ? "dark"
+        : "light");
+    const isDark = resolvedColorMode === "dark";
+    const sheetBackgroundColor = isDark ? "#202020" : "#ffffff";
+    const sheetCornerRadius = 16;
+    const handleColor = isDark ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.3)";
+    const primaryTextColor = isDark ? "#ffffff" : "#0f172a";
+    const secondaryTextColor = isDark
+      ? "rgba(255,255,255,0.8)"
+      : "rgba(15,23,42,0.8)";
+    const labelTextColor = isDark
+      ? "rgba(255,255,255,0.72)"
+      : "rgba(15,23,42,0.65)";
+    const quickActionBorderColor = isDark
+      ? "rgba(255,255,255,0.35)"
+      : "rgba(15,23,42,0.25)";
+    const quickPrimaryBackground = "#2563eb";
+    const quickSecondaryBackground = isDark ? "#1d4ed8" : "#1e40af";
+    const quickGhostText = isDark ? "rgba(255,255,255,0.92)" : "#0f172a";
+    const quickPrimaryText = "#ffffff";
+    const quickSecondaryText = "#ffffff";
+    const defaultCardColor = isDark
+      ? "rgba(255,255,255,0.08)"
+      : "rgba(15,23,42,0.08)";
     const defaultSheet = (
       <View style={styles.defaultSheet}>
         {nativeProps.showsManeuverView !== false ? (
@@ -853,9 +867,8 @@ export function MapboxNavigationView(
                 styles.defaultLabel,
                 {
                   color: labelTextColor,
-                  fontSize: secondaryFontSize - 1,
-                  fontFamily: secondaryFontFamily,
-                  fontWeight: secondaryFontWeight as any,
+                  fontSize: 11,
+                  fontWeight: "500",
                 },
               ]}
             >
@@ -866,9 +879,8 @@ export function MapboxNavigationView(
                 styles.defaultPrimary,
                 {
                   color: primaryTextColor,
-                  fontSize: primaryFontSize,
-                  fontFamily: primaryFontFamily,
-                  fontWeight: primaryFontWeight as any,
+                  fontSize: 14,
+                  fontWeight: "700",
                 },
               ]}
               numberOfLines={2}
@@ -882,9 +894,8 @@ export function MapboxNavigationView(
                   styles.defaultSecondary,
                   {
                     color: secondaryTextColor,
-                    fontSize: secondaryFontSize,
-                    fontFamily: secondaryFontFamily,
-                    fontWeight: secondaryFontWeight as any,
+                    fontSize: 12,
+                    fontWeight: "500",
                   },
                 ]}
                 numberOfLines={1}
@@ -903,9 +914,8 @@ export function MapboxNavigationView(
                 styles.defaultLabel,
                 {
                   color: labelTextColor,
-                  fontSize: secondaryFontSize - 1,
-                  fontFamily: secondaryFontFamily,
-                  fontWeight: secondaryFontWeight as any,
+                  fontSize: 11,
+                  fontWeight: "500",
                 },
               ]}
             >
@@ -916,9 +926,8 @@ export function MapboxNavigationView(
                 styles.defaultPrimary,
                 {
                   color: primaryTextColor,
-                  fontSize: primaryFontSize,
-                  fontFamily: primaryFontFamily,
-                  fontWeight: primaryFontWeight as any,
+                  fontSize: 14,
+                  fontWeight: "700",
                 },
               ]}
             >
@@ -933,9 +942,8 @@ export function MapboxNavigationView(
                 styles.defaultSecondary,
                 {
                   color: secondaryTextColor,
-                  fontSize: secondaryFontSize,
-                  fontFamily: secondaryFontFamily,
-                  fontWeight: secondaryFontWeight as any,
+                  fontSize: 12,
+                  fontWeight: "500",
                 },
               ]}
             >
@@ -966,13 +974,10 @@ export function MapboxNavigationView(
                 style={[
                   styles.quickActionButton,
                   {
-                    borderRadius: quickActionRadius,
-                    borderWidth: quickActionBorderWidth,
+                    borderRadius: 999,
+                    borderWidth: 1,
                     borderColor: quickActionBorderColor,
-                    minHeight: Math.max(
-                      30,
-                      Math.min(bottomSheet?.actionButtonHeight ?? 34, 64),
-                    ),
+                    minHeight: 34,
                     backgroundColor: quickPrimaryBackground,
                   },
                   action?.variant === "secondary" && [
@@ -989,9 +994,8 @@ export function MapboxNavigationView(
                   style={[
                     styles.quickActionLabel,
                     {
-                      fontSize: actionButtonFontSize,
-                      fontFamily: actionButtonFontFamily,
-                      fontWeight: actionButtonFontWeight as any,
+                      fontSize: 12,
+                      fontWeight: "700",
                       color: quickPrimaryText,
                     },
                     action?.variant === "secondary" && {
@@ -1017,31 +1021,80 @@ export function MapboxNavigationView(
       staticSheet ??
       (bottomSheet?.showDefaultContent === false ? null : defaultSheet);
     const currentHeight =
-      sheetState === "collapsed" ? collapsedHeight : expandedHeight;
+      sheetState === "hidden"
+        ? 0
+        : sheetState === "collapsed"
+          ? collapsedHeight
+          : expandedHeight;
+    const collapsedBottomOffset = Math.max(
+      0,
+      Math.min(bottomSheet?.collapsedBottomOffset ?? 24, 80),
+    );
     const canToggle = bottomSheet?.enableTapToToggle !== false;
     const showHandle = bottomSheet?.showHandle !== false;
 
-    const contentHorizontalPadding = Math.max(
-      0,
-      Math.min(bottomSheet?.contentHorizontalPadding ?? 14, 48),
-    );
-    const contentBottomPadding = Math.max(
-      0,
-      Math.min(bottomSheet?.contentBottomPadding ?? 14, 60),
-    );
-    const contentTopSpacing = Math.max(
-      0,
-      Math.min(bottomSheet?.contentTopSpacing ?? 0, 24),
-    );
+    const contentHorizontalPadding = 14;
+    const contentBottomPadding = 14;
+    const contentTopSpacing = 0;
 
     const backdropPress = () => {
-      setSheetState("collapsed");
+      setSheetState(iosHiddenMode ? "hidden" : "collapsed");
     };
 
     const backdropVisible = sheetState === "expanded";
+    const hiddenGrabberResponder = PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponder: (_evt, gesture) =>
+        Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 4,
+      onMoveShouldSetPanResponderCapture: (_evt, gesture) =>
+        Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 2,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderRelease: (_evt, gesture) => {
+        if (gesture.dy < -8 || gesture.vy < -0.3) {
+          setSheetState("expanded");
+        }
+      },
+    });
+    const sheetPanResponder = PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_evt, gesture) =>
+        Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 4,
+      onPanResponderRelease: (_evt, gesture) => {
+        if (gesture.dy < -10 || gesture.vy < -0.35) {
+          setSheetState("expanded");
+          return;
+        }
+        if (gesture.dy > 10 || gesture.vy > 0.35) {
+          setSheetState(iosHiddenMode ? "hidden" : "collapsed");
+        }
+      },
+    });
 
     return (
       <View pointerEvents="box-none" style={styles.overlayRoot}>
+        {iosHiddenMode && sheetState === "hidden" ? (
+          <View
+            pointerEvents="auto"
+            style={styles.iosHiddenRevealZone}
+            {...hiddenGrabberResponder.panHandlers}
+          />
+        ) : null}
+        {sheetState === "hidden" ? (
+          <View pointerEvents="box-none" style={styles.hiddenGrabberWrap}>
+            <View
+              pointerEvents="auto"
+              style={styles.hiddenGrabberTouchArea}
+              {...hiddenGrabberResponder.panHandlers}
+            >
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setSheetState("expanded")}
+                style={[styles.hiddenGrabber, { backgroundColor: handleColor }]}
+              />
+            </View>
+          </View>
+        ) : null}
         {backdropVisible ? (
           <Pressable onPress={backdropPress} style={styles.overlayBackdrop} />
         ) : null}
@@ -1050,23 +1103,25 @@ export function MapboxNavigationView(
             styles.sheetContainer,
             {
               height: currentHeight,
+              bottom:
+                sheetState === "collapsed"
+                  ? -collapsedBottomOffset
+                  : sheetState === "hidden"
+                    ? -(collapsedHeight + 80)
+                    : 0,
               backgroundColor: sheetBackgroundColor,
               borderTopLeftRadius: sheetCornerRadius,
               borderTopRightRadius: sheetCornerRadius,
             },
-            bottomSheet?.containerStyle,
           ]}
+          {...sheetPanResponder.panHandlers}
           pointerEvents="auto"
         >
           {showHandle ? (
             <Pressable
               accessibilityRole="button"
               onPress={canToggle ? context.toggle : undefined}
-              style={[
-                styles.sheetHandle,
-                { backgroundColor: handleColor },
-                bottomSheet?.handleStyle,
-              ]}
+              style={[styles.sheetHandle, { backgroundColor: handleColor }]}
             />
           ) : null}
           <View
@@ -1077,7 +1132,6 @@ export function MapboxNavigationView(
                 paddingBottom: contentBottomPadding,
                 paddingTop: contentTopSpacing,
               },
-              bottomSheet?.contentContainerStyle,
             ]}
           >
             {content}
@@ -1115,6 +1169,35 @@ const styles = StyleSheet.create({
   overlayBackdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.35)",
+  },
+  hiddenGrabberWrap: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 10,
+    alignItems: "center",
+    zIndex: 2,
+  },
+  hiddenGrabberTouchArea: {
+    width: 160,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  hiddenGrabber: {
+    width: 84,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.35)",
+  },
+  iosHiddenRevealZone: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 130,
+    backgroundColor: "transparent",
+    zIndex: 1,
   },
   sheetContainer: {
     borderTopLeftRadius: 16,
@@ -1197,9 +1280,11 @@ export default {
   setDistanceUnit,
   setLanguage,
   getNavigationSettings,
+  stopNavigation,
   addLocationChangeListener,
   addRouteProgressChangeListener,
   addJourneyDataChangeListener,
+  addRouteChangeListener,
   addArriveListener,
   addDestinationPreviewListener,
   addDestinationChangedListener,
