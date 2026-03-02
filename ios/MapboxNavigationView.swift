@@ -57,6 +57,7 @@ class MapboxNavigationView: ExpoView {
   let onLocationChange = EventDispatcher()
   let onRouteProgressChange = EventDispatcher()
   let onJourneyDataChange = EventDispatcher()
+  let onRouteChange = EventDispatcher()
   let onBannerInstruction = EventDispatcher()
   let onArrive = EventDispatcher()
   let onCancelNavigation = EventDispatcher()
@@ -122,6 +123,14 @@ class MapboxNavigationView: ExpoView {
       return
     }
     hasPendingSessionConflict = false
+    NavigationSessionRegistry.shared.registerStopHandler(owner: sessionOwner) { [weak self] in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        self.enabled = false
+        self.cleanupNavigation()
+        self.onCancelNavigation([:])
+      }
+    }
     
     let originCoord = CLLocationCoordinate2D(latitude: originLat, longitude: originLng)
     let destCoord = CLLocationCoordinate2D(latitude: destLat, longitude: destLng)
@@ -180,6 +189,7 @@ class MapboxNavigationView: ExpoView {
         }
         
         DispatchQueue.main.async {
+          self.emitRouteChange(from: response)
           self.embedNavigation(response: response, routeOptions: routeOptions)
         }
         
@@ -435,6 +445,18 @@ class MapboxNavigationView: ExpoView {
     }
     warnedUnsupportedOptions.insert(key)
     NSLog("[MapboxNavigationView] \(message)")
+  }
+
+  private func emitRouteChange(from response: RouteResponse) {
+    guard let route = response.routes?.first else { return }
+    guard let shape = route.shape else { return }
+    let coords = shape.coordinates.map { coordinate in
+      [
+        "latitude": coordinate.latitude,
+        "longitude": coordinate.longitude
+      ]
+    }
+    onRouteChange(["coordinates": coords])
   }
 
   private func nearestViewController() -> UIViewController? {

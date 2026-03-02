@@ -34,14 +34,12 @@ export type BottomSheetOptions = {
   initialState?: "hidden" | "collapsed" | "expanded";
   /** Overlay collapsed height in points. */
   collapsedHeight?: number;
+  /** Overlay collapsed state vertical offset (positive moves sheet lower). */
+  collapsedBottomOffset?: number;
   /** Overlay expanded height in points. */
   expandedHeight?: number;
-  /** Overlay content horizontal padding. */
-  contentHorizontalPadding?: number;
-  /** Overlay content bottom padding. */
-  contentBottomPadding?: number;
-  /** Overlay content top spacing below handle. */
-  contentTopSpacing?: number;
+  /** Overlay sheet color mode. `light` => `#fff`, `dark` => `#202020`. */
+  colorMode?: "light" | "dark";
   /** Show drag/toggle handle in overlay mode. */
   showHandle?: boolean;
   /** Allow tap on sheet container/handle to toggle expanded state. */
@@ -62,86 +60,10 @@ export type BottomSheetOptions = {
   defaultManeuverTitle?: string;
   /** Default title for progress card in package-built overlay. */
   defaultTripProgressTitle?: string;
-  /** Style override for overlay container. */
-  containerStyle?: any;
-  /** Style override for overlay content container. */
-  contentContainerStyle?: any;
-  /** Style override for overlay drag/toggle handle. */
-  handleStyle?: any;
-  /** Overlay sheet: background color (hex/rgb string), e.g. `#0f172a`. */
-  backgroundColor?: string;
-  /** Overlay sheet: handle color (hex/rgb string). */
-  handleColor?: string;
-  /** Overlay sheet: primary text color (hex/rgb string). */
-  primaryTextColor?: string;
-  /** Overlay sheet: secondary text color (hex/rgb string). */
-  secondaryTextColor?: string;
-  /** Overlay sheet: action button background color (hex/rgb string). */
-  actionButtonBackgroundColor?: string;
-  /** Overlay sheet: action button text color (hex/rgb string). */
-  actionButtonTextColor?: string;
-  /** Overlay sheet: action button label. */
-  actionButtonTitle?: string;
-  /** Overlay sheet: optional secondary action button label. */
-  secondaryActionButtonTitle?: string;
   /** Overlay sheet: primary action behavior. */
   primaryActionButtonBehavior?: "emitEvent";
   /** Overlay sheet: secondary action behavior. */
   secondaryActionButtonBehavior?: "none" | "emitEvent";
-  /** Overlay sheet: action button border color. */
-  actionButtonBorderColor?: string;
-  /** Overlay sheet: action button border width. */
-  actionButtonBorderWidth?: number;
-  /** Overlay sheet: action button corner radius. */
-  actionButtonCornerRadius?: number;
-  /** Overlay sheet: secondary action button background color (hex/rgb string). */
-  secondaryActionButtonBackgroundColor?: string;
-  /** Overlay sheet: secondary action button text color (hex/rgb string). */
-  secondaryActionButtonTextColor?: string;
-  /** Overlay sheet: maneuver title font size. */
-  primaryTextFontSize?: number;
-  /** Bottom sheet: primary text font family name (native platform font). */
-  primaryTextFontFamily?: string;
-  /** Bottom sheet: primary text font weight (`normal`, `medium`, `semibold`, `bold`, `100..900`). */
-  primaryTextFontWeight?: string;
-  /** Overlay sheet: progress subtitle font size. */
-  secondaryTextFontSize?: number;
-  /** Bottom sheet: secondary text font family name (native platform font). */
-  secondaryTextFontFamily?: string;
-  /** Bottom sheet: secondary text font weight (`normal`, `medium`, `semibold`, `bold`, `100..900`). */
-  secondaryTextFontWeight?: string;
-  /** Overlay sheet: action button title font size. */
-  actionButtonFontSize?: number;
-  /** Bottom sheet: action button font family name (native platform font). */
-  actionButtonFontFamily?: string;
-  /** Bottom sheet: action button font weight (`normal`, `medium`, `semibold`, `bold`, `100..900`). */
-  actionButtonFontWeight?: string;
-  /** Overlay sheet: action button height. */
-  actionButtonHeight?: number;
-  /** Bottom spacing after action buttons in custom-native/overlay sheets. */
-  actionButtonsBottomPadding?: number;
-  /** Quick action (primary variant) background color. */
-  quickActionBackgroundColor?: string;
-  /** Quick action (primary variant) text color. */
-  quickActionTextColor?: string;
-  /** Quick action (secondary variant) background color. */
-  quickActionSecondaryBackgroundColor?: string;
-  /** Quick action (secondary variant) text color. */
-  quickActionSecondaryTextColor?: string;
-  /** Quick action (ghost variant) text color. */
-  quickActionGhostTextColor?: string;
-  /** Quick action border color. */
-  quickActionBorderColor?: string;
-  /** Quick action border width. */
-  quickActionBorderWidth?: number;
-  /** Quick action corner radius. */
-  quickActionCornerRadius?: number;
-  /** Quick action font family name (native platform font). */
-  quickActionFontFamily?: string;
-  /** Quick action font weight (`normal`, `medium`, `semibold`, `bold`, `100..900`). */
-  quickActionFontWeight?: string;
-  /** Overlay sheet: corner radius (points). */
-  cornerRadius?: number;
   /** Show current street/road label in package-rendered sheet content. */
   showCurrentStreet?: boolean;
   /** Show remaining distance in package-rendered sheet content. */
@@ -152,66 +74,8 @@ export type BottomSheetOptions = {
   showETA?: boolean;
   /** Show completion percentage in package-rendered sheet content. */
   showCompletionPercent?: boolean;
-  /** Overlay quick actions rendered by package default sheet. */
-  quickActions?: BottomSheetQuickAction[];
   /** Overlay prebuilt quick actions with package-managed behavior. */
   builtInQuickActions?: BottomSheetBuiltInQuickAction[];
-  /** Extra content rows for package-rendered overlay sheet. */
-  customRows?: BottomSheetCustomRow[];
-  /** Optional top header title. */
-  headerTitle?: string;
-  /** Header title font size. */
-  headerTitleFontSize?: number;
-  /** Header title font family name. */
-  headerTitleFontFamily?: string;
-  /** Header title font weight. */
-  headerTitleFontWeight?: string;
-  /** Optional top header subtitle. */
-  headerSubtitle?: string;
-  /** Header subtitle font size. */
-  headerSubtitleFontSize?: number;
-  /** Header subtitle font family name. */
-  headerSubtitleFontFamily?: string;
-  /** Header subtitle font weight. */
-  headerSubtitleFontWeight?: string;
-  /** Optional header badge text on trailing side. */
-  headerBadgeText?: string;
-  /** Header badge font size. */
-  headerBadgeFontSize?: number;
-  /** Header badge font family name. */
-  headerBadgeFontFamily?: string;
-  /** Header badge font weight. */
-  headerBadgeFontWeight?: string;
-  /** Optional header badge background color. */
-  headerBadgeBackgroundColor?: string;
-  /** Optional header badge text color. */
-  headerBadgeTextColor?: string;
-  /** Header badge corner radius. */
-  headerBadgeCornerRadius?: number;
-  /** Header badge border color. */
-  headerBadgeBorderColor?: string;
-  /** Header badge border width. */
-  headerBadgeBorderWidth?: number;
-};
-
-/** Overlay quick action button config. */
-export type BottomSheetQuickAction = {
-  id: string;
-  label: string;
-  variant?: "primary" | "secondary" | "ghost";
-};
-
-/** Extra row item for package overlay sheet. */
-export type BottomSheetCustomRow = {
-  id: string;
-  /** Optional SF Symbol name for native icon (for example: `car.fill`). */
-  iconSystemName?: string;
-  /** Optional fallback icon text/emoji. */
-  iconText?: string;
-  title: string;
-  value?: string;
-  subtitle?: string;
-  emphasis?: boolean;
 };
 
 /** Prebuilt overlay actions with package-managed behavior. */
@@ -263,6 +127,11 @@ export type RouteProgress = {
   distanceRemaining: number;
   durationRemaining: number;
   fractionTraveled: number;
+};
+
+/** Route geometry payload emitted when a new route is selected/used. */
+export type RouteChangeEvent = {
+  coordinates: Coordinate[];
 };
 
 /** Structured journey data suitable for custom bottom banner UIs. */
@@ -333,6 +202,7 @@ export interface MapboxNavigationModule {
   setDistanceUnit(unit: "metric" | "imperial"): Promise<void>;
   setLanguage(language: string): Promise<void>;
   getNavigationSettings(): Promise<NavigationSettings>;
+  stopNavigation(): Promise<boolean>;
 }
 
 export interface MapboxNavigationViewProps {
@@ -385,6 +255,7 @@ export interface MapboxNavigationViewProps {
     bannerInstruction?: BannerInstruction;
     routeProgress?: RouteProgress;
     location?: LocationUpdate;
+    stopNavigation: () => Promise<boolean>;
     emitAction: (actionId: string) => void;
   }) => ReactNode;
   /** Optional children overlayed above native navigation view. */
@@ -394,6 +265,8 @@ export interface MapboxNavigationViewProps {
   onLocationChange?: (location: LocationUpdate) => void;
   /** Callback for route progress changes. */
   onRouteProgressChange?: (progress: RouteProgress) => void;
+  /** Callback when active route geometry changes. */
+  onRouteChange?: (event: RouteChangeEvent) => void;
   /** Callback with aggregated journey data for custom UI rendering. */
   onJourneyDataChange?: (data: JourneyData) => void;
   /** Callback when arrival is detected. */

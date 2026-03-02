@@ -47,6 +47,7 @@ export default function EmbeddedNavigationTestScreen() {
   const [enabled, setEnabled] = useState(Platform.OS !== "android");
   const [useCustomSheet, setUseCustomSheet] = useState(true);
   const [lastError, setLastError] = useState<string>("");
+  const [routePointCount, setRoutePointCount] = useState<number>(0);
 
   useEffect(() => {
     if (Platform.OS !== "android") {
@@ -80,42 +81,16 @@ export default function EmbeddedNavigationTestScreen() {
     () => ({
       enabled: true,
       mode: "overlay" as const,
-      initialState: "collapsed" as const,
+      initialState:
+        Platform.OS === "ios" ? ("hidden" as const) : ("collapsed" as const),
       revealGestureHotzoneHeight: 120,
       revealGestureRightExclusionWidth: 0,
       collapsedHeight: 124,
       expandedHeight: 340,
+      collapsedBottomOffset: Platform.OS === "android" ? 26 : 0,
       showHandle: true,
       enableTapToToggle: true,
-      cornerRadius: 20,
-      backgroundColor: "rgba(8, 15, 30, 0.96)",
-      handleColor: "#93c5fd",
-      contentHorizontalPadding: 16,
-      contentTopSpacing: 4,
-      contentBottomPadding: 18,
-      primaryTextColor: "#ffffff",
-      secondaryTextColor: "rgba(191, 219, 254, 0.95)",
-      primaryTextFontSize: 16,
-      primaryTextFontWeight: "800" as const,
-      secondaryTextFontSize: 12,
-      secondaryTextFontWeight: "600" as const,
-      actionButtonFontSize: 13,
-      actionButtonFontWeight: "800" as const,
-      actionButtonBackgroundColor: "#2563eb",
-      actionButtonTextColor: "#ffffff",
-      actionButtonBorderColor: "#1d4ed8",
-      actionButtonBorderWidth: 1,
-      actionButtonCornerRadius: 12,
-      secondaryActionButtonBackgroundColor: "#0f172a",
-      secondaryActionButtonTextColor: "#bfdbfe",
-      quickActionBackgroundColor: "#1d4ed8",
-      quickActionTextColor: "#ffffff",
-      quickActionSecondaryBackgroundColor: "#0f172a",
-      quickActionSecondaryTextColor: "#bfdbfe",
-      quickActionGhostTextColor: "#93c5fd",
-      quickActionBorderColor: "rgba(148, 163, 184, 0.5)",
-      quickActionBorderWidth: 1,
-      quickActionCornerRadius: 12,
+      colorMode: "dark" as const,
       showDefaultContent: true,
       defaultManeuverTitle: "Next turn",
       defaultTripProgressTitle: "ETA & progress",
@@ -135,9 +110,17 @@ export default function EmbeddedNavigationTestScreen() {
         enabled={enabled && permissionGranted}
         style={StyleSheet.absoluteFill}
         startOrigin={START}
+        showCancelButton
+        showsActionButtons
+        showsContinuousAlternatives
+        showsManeuverView
+        showsSpeedLimits
+        showsTripProgress
+        showsWayNameLabel
         destination={DEST}
         shouldSimulateRoute
         bottomSheet={bottomSheet}
+        onRouteChange={(e) => setRoutePointCount(e.coordinates.length)}
         onError={(e) => setLastError(`${e.code}: ${e.message}`)}
         renderBottomSheet={
           useCustomSheet
@@ -146,6 +129,7 @@ export default function EmbeddedNavigationTestScreen() {
                 show,
                 hide,
                 toggle,
+                stopNavigation,
                 bannerInstruction,
                 routeProgress,
               }) => (
@@ -170,8 +154,11 @@ export default function EmbeddedNavigationTestScreen() {
                     <Pressable style={styles.sheetBtn} onPress={toggle}>
                       <Text style={styles.sheetBtnText}>Toggle</Text>
                     </Pressable>
-                    <Pressable style={styles.sheetBtnSecondary} onPress={hide}>
-                      <Text style={styles.sheetBtnText}>Hide</Text>
+                    <Pressable
+                      style={styles.sheetBtnSecondary}
+                      onPress={stopNavigation}
+                    >
+                      <Text style={styles.sheetBtnText}>Stop</Text>
                     </Pressable>
                   </View>
                 </View>
@@ -186,6 +173,7 @@ export default function EmbeddedNavigationTestScreen() {
               permissionGranted: {String(permissionGranted)}
             </Text>
             <Text style={styles.meta}>enabled: {String(enabled)}</Text>
+            <Text style={styles.meta}>route points: {routePointCount}</Text>
             <Text style={styles.meta}>
               custom sheet: {String(useCustomSheet)}
             </Text>
@@ -219,9 +207,8 @@ export default function EmbeddedNavigationTestScreen() {
               </View>
             )}
             <Text style={styles.hint}>
-              Swipe up from the bottom handle to reveal the custom sheet. This
-              screen also demonstrates bottomSheet styling props (colors, text,
-              spacing, corners, quick actions, typography).
+              Swipe/tap the handle to expand. This screen tests simplified
+              bottomSheet theming via `colorMode` and onRouteChange payloads.
             </Text>
           </View>
         </View>
