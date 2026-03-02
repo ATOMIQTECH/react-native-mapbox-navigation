@@ -10,14 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  PanResponder,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-  ViewProps,
-} from "react-native";
+import { Pressable, StyleSheet, Text, View, ViewProps } from "react-native";
 
 import type {
   ArrivalEvent,
@@ -136,10 +129,12 @@ function normalizeViewProps(
   }
 
   if (overlayModeActive) {
-    showsTripProgress = true;
+    // In overlay mode we keep native top maneuver banner, but hide native bottom panel/actions
+    // so custom sheet is the only bottom UI.
+    showsTripProgress = false;
     showsManeuverView = true;
-    showsActionButtons = true;
-    showCancelButton = true;
+    showsActionButtons = false;
+    showCancelButton = false;
   }
 
   const wrappedOnLocationChange = props.onLocationChange
@@ -494,13 +489,10 @@ export function MapboxNavigationView(
     Math.min(bottomSheet?.expandedHeight ?? 280, 700),
   );
   const initialState =
-    bottomSheet?.initialState === "hidden" ||
     bottomSheet?.initialState === "expanded" ||
     bottomSheet?.initialState === "collapsed"
       ? bottomSheet.initialState
-      : useOverlayBottomSheet
-        ? "hidden"
-        : "collapsed";
+      : "collapsed";
   const [sheetState, setSheetState] = useState<
     "hidden" | "collapsed" | "expanded"
   >(initialState);
@@ -522,37 +514,15 @@ export function MapboxNavigationView(
     progressAtMs: 0,
     bannerKey: "",
   });
-  const hiddenGrabberResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => {
-          return useOverlayBottomSheet && sheetState === "hidden";
-        },
-        onMoveShouldSetPanResponder: () => {
-          return useOverlayBottomSheet && sheetState === "hidden";
-        },
-        onPanResponderRelease: (_evt, gesture) => {
-          if (!useOverlayBottomSheet || sheetState !== "hidden") return;
-          const fastEnough = gesture.vy < -0.5;
-          const farEnough = gesture.dy < -10;
-          if (farEnough || (fastEnough && gesture.dy < -12)) {
-            setSheetState("expanded");
-          }
-        },
-      }),
-    [sheetState, useOverlayBottomSheet],
-  );
-
   useEffect(() => {
     if (!useOverlayBottomSheet) {
       return;
     }
     const next =
-      bottomSheet?.initialState === "hidden" ||
       bottomSheet?.initialState === "expanded" ||
       bottomSheet?.initialState === "collapsed"
         ? bottomSheet.initialState
-        : "hidden";
+        : "collapsed";
     setSheetState(next);
   }, [bottomSheet?.initialState]);
 
@@ -683,11 +653,11 @@ export function MapboxNavigationView(
       expanded: sheetState === "expanded",
       show: (next: "collapsed" | "expanded" = "collapsed") =>
         setSheetState(next),
-      hide: () => setSheetState("hidden"),
+      hide: () => setSheetState("collapsed"),
       expand: () => setSheetState("expanded"),
       collapse: () => setSheetState("collapsed"),
       toggle: () =>
-        setSheetState((v) => (v === "hidden" ? "expanded" : "hidden")),
+        setSheetState((v) => (v === "expanded" ? "collapsed" : "expanded")),
       bannerInstruction: overlayBanner,
       routeProgress: overlayProgress,
       location: overlayLocation,
@@ -1047,11 +1017,7 @@ export function MapboxNavigationView(
       staticSheet ??
       (bottomSheet?.showDefaultContent === false ? null : defaultSheet);
     const currentHeight =
-      sheetState === "hidden"
-        ? 0
-        : sheetState === "collapsed"
-          ? collapsedHeight
-          : expandedHeight;
+      sheetState === "collapsed" ? collapsedHeight : expandedHeight;
     const canToggle = bottomSheet?.enableTapToToggle !== false;
     const showHandle = bottomSheet?.showHandle !== false;
 
@@ -1069,28 +1035,13 @@ export function MapboxNavigationView(
     );
 
     const backdropPress = () => {
-      setSheetState("hidden");
+      setSheetState("collapsed");
     };
 
-    const backdropVisible = sheetState !== "hidden";
+    const backdropVisible = sheetState === "expanded";
 
     return (
       <View pointerEvents="box-none" style={styles.overlayRoot}>
-        {sheetState === "hidden" ? (
-          <View pointerEvents="box-none" style={styles.hiddenGrabberWrap}>
-            <View
-              pointerEvents="auto"
-              style={styles.hiddenGrabberTouchArea}
-              {...hiddenGrabberResponder.panHandlers}
-            >
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setSheetState("expanded")}
-                style={[styles.hiddenGrabber, { backgroundColor: handleColor }]}
-              />
-            </View>
-          </View>
-        ) : null}
         {backdropVisible ? (
           <Pressable onPress={backdropPress} style={styles.overlayBackdrop} />
         ) : null}
@@ -1104,9 +1055,8 @@ export function MapboxNavigationView(
               borderTopRightRadius: sheetCornerRadius,
             },
             bottomSheet?.containerStyle,
-            sheetState === "hidden" && styles.sheetHidden,
           ]}
-          pointerEvents={sheetState === "hidden" ? "none" : "auto"}
+          pointerEvents="auto"
         >
           {showHandle ? (
             <Pressable
@@ -1166,34 +1116,11 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.35)",
   },
-  hiddenGrabberWrap: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 14,
-    alignItems: "center",
-    zIndex: 2,
-  },
-  hiddenGrabberTouchArea: {
-    width: 180,
-    height: 30,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  hiddenGrabber: {
-    width: 112,
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.35)",
-  },
   sheetContainer: {
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     backgroundColor: "rgba(12, 18, 32, 0.94)",
     overflow: "hidden",
-  },
-  sheetHidden: {
-    opacity: 0,
   },
   sheetHandle: {
     alignSelf: "center",
