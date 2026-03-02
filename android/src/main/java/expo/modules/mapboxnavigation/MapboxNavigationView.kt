@@ -110,7 +110,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private var navigationView: NavigationView? = null
   private var placeholderView: TextView? = null
-  private var attachedMapView: com.mapbox.maps.MapView? = null
 
   private var mapboxNavigation: MapboxNavigation? = null
   private var hasRequestedRoute = false
@@ -133,7 +132,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private val mapViewObserver = object : MapViewObserver() {
     override fun onAttached(mapView: com.mapbox.maps.MapView) {
-      attachedMapView = mapView
       // If Drop-In uses SurfaceView, it can render behind RN in some hierarchies.
       // Make SurfaceView explicitly top/overlay when present.
       val (textureCount, surfaceCount) = countTextureAndSurfaceViews(mapView)
@@ -152,11 +150,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       primeTextureViewIfPresent(mapView)
     }
 
-    override fun onDetached(mapView: com.mapbox.maps.MapView) {
-      if (attachedMapView === mapView) {
-        attachedMapView = null
-      }
-    }
+    override fun onDetached(mapView: com.mapbox.maps.MapView) = Unit
   }
 
   private val navigationViewListener = object : NavigationViewListener() {
@@ -172,7 +166,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     override fun onActiveNavigation() {
       // Re-apply options once active guidance starts to ensure maneuver/top UI is visible.
       applyDropInOptions()
-      applyPuckSafeCameraPadding()
       hidePlaceholder()
     }
 
@@ -248,7 +241,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
     emitBannerInstruction(progress.bannerInstructions)
     emitJourneyData(banner = progress.bannerInstructions, progress = progress)
-    applyPuckSafeCameraPadding()
   }
 
   private val arrivalObserver = object : ArrivalObserver {
@@ -682,6 +674,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     } else {
       applyDropInOptions()
       mainHandler.postDelayed({ applyDropInOptions() }, 180)
+      tryStartActiveGuidance(view)
     }
   }
 
@@ -730,6 +723,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
           } else {
             applyDropInOptions()
             mainHandler.postDelayed({ applyDropInOptions() }, 180)
+            tryStartActiveGuidance(view)
           }
         }
 
@@ -791,30 +785,31 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       showActionButtons = showsActionButtons
       showRoadName = showsWayNameLabel
       showSpeedLimit = showsSpeedLimits
+      // Force top instruction banner visible in active guidance.
+      showManeuver = true
       showArrivalText = true
       enableMapLongClickIntercept = false
 
       // Ensure Start button is visible in embedded route preview.
-      showStartNavigationButton = true
+      // We auto-start guidance in embedded mode, so hide native start/preview controls.
+      showStartNavigationButton = false
       showEndNavigationButton = true
-      showRoutePreviewButton = true
+      showRoutePreviewButton = false
       showMapScalebar = true
     }
   }
 
-  private fun applyPuckSafeCameraPadding() {
-    val mapView = attachedMapView ?: return
+  private fun tryStartActiveGuidance(view: NavigationView) {
     runCatching {
-      val edgeInsets = com.mapbox.maps.EdgeInsets(
-        180.0, // top
-        32.0,  // left
-        300.0, // bottom
-        32.0   // right
-      )
-      val camera = com.mapbox.maps.CameraOptions.Builder()
-        .padding(edgeInsets)
-        .build()
-      mapView.getMapboxMap().setCamera(camera)
+      val api = view.api
+      val methods = api.javaClass.methods
+      val direct = methods.firstOrNull { it.name == "startActiveGuidance" && it.parameterTypes.isEmpty() }
+      if (direct != null) {
+        direct.invoke(api)
+        return
+      }
+      val fallback = methods.firstOrNull { it.name == "startNavigation" && it.parameterTypes.isEmpty() }
+      fallback?.invoke(api)
     }
   }
 
