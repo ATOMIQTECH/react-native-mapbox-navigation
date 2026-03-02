@@ -1,57 +1,32 @@
 # Troubleshooting
 
-## Build Fails Downloading Mapbox Dependencies
+## Android map is blank
 
-Check `MAPBOX_DOWNLOADS_TOKEN`:
+- Ensure `mapbox_access_token` is present in Android resources (via Expo prebuild/config plugin).
+- Ensure location permission is granted.
+- Ensure only one embedded session is active at a time.
 
-- It must be a secret `sk...` token.
-- It must include `DOWNLOADS:READ`.
-- It must be available to native build steps (`gradle` and `pod install`).
+## Route preview appears but guidance UI is incomplete
 
-## Navigation Does Not Start
+- Keep `showsManeuverView` enabled for native top maneuver instructions.
+- In overlay mode the native bottom info panel is intentionally suppressed.
 
-- Confirm destination coordinates are valid.
-- Confirm location permissions are granted.
-- Confirm `mapbox_access_token` resolves correctly in native resources/config.
+## Custom sheet cannot be swiped up
 
-## iOS Starts in Preview-Like Camera
+- Use `bottomSheet.mode = "overlay"`.
+- Android uses collapsed/expanded states.
+- iOS uses hidden/expanded behavior.
 
-- Use `cameraMode: "following"`.
-- Avoid forcing fixed camera behavior unless needed.
-- Keep SDK adaptive camera enabled for turn-by-turn behavior.
+## Session ends unexpectedly
 
-## No Banner/Progress Events
+- Do not mount multiple `MapboxNavigationView` instances as enabled at the same time.
+- Check `onError` for `NAVIGATION_SESSION_CONFLICT`.
+- Use `stopNavigation()` to end the active embedded session programmatically.
 
-- Ensure listeners are registered before `startNavigation`.
-- Verify active guidance is started (especially with simulation settings).
+## v2.0.0 migration
 
-## Android Uses External Navigation App
+Removed APIs:
+- `startNavigation(...)`
+- `isNavigating()`
 
-Current package behavior is native Mapbox navigation and should stay in-app.
-If not, verify you are running the latest package version and rebuilt native code:
-
-```bash
-npx expo prebuild --clean
-```
-
-## Prebuild Fails With Missing Token Error
-
-The config plugin now validates tokens early. Ensure one of these provides a public token:
-
-- `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN`
-- `MAPBOX_PUBLIC_TOKEN`
-- `expo.extra.mapboxPublicToken`
-
-And provide downloads token:
-
-- `MAPBOX_DOWNLOADS_TOKEN` or `expo.extra.mapboxDownloadsToken`
-
-## Route Fetch Errors (401/403/429)
-
-Listen to `onError` / `addErrorListener` and check `code`:
-
-- `MAPBOX_TOKEN_INVALID` (invalid/expired token)
-- `MAPBOX_TOKEN_FORBIDDEN` (missing scopes)
-- `MAPBOX_RATE_LIMITED` (request throttling)
-
-For Android dependency download failures during build, verify `MAPBOX_DOWNLOADS_TOKEN` has `DOWNLOADS:READ` scope.
+Use `MapboxNavigationView` (embedded) for all navigation flows.

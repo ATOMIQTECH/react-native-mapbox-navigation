@@ -9,11 +9,11 @@ Pod::Spec.new do |s|
   s.summary        = 'Native Mapbox Navigation module for Expo'
   s.description    = 'A custom Expo module that wraps the native Mapbox Navigation SDKs for iOS and Android.'
   s.license        = { :type => 'MIT' }
-  s.author         = { 'author' => 'author@example.com' }
-  s.homepage       = 'https://github.com/yourusername/react-native-mapbox-navigation'
+  s.author         = { 'ATOMIQ Ltd' => 'info@atomiq.rw' }
+  s.homepage       = 'https://github.com/ATOMIQTECH/react-native-mapbox-navigation'
   s.platform       = :ios, '14.0'
   s.swift_version  = '5.4'
-  s.source         = { :git => 'https://github.com/yourusername/react-native-mapbox-navigation.git', :tag => s.version.to_s }
+  s.source         = { :git => 'https://github.com/ATOMIQTECH/react-native-mapbox-navigation.git', :tag => s.version.to_s }
   # Let CocoaPods choose linkage to avoid circular static-framework graphs
   # with MapboxNavigation / MapboxCoreNavigation.
   s.static_framework = false
