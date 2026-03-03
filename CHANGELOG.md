@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.1
+
+- Added camera-follow APIs on both platforms:
+  - `resumeCameraFollowing()` function.
+  - `onCameraFollowingStateChange` event/callback.
+  - `getNavigationSettings()` now returns `isCameraFollowing` and `isCameraNotFollowing`.
+- Updated embedded example to show:
+  - camera-follow state handling + resume action
+
 ## 2.0.0
 
 - Breaking: package is now embedded-only on both iOS and Android.

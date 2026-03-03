@@ -36,6 +36,7 @@ import {
   setLanguage,
   getNavigationSettings,
   stopNavigation,
+  resumeCameraFollowing,
 } from "@atomiqlab/react-native-mapbox-navigation";
 ```
 
@@ -45,12 +46,18 @@ import {
 - `setLanguage(language: string): Promise<void>`
 - `getNavigationSettings(): Promise<NavigationSettings>`
 - `stopNavigation(): Promise<boolean>`
+- `resumeCameraFollowing(): Promise<boolean>`
+
+`getNavigationSettings()` now includes:
+- `isCameraFollowing: boolean`
+- `isCameraNotFollowing: boolean`
 
 ## Listeners
 
 ```ts
 import {
   addLocationChangeListener,
+  addCameraFollowingStateChangeListener,
   addRouteChangeListener,
   addRouteProgressChangeListener,
   addJourneyDataChangeListener,
@@ -65,6 +72,7 @@ import {
 ```
 
 - `addLocationChangeListener(listener)`
+- `addCameraFollowingStateChangeListener(listener)`
 - `addRouteChangeListener(listener)`
 - `addRouteProgressChangeListener(listener)`
 - `addJourneyDataChangeListener(listener)`
@@ -139,6 +147,7 @@ import {
 
 ### Component Callbacks
 - `onLocationChange?(location)`
+- `onCameraFollowingStateChange?(state)` includes `isCameraFollowing` and `isCameraNotFollowing`
 - `onRouteChange?(event)` includes route `coordinates`
 - `onRouteProgressChange?(progress)`
 - `onJourneyDataChange?(data)`

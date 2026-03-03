@@ -18,6 +18,7 @@ class MapboxNavigationModule : Module() {
       "onRouteProgressChange",
       "onJourneyDataChange",
       "onRouteChange",
+      "onCameraFollowingStateChange",
       "onBannerInstruction",
       "onArrive",
       "onDestinationPreview",
@@ -67,9 +68,12 @@ class MapboxNavigationModule : Module() {
     }
 
     AsyncFunction("getNavigationSettings") { promise: Promise ->
+      val isFollowing = NavigationSessionRegistry.isCurrentCameraFollowing()
       promise.resolve(
         mapOf(
           "isNavigating" to false,
+          "isCameraFollowing" to isFollowing,
+          "isCameraNotFollowing" to !isFollowing,
           "mute" to mute,
           "voiceVolume" to voiceVolume.coerceIn(0.0, 1.0),
           "distanceUnit" to distanceUnit,
@@ -79,8 +83,15 @@ class MapboxNavigationModule : Module() {
     }
 
     AsyncFunction("stopNavigation") { promise: Promise ->
-      val stopped = NavigationSessionRegistry.requestStopCurrent()
+      val stopped =
+        NavigationSessionRegistry.requestStopCurrent() ||
+          MapboxNavigationView.requestStopActiveInstance()
       promise.resolve(stopped)
+    }
+
+    AsyncFunction("resumeCameraFollowing") { promise: Promise ->
+      val resumed = NavigationSessionRegistry.requestResumeCameraFollowingCurrent()
+      promise.resolve(resumed)
     }
 
     View(MapboxNavigationView::class) {
@@ -89,6 +100,7 @@ class MapboxNavigationModule : Module() {
         "onRouteProgressChange",
         "onJourneyDataChange",
         "onRouteChange",
+        "onCameraFollowingStateChange",
         "onBannerInstruction",
         "onArrive",
         "onDestinationPreview",
