@@ -24,6 +24,7 @@ import type {
   ArrivalEvent,
   BannerInstruction,
   BottomSheetActionEvent,
+  CameraFollowingState,
   DestinationChangedEvent,
   DestinationPreviewEvent,
   JourneyData,
@@ -138,12 +139,12 @@ function normalizeViewProps(
   }
 
   if (overlayModeActive) {
-    // In overlay mode we keep native top maneuver banner, but hide native bottom panel/actions
-    // so custom sheet is the only bottom UI.
-    showsTripProgress = false;
-    showsManeuverView = true;
-    showsActionButtons = false;
-    showCancelButton = false;
+    if (Platform.OS === "android") {
+      // Android embedded mode keeps custom sheet as the only bottom UI.
+      showsTripProgress = false;
+      showsActionButtons = false;
+      showCancelButton = false;
+    }
   }
 
   const wrappedOnLocationChange = props.onLocationChange
@@ -159,6 +160,14 @@ function normalizeViewProps(
         const payload = unwrapNativeEventPayload<RouteProgress>(event);
         if (payload) {
           props.onRouteProgressChange?.(payload);
+        }
+      }
+    : undefined;
+  const wrappedOnCameraFollowingStateChange = props.onCameraFollowingStateChange
+    ? (event: unknown) => {
+        const payload = unwrapNativeEventPayload<CameraFollowingState>(event);
+        if (payload) {
+          props.onCameraFollowingStateChange?.(payload);
         }
       }
     : undefined;
@@ -252,6 +261,7 @@ function normalizeViewProps(
     bottomSheet: undefined,
     onLocationChange: wrappedOnLocationChange,
     onRouteProgressChange: wrappedOnRouteProgressChange,
+    onCameraFollowingStateChange: wrappedOnCameraFollowingStateChange,
     onJourneyDataChange: wrappedOnJourneyDataChange,
     onRouteChange: wrappedOnRouteChange,
     onBannerInstruction: wrappedOnBannerInstruction,
@@ -330,6 +340,14 @@ export async function stopNavigation(): Promise<boolean> {
   }
 }
 
+export async function resumeCameraFollowing(): Promise<boolean> {
+  try {
+    return await MapboxNavigationModule.resumeCameraFollowing();
+  } catch (error) {
+    throw normalizeNativeError(error, "RESUME_CAMERA_FOLLOWING_FAILED");
+  }
+}
+
 /**
  * Subscribe to location updates from native navigation.
  */
@@ -356,6 +374,20 @@ export function addRouteProgressChangeListener(
       listener(payload);
     }
   });
+}
+
+export function addCameraFollowingStateChangeListener(
+  listener: (state: CameraFollowingState) => void,
+): Subscription {
+  return emitter.addListener(
+    "onCameraFollowingStateChange",
+    (event: unknown) => {
+      const payload = unwrapNativeEventPayload<CameraFollowingState>(event);
+      if (payload) {
+        listener(payload);
+      }
+    },
+  );
 }
 
 /**
@@ -1037,18 +1069,24 @@ export function MapboxNavigationView(
     const contentBottomPadding = 14;
     const contentTopSpacing = 0;
 
+    const iosHiddenTouchHeight = Math.max(
+      40,
+      Math.min(bottomSheet?.revealGestureHotzoneHeight ?? 120, 220),
+    );
+    const iosHiddenHotzoneBottom = 36;
+
     const backdropPress = () => {
       setSheetState(iosHiddenMode ? "hidden" : "collapsed");
     };
 
     const backdropVisible = sheetState === "expanded";
     const hiddenGrabberResponder = PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onStartShouldSetPanResponderCapture: () => true,
+      onStartShouldSetPanResponder: () => false,
+      onStartShouldSetPanResponderCapture: () => false,
       onMoveShouldSetPanResponder: (_evt, gesture) =>
-        Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 4,
+        Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 6,
       onMoveShouldSetPanResponderCapture: (_evt, gesture) =>
-        Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 2,
+        Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 6,
       onPanResponderTerminationRequest: () => false,
       onPanResponderRelease: (_evt, gesture) => {
         if (gesture.dy < -8 || gesture.vy < -0.3) {
@@ -1076,24 +1114,12 @@ export function MapboxNavigationView(
         {iosHiddenMode && sheetState === "hidden" ? (
           <View
             pointerEvents="auto"
-            style={styles.iosHiddenRevealZone}
+            style={[
+              styles.iosHiddenHotzone,
+              { height: iosHiddenTouchHeight, bottom: iosHiddenHotzoneBottom },
+            ]}
             {...hiddenGrabberResponder.panHandlers}
           />
-        ) : null}
-        {sheetState === "hidden" ? (
-          <View pointerEvents="box-none" style={styles.hiddenGrabberWrap}>
-            <View
-              pointerEvents="auto"
-              style={styles.hiddenGrabberTouchArea}
-              {...hiddenGrabberResponder.panHandlers}
-            >
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setSheetState("expanded")}
-                style={[styles.hiddenGrabber, { backgroundColor: handleColor }]}
-              />
-            </View>
-          </View>
         ) : null}
         {backdropVisible ? (
           <Pressable onPress={backdropPress} style={styles.overlayBackdrop} />
@@ -1170,34 +1196,12 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: "rgba(0,0,0,0.35)",
   },
-  hiddenGrabberWrap: {
+  iosHiddenHotzone: {
     position: "absolute",
     left: 0,
     right: 0,
-    bottom: 10,
-    alignItems: "center",
-    zIndex: 2,
-  },
-  hiddenGrabberTouchArea: {
-    width: 160,
-    height: 28,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  hiddenGrabber: {
-    width: 84,
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.35)",
-  },
-  iosHiddenRevealZone: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 130,
-    backgroundColor: "transparent",
     zIndex: 1,
+    backgroundColor: "transparent",
   },
   sheetContainer: {
     borderTopLeftRadius: 16,
@@ -1281,8 +1285,10 @@ export default {
   setLanguage,
   getNavigationSettings,
   stopNavigation,
+  resumeCameraFollowing,
   addLocationChangeListener,
   addRouteProgressChangeListener,
+  addCameraFollowingStateChangeListener,
   addJourneyDataChangeListener,
   addRouteChangeListener,
   addArriveListener,
