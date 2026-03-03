@@ -6,6 +6,17 @@ import CoreLocation
 import UIKit
 
 class MapboxNavigationView: ExpoView {
+  private static weak var activeInstance: MapboxNavigationView?
+  static func requestStopActiveInstance() -> Bool {
+    guard let instance = activeInstance else { return false }
+    DispatchQueue.main.async {
+      instance.enabled = false
+      instance.cleanupNavigation()
+      instance.onCancelNavigation([:])
+    }
+    return true
+  }
+
   private let sessionOwner = "embedded-\(UUID().uuidString)"
   var enabled: Bool = false {
     didSet { handleEnabledChange() }
@@ -22,22 +33,43 @@ class MapboxNavigationView: ExpoView {
   var shouldSimulateRoute: Bool = false {
     didSet { startNavigationIfReady() }
   }
-  var showCancelButton: Bool = true
+  var showCancelButton: Bool = true {
+    didSet { applyDynamicUIOptionsIfPossible() }
+  }
   var mute: Bool = false
   var voiceVolume: Double = 1
   var cameraPitch: Double?
   var cameraZoom: Double?
-  var cameraMode: String = "following"
+  var cameraMode: String = "following" {
+    didSet {
+      let normalized = cameraMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+      if normalized == "overview" {
+        setCameraFollowingState(false, reason: "prop")
+      } else if normalized == "following" {
+        resumeCameraFollowingInternal(reason: "prop")
+      }
+    }
+  }
   var mapStyleUri: String?
   var mapStyleUriDay: String?
   var mapStyleUriNight: String?
   var uiTheme: String = "system"
   var routeAlternatives: Bool = false
-  var showsSpeedLimits: Bool = true
-  var showsWayNameLabel: Bool = true
-  var showsTripProgress: Bool = true
-  var showsManeuverView: Bool = true
-  var showsActionButtons: Bool = true
+  var showsSpeedLimits: Bool = true {
+    didSet { applyDynamicUIOptionsIfPossible() }
+  }
+  var showsWayNameLabel: Bool = true {
+    didSet { applyDynamicUIOptionsIfPossible() }
+  }
+  var showsTripProgress: Bool = true {
+    didSet { applyDynamicUIOptionsIfPossible() }
+  }
+  var showsManeuverView: Bool = true {
+    didSet { applyDynamicUIOptionsIfPossible() }
+  }
+  var showsActionButtons: Bool = true {
+    didSet { applyDynamicUIOptionsIfPossible() }
+  }
   var showsReportFeedback: Bool = true
   var showsEndOfRouteFeedback: Bool = true
   var showsContinuousAlternatives: Bool = true
@@ -53,11 +85,14 @@ class MapboxNavigationView: ExpoView {
   private var hasPendingSessionConflict = false
   private var warnedUnsupportedOptions = Set<String>()
   private var routeRequestToken = UUID()
+  private var isCameraFollowing = true
+  private var hasCameraPanGesture = false
   
   let onLocationChange = EventDispatcher()
   let onRouteProgressChange = EventDispatcher()
   let onJourneyDataChange = EventDispatcher()
   let onRouteChange = EventDispatcher()
+  let onCameraFollowingStateChange = EventDispatcher()
   let onBannerInstruction = EventDispatcher()
   let onArrive = EventDispatcher()
   let onCancelNavigation = EventDispatcher()
@@ -123,6 +158,7 @@ class MapboxNavigationView: ExpoView {
       return
     }
     hasPendingSessionConflict = false
+    MapboxNavigationView.activeInstance = self
     NavigationSessionRegistry.shared.registerStopHandler(owner: sessionOwner) { [weak self] in
       DispatchQueue.main.async {
         guard let self = self else { return }
@@ -130,6 +166,14 @@ class MapboxNavigationView: ExpoView {
         self.cleanupNavigation()
         self.onCancelNavigation([:])
       }
+    }
+    NavigationSessionRegistry.shared.registerResumeCameraFollowingHandler(owner: sessionOwner) { [weak self] in
+      DispatchQueue.main.async {
+        self?.resumeCameraFollowingInternal(reason: "module")
+      }
+    }
+    NavigationSessionRegistry.shared.registerCameraFollowingProvider(owner: sessionOwner) { [weak self] in
+      return self?.isCameraFollowing ?? true
     }
     
     let originCoord = CLLocationCoordinate2D(latitude: originLat, longitude: originLng)
@@ -219,11 +263,13 @@ class MapboxNavigationView: ExpoView {
     )
     
     viewController.delegate = self
+    attachMapPanDetection(to: viewController)
     
     NavigationSettings.shared.distanceUnit = distanceUnit == "imperial" ? .mile : .kilometer
     NavigationSettings.shared.voiceMuted = mute
     NavigationSettings.shared.voiceVolume = Float(max(0, min(voiceVolume, 1)))
     viewController.showsSpeedLimits = showsSpeedLimits
+    applySpeedLimitVisibility(to: viewController)
     applyEmbeddedBannerVisibility(to: viewController)
     if !showsReportFeedback {
       warnUnsupportedOptionOnce(
@@ -259,12 +305,6 @@ class MapboxNavigationView: ExpoView {
       warnUnsupportedOptionOnce(
         key: "annotatesIntersectionsAlongRoute",
         message: "annotatesIntersectionsAlongRoute is currently not supported on embedded iOS navigation and will be ignored."
-      )
-    }
-    if !showsWayNameLabel {
-      warnUnsupportedOptionOnce(
-        key: "showsWayNameLabel",
-        message: "showsWayNameLabel is currently not supported on embedded iOS navigation and will be ignored."
       )
     }
     applyInterfaceStyle(to: viewController)
@@ -307,8 +347,53 @@ class MapboxNavigationView: ExpoView {
     navigationViewController?.view.removeFromSuperview()
     navigationViewController?.removeFromParent()
     navigationViewController = nil
+    hasCameraPanGesture = false
+    setCameraFollowingState(true, reason: "cleanup")
     NavigationSessionRegistry.shared.release(owner: sessionOwner)
+    if MapboxNavigationView.activeInstance === self {
+      MapboxNavigationView.activeInstance = nil
+    }
     hasPendingSessionConflict = false
+  }
+
+  private func applyDynamicUIOptionsIfPossible() {
+    guard let viewController = navigationViewController else { return }
+    viewController.showsSpeedLimits = showsSpeedLimits
+    applySpeedLimitVisibility(to: viewController)
+    applyEmbeddedBannerVisibility(to: viewController)
+  }
+
+  private func attachMapPanDetection(to viewController: NavigationViewController) {
+    guard !hasCameraPanGesture else { return }
+    guard let mapView = viewController.navigationMapView?.mapView else { return }
+    let pan = UIPanGestureRecognizer(target: self, action: #selector(handleMapPanGesture(_:)))
+    pan.cancelsTouchesInView = false
+    pan.delegate = self
+    mapView.addGestureRecognizer(pan)
+    hasCameraPanGesture = true
+  }
+
+  @objc
+  private func handleMapPanGesture(_ gesture: UIPanGestureRecognizer) {
+    let translation = gesture.translation(in: self)
+    if gesture.state == .changed && abs(translation.y) + abs(translation.x) > 8 {
+      setCameraFollowingState(false, reason: "gesture")
+    }
+  }
+
+  private func setCameraFollowingState(_ next: Bool, reason: String) {
+    if isCameraFollowing == next { return }
+    isCameraFollowing = next
+    onCameraFollowingStateChange([
+      "isCameraFollowing": next,
+      "isCameraNotFollowing": !next,
+      "reason": reason
+    ])
+  }
+
+  private func resumeCameraFollowingInternal(reason: String) {
+    navigationViewController?.navigationMapView?.navigationCamera.follow()
+    setCameraFollowingState(true, reason: reason)
   }
 
   private func applyEmbeddedBannerVisibility(to viewController: NavigationViewController) {
@@ -323,9 +408,70 @@ class MapboxNavigationView: ExpoView {
       top.view.isHidden = !showManeuver
       top.view.alpha = showManeuver ? 1 : 0
       top.view.isUserInteractionEnabled = showManeuver
+      if showManeuver && !showsWayNameLabel {
+        hideSubtreeLabelsByHints(
+          root: top.view,
+          hints: ["street", "wayname", "road", "current"]
+        )
+      }
+    }
+    // Fallback for SDK builds where top banner controller isn't exposed via KVC.
+    if !showManeuver {
+      hideSubtreeByHints(
+        root: viewController.view,
+        hints: [
+          "topbanner",
+          "instructionbanner",
+          "maneuver",
+          "top_banner",
+          "instruction",
+          "instructionview",
+          "maneuverbanner",
+          "floatinginstruction",
+          "instructionscard",
+          "followingturns",
+          "upcomingmaneuver",
+          "nextmaneuver",
+          "stepsoverview",
+          "instructionlist",
+          "simulating",
+          "simulation",
+          "replay",
+          "speedmultiplier",
+          "speedbadge",
+          "guidance",
+          "lane",
+          "junction",
+          "upcoming"
+        ]
+      )
+      hideSubtreeByLabelTextHints(
+        root: viewController.view,
+        textHints: ["simulating", "1x", "following", "turn", "upcoming", "next"]
+      )
+    } else {
+      showSubtreeByHints(
+        root: viewController.view,
+        hints: [
+          "topbanner",
+          "instructionbanner",
+          "maneuver",
+          "top_banner",
+          "instruction",
+          "instructionview",
+          "maneuverbanner",
+          "floatinginstruction",
+          "instructionscard"
+        ]
+      )
     }
 
     if let bottom = resolveBottomBannerController(from: viewController) {
+      let showBottom = showTripProgress || showActionButtons
+      bottom.view.isHidden = !showBottom
+      bottom.view.alpha = showBottom ? 1 : 0
+      bottom.view.isUserInteractionEnabled = showBottom
+
       bottom.distanceRemainingLabel?.isHidden = !showTripProgress
       bottom.timeRemainingLabel?.isHidden = !showTripProgress
       bottom.arrivalTimeLabel?.isHidden = !showTripProgress
@@ -334,6 +480,118 @@ class MapboxNavigationView: ExpoView {
       bottom.cancelButton?.isHidden = !cancelVisible
       bottom.cancelButton?.alpha = cancelVisible ? 1 : 0
       bottom.cancelButton?.isUserInteractionEnabled = cancelVisible
+    }
+    let showBottom = showTripProgress || showActionButtons
+    // Fallback for SDK builds where bottom banner controller isn't exposed via KVC.
+    if !showBottom {
+      hideSubtreeByHints(
+        root: viewController.view,
+        hints: [
+          "bottombanner",
+          "tripprogress",
+          "bottom_banner",
+          "infopanel",
+          "routeoverview",
+          "routepreview",
+          "footer"
+        ]
+      )
+    } else {
+      showSubtreeByHints(
+        root: viewController.view,
+        hints: [
+          "bottombanner",
+          "tripprogress",
+          "bottom_banner",
+          "infopanel",
+          "routeoverview",
+          "routepreview",
+          "footer"
+        ]
+      )
+    }
+  }
+
+  private func applySpeedLimitVisibility(to viewController: NavigationViewController) {
+    if showsSpeedLimits {
+      showSubtreeByHints(
+        root: viewController.view,
+        hints: ["speedlimit", "speed_limit"]
+      )
+      return
+    }
+    hideSubtreeByHints(
+      root: viewController.view,
+      hints: ["speedlimit", "speed_limit"]
+    )
+  }
+
+  private func hideSubtreeLabelsByHints(root: UIView, hints: [String]) {
+    for view in root.subviews {
+      let id = (view.accessibilityIdentifier ?? "").lowercased()
+      let cls = String(describing: type(of: view)).lowercased()
+      if (view is UILabel) && hints.contains(where: { id.contains($0) || cls.contains($0) }) {
+        view.isHidden = true
+        view.alpha = 0
+      }
+      if let nested = view as? UIView {
+        hideSubtreeLabelsByHints(root: nested, hints: hints)
+      }
+    }
+  }
+
+  private func hideSubtreeByLabelTextHints(root: UIView, textHints: [String]) {
+    for view in root.subviews {
+      if let label = view as? UILabel {
+        let text = (label.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if textHints.contains(where: { text.contains($0) }) {
+          label.isHidden = true
+          label.alpha = 0
+          // Hide small parent stack/card that usually hosts this label.
+          var parent = label.superview
+          var steps = 0
+          while let p = parent, steps < 2 {
+            p.isHidden = true
+            p.alpha = 0
+            p.isUserInteractionEnabled = false
+            parent = p.superview
+            steps += 1
+          }
+        }
+      }
+      if let nested = view as? UIView {
+        hideSubtreeByLabelTextHints(root: nested, textHints: textHints)
+      }
+    }
+  }
+
+  private func hideSubtreeByHints(root: UIView, hints: [String]) {
+    for view in root.subviews {
+      let id = (view.accessibilityIdentifier ?? "").lowercased()
+      let cls = String(describing: type(of: view)).lowercased()
+      if hints.contains(where: { id.contains($0) || cls.contains($0) }) {
+        view.isHidden = true
+        view.alpha = 0
+        view.isUserInteractionEnabled = false
+      }
+      if let nested = view as? UIView {
+        hideSubtreeByHints(root: nested, hints: hints)
+      }
+    }
+  }
+
+  private func showSubtreeByHints(root: UIView, hints: [String]) {
+    for view in root.subviews {
+      let id = (view.accessibilityIdentifier ?? "").lowercased()
+      let cls = String(describing: type(of: view)).lowercased()
+      if hints.contains(where: { id.contains($0) || cls.contains($0) }) {
+        view.isHidden = false
+        view.alpha = 1
+        view.isUserInteractionEnabled = true
+      }
+      if let nested = view as? UIView {
+        showSubtreeByHints(root: nested, hints: hints)
+      }
     }
   }
 
@@ -385,6 +643,7 @@ class MapboxNavigationView: ExpoView {
     }
 
     navigationMapView.navigationCamera.follow()
+    setCameraFollowingState(normalizedMode != "overview", reason: "config")
   }
 
   private func buildNavigationOptions(navigationService: NavigationService) -> NavigationOptions {
@@ -479,7 +738,11 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
     with location: CLLocation,
     rawLocation: CLLocation
   ) {
-    if cameraMode.lowercased() == "following" {
+    if !showsManeuverView || !showsTripProgress || !showsActionButtons || !showsSpeedLimits || !showsWayNameLabel {
+      applyDynamicUIOptionsIfPossible()
+    }
+
+    if cameraMode.lowercased() == "following" && isCameraFollowing {
       navigationViewController.navigationMapView?.navigationCamera.follow()
     }
 
@@ -544,5 +807,11 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
       onCancelNavigation([:])
     }
     cleanupNavigation()
+  }
+}
+
+extension MapboxNavigationView: UIGestureRecognizerDelegate {
+  func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+    true
   }
 }

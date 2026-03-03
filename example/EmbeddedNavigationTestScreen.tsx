@@ -9,7 +9,9 @@ import {
 } from "react-native";
 import {
   MapboxNavigationView,
+  resumeCameraFollowing,
   type BannerInstruction,
+  type CameraFollowingState,
   type RouteProgress,
   type Waypoint,
 } from "@atomiqlab/react-native-mapbox-navigation";
@@ -48,6 +50,7 @@ export default function EmbeddedNavigationTestScreen() {
   const [useCustomSheet, setUseCustomSheet] = useState(true);
   const [lastError, setLastError] = useState<string>("");
   const [routePointCount, setRoutePointCount] = useState<number>(0);
+  const [cameraNotFollowing, setCameraNotFollowing] = useState(false);
 
   useEffect(() => {
     if (Platform.OS !== "android") {
@@ -121,6 +124,9 @@ export default function EmbeddedNavigationTestScreen() {
         shouldSimulateRoute
         bottomSheet={bottomSheet}
         onRouteChange={(e) => setRoutePointCount(e.coordinates.length)}
+        onCameraFollowingStateChange={(e: CameraFollowingState) =>
+          setCameraNotFollowing(!!e.isCameraNotFollowing)
+        }
         onError={(e) => setLastError(`${e.code}: ${e.message}`)}
         renderBottomSheet={
           useCustomSheet
@@ -175,6 +181,9 @@ export default function EmbeddedNavigationTestScreen() {
             <Text style={styles.meta}>enabled: {String(enabled)}</Text>
             <Text style={styles.meta}>route points: {routePointCount}</Text>
             <Text style={styles.meta}>
+              cameraNotFollowing: {String(cameraNotFollowing)}
+            </Text>
+            <Text style={styles.meta}>
               custom sheet: {String(useCustomSheet)}
             </Text>
             {lastError ? (
@@ -203,6 +212,12 @@ export default function EmbeddedNavigationTestScreen() {
                       ? "Disable Custom Sheet"
                       : "Enable Custom Sheet"}
                   </Text>
+                </Pressable>
+                <Pressable
+                  style={styles.btn}
+                  onPress={() => resumeCameraFollowing().catch(() => {})}
+                >
+                  <Text style={styles.btnText}>Resume Camera</Text>
                 </Pressable>
               </View>
             )}
@@ -234,9 +249,9 @@ const styles = StyleSheet.create({
   meta: { color: "#9cc7ff", fontSize: 12, fontWeight: "600" },
   hint: { color: "rgba(255,255,255,0.75)", fontSize: 11, fontWeight: "500" },
   error: { color: "#fecaca", fontSize: 11, fontWeight: "700" },
-  row: { flexDirection: "row", gap: 8 },
+  row: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
   btn: {
-    flex: 1,
+    minWidth: 120,
     backgroundColor: "#2563eb",
     borderRadius: 10,
     paddingVertical: 10,

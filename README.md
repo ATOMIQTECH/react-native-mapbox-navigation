@@ -2,7 +2,7 @@
 
 Embedded Mapbox turn-by-turn navigation for Expo and React Native (iOS + Android).
 
-## 2.0.0 Breaking Change
+## v2 Breaking Change
 
 This package is now **embedded-only**.
 
@@ -12,6 +12,13 @@ Removed from v1 full-screen API:
 - full-screen navigation activity/controller flow
 
 Use `MapboxNavigationView` for both platforms.
+
+## Docs
+
+- [QUICKSTART.md](./QUICKSTART.md)
+- [docs/USAGE.md](./docs/USAGE.md)
+- [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)
+- [CHANGELOG.md](./CHANGELOG.md)
 
 ## Install
 
@@ -76,12 +83,14 @@ const destination: Waypoint = { latitude: 37.7847, longitude: -122.4073 };
 - `setLanguage(language: string)`
 - `getNavigationSettings()`
 - `stopNavigation()` stop active embedded session
+- `resumeCameraFollowing()` recenter to following mode after user pan/scroll
 
 ## Events
 
 Use listeners or component callbacks:
 - `onLocationChange`
 - `onRouteProgressChange`
+- `onCameraFollowingStateChange`
 - `onRouteChange`
 - `onJourneyDataChange`
 - `onBannerInstruction`
@@ -99,10 +108,3 @@ Use listeners or component callbacks:
 - iOS overlay mode uses `hidden/expanded`.
 - Android full-screen activity has been removed.
 - iOS full-screen module flow has been removed; embedded view is the only mode.
-
-## Docs
-
-- [QUICKSTART.md](./QUICKSTART.md)
-- [docs/USAGE.md](./docs/USAGE.md)
-- [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)
-- [CHANGELOG.md](./CHANGELOG.md)

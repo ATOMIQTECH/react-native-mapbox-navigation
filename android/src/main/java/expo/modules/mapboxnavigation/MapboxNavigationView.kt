@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
+import android.os.Build
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -16,6 +17,7 @@ import android.view.SurfaceView
 import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -61,6 +63,16 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   companion object {
     private const val TAG = "MapboxNavigationView"
     private const val EMBEDDED_BUILD = "2.0.0-embedded-2026-03-02-r1"
+    @Volatile private var activeInstance: MapboxNavigationView? = null
+
+    fun requestStopActiveInstance(): Boolean {
+      val instance = activeInstance ?: return false
+      instance.mainHandler.post {
+        instance.enabled = false
+        instance.stopEmbedded(emitCancel = true)
+      }
+      return true
+    }
   }
 
   private val expoAppContext: AppContext = appContext
@@ -112,16 +124,21 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private var navigationView: NavigationView? = null
   private var placeholderView: TextView? = null
-  private var nativeBottomPanelHidden = false
+  private var immersiveNavBarsHidden = false
 
   private var mapboxNavigation: MapboxNavigation? = null
   private var hasRequestedRoute = false
   private var hasEmittedArrival = false
+  private var isCameraFollowing = true
+  private var touchStartX = 0f
+  private var touchStartY = 0f
+  private val touchSlopPx = 8f * context.resources.displayMetrics.density
 
   val onLocationChange by EventDispatcher()
   val onRouteProgressChange by EventDispatcher()
   val onJourneyDataChange by EventDispatcher()
   val onRouteChange by EventDispatcher()
+  val onCameraFollowingStateChange by EventDispatcher()
   val onBannerInstruction by EventDispatcher()
   val onArrive by EventDispatcher()
   val onDestinationPreview by EventDispatcher()
@@ -152,6 +169,22 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         }
       }
       primeTextureViewIfPresent(mapView)
+      mapView.setOnTouchListener { _, event ->
+        when (event.actionMasked) {
+          android.view.MotionEvent.ACTION_DOWN -> {
+            touchStartX = event.x
+            touchStartY = event.y
+          }
+          android.view.MotionEvent.ACTION_MOVE -> {
+            val dx = kotlin.math.abs(event.x - touchStartX)
+            val dy = kotlin.math.abs(event.y - touchStartY)
+            if (dx + dy > touchSlopPx) {
+              setCameraFollowingState(false, "gesture")
+            }
+          }
+        }
+        false
+      }
     }
 
     override fun onDetached(mapView: com.mapbox.maps.MapView) = Unit
@@ -330,7 +363,14 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     MapboxAudioGuidanceController.setLanguage(lang)
   }
 
-  fun setCameraMode(mode: String) = Unit
+  fun setCameraMode(mode: String) {
+    val normalized = mode.trim().lowercase()
+    if (normalized == "overview") {
+      setCameraFollowingState(false, "prop")
+    } else if (normalized == "following") {
+      resumeCameraFollowingInternal("prop")
+    }
+  }
   fun setCameraPitch(pitch: Double) = Unit
   fun setCameraZoom(zoom: Double) = Unit
 
@@ -441,11 +481,18 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       return false
     }
     ownsNavigationSession = true
+    activeInstance = this
     NavigationSessionRegistry.registerStopHandler(sessionOwner) {
       mainHandler.post {
         enabled = false
         stopEmbedded(emitCancel = true)
       }
+    }
+    NavigationSessionRegistry.registerResumeCameraFollowingHandler(sessionOwner) {
+      mainHandler.post { resumeCameraFollowingInternal("module") }
+    }
+    NavigationSessionRegistry.registerCameraFollowingProvider(sessionOwner) {
+      isCameraFollowing
     }
     return true
   }
@@ -454,6 +501,9 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     if (!ownsNavigationSession) return
     NavigationSessionRegistry.release(sessionOwner)
     ownsNavigationSession = false
+    if (activeInstance === this) {
+      activeInstance = null
+    }
   }
 
   private fun getMapboxAccessToken(): String {
@@ -515,7 +565,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     view.api.routeReplayEnabled(shouldSimulateRoute)
 
     navigationView = view
-    nativeBottomPanelHidden = false
     nativeLayer.addView(view)
     Log.i(TAG, "Drop-In NavigationView added ($EMBEDDED_BUILD): nativeChildren=${nativeLayer.childCount}")
     scheduleLayoutNudges()
@@ -618,6 +667,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     ensureNavigationView()
     ensureNavigation()
     applyDropInOptions()
+    setNavigationBarsHidden(true)
+    setCameraFollowingState(true, "start")
 
     val nav = mapboxNavigation ?: return
     val view = navigationView ?: return
@@ -769,7 +820,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       runCatching { nativeLayer.removeView(nv) }
     }
     navigationView = null
-    nativeBottomPanelHidden = false
+    setNavigationBarsHidden(false)
 
     mapboxNavigation?.let { nav ->
       runCatching { nav.unregisterLocationObserver(locationObserver) }
@@ -783,6 +834,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     hidePlaceholder()
     hasRequestedRoute = false
     hasEmittedArrival = false
+    setCameraFollowingState(true, "stop")
     if (emitCancel) onCancelNavigation(emptyMap())
     releaseSession()
   }
@@ -828,6 +880,14 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     mainHandler.postDelayed({ hidePass("post+180ms") }, 180)
     mainHandler.postDelayed({ hidePass("post+650ms") }, 650)
     mainHandler.postDelayed({ hidePass("post+1400ms") }, 1400)
+    mainHandler.postDelayed({ hidePass("post+2400ms") }, 2400)
+    fun loop() {
+      if (!enabled) return
+      val live = navigationView ?: return
+      hideNativeBottomPanelIfRequested(live)
+      mainHandler.postDelayed({ loop() }, 400)
+    }
+    mainHandler.postDelayed({ loop() }, 1000)
   }
 
   private fun tryStartActiveGuidance(view: NavigationView) {
@@ -846,22 +906,32 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private fun hideNativeBottomPanelIfRequested(view: NavigationView?) {
     val target = view ?: return
-    if (nativeBottomPanelHidden) return
     runCatching {
-      val hiddenCount = hideViewsByClassNameHints(
+      hideViewsByClassNameHints(
         root = target,
-        hints = listOf("infopanel", "tripprogress", "bottombanner", "routepreview", "actionbutton", "bottomsheet")
+        hints = listOf(
+          "infopanel",
+          "tripprogress",
+          "bottombanner",
+          "routepreview",
+          "actionbutton",
+          "bottomsheet",
+          "routeinfo",
+          "maneuverfooter",
+          "instructionanddistance"
+        )
       )
-      if (hiddenCount > 0) {
-        nativeBottomPanelHidden = true
-      }
+      hideLowerNonMapContainers(target)
     }
   }
 
   private fun hideViewsByClassNameHints(root: View, hints: List<String>): Int {
     var hidden = 0
     val name = root.javaClass.name.lowercase()
-    if (hints.any { hint -> name.contains(hint) } && isInLowerHalf(root)) {
+    val idName = runCatching {
+      if (root.id != View.NO_ID) root.resources.getResourceEntryName(root.id).lowercase() else ""
+    }.getOrDefault("")
+    if (hints.any { hint -> name.contains(hint) || idName.contains(hint) }) {
       root.visibility = View.GONE
       root.alpha = 0f
       root.isClickable = false
@@ -871,6 +941,38 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     if (root is ViewGroup) {
       for (i in 0 until root.childCount) {
         hidden += hideViewsByClassNameHints(root.getChildAt(i), hints)
+      }
+    }
+    return hidden
+  }
+
+  private fun hideLowerNonMapContainers(root: View): Int {
+    var hidden = 0
+    val cls = root.javaClass.name.lowercase()
+    val isMapNode =
+      root is com.mapbox.maps.MapView ||
+        root is SurfaceView ||
+        root is TextureView ||
+        cls.contains("mapview")
+    if (!isMapNode && isInLowerHalf(root) && root.width > 0 && root.height > 0) {
+      val looksLikePanelContainer =
+        root is ViewGroup &&
+          (cls.contains("constraintlayout") ||
+            cls.contains("framelayout") ||
+            cls.contains("linearlayout") ||
+            cls.contains("coordinatorlayout") ||
+            cls.contains("materialcardview"))
+      if (looksLikePanelContainer) {
+        root.visibility = View.GONE
+        root.alpha = 0f
+        root.isClickable = false
+        root.isEnabled = false
+        hidden += 1
+      }
+    }
+    if (root is ViewGroup) {
+      for (i in 0 until root.childCount) {
+        hidden += hideLowerNonMapContainers(root.getChildAt(i))
       }
     }
     return hidden
@@ -896,6 +998,74 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     )
     val centerY = viewRect.centerY()
     return centerY >= (parentRect.top + parentRect.height() * 0.55)
+  }
+
+  private fun setNavigationBarsHidden(hidden: Boolean) {
+    val activity = expoAppContext.currentActivity ?: return
+    activity.runOnUiThread {
+      val window = activity.window ?: return@runOnUiThread
+      if (hidden) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+          window.insetsController?.let { controller ->
+            controller.hide(WindowInsets.Type.navigationBars())
+            controller.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+          }
+        } else {
+          @Suppress("DEPRECATION")
+          window.decorView.systemUiVisibility =
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+            View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        }
+        immersiveNavBarsHidden = true
+      } else if (immersiveNavBarsHidden) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+          window.insetsController?.show(WindowInsets.Type.navigationBars())
+        } else {
+          @Suppress("DEPRECATION")
+          run {
+            window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+          }
+        }
+        immersiveNavBarsHidden = false
+      }
+    }
+  }
+
+  private fun setCameraFollowingState(next: Boolean, reason: String) {
+    if (isCameraFollowing == next) return
+    isCameraFollowing = next
+    onCameraFollowingStateChange(
+      mapOf(
+        "isCameraFollowing" to next,
+        "isCameraNotFollowing" to !next,
+        "reason" to reason
+      )
+    )
+  }
+
+  private fun resumeCameraFollowingInternal(reason: String) {
+    val view = navigationView ?: return
+    setCameraFollowingState(true, reason)
+    // Best effort across Drop-In versions.
+    runCatching {
+      val api = view.api
+      val methods = api.javaClass.methods
+      val candidateNames = listOf(
+        "moveCameraToFollowing",
+        "requestNavigationCameraToFollowing",
+        "recenterCamera",
+        "recenter"
+      )
+      for (name in candidateNames) {
+        val m = methods.firstOrNull { it.name == name && it.parameterTypes.isEmpty() }
+        if (m != null) {
+          m.invoke(api)
+          return@runCatching
+        }
+      }
+    }
   }
 
   private fun attachViewTreeOwnersIfPossible(view: View, activity: android.app.Activity?) {

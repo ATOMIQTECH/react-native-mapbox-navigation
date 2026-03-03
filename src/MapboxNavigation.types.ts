@@ -105,10 +105,18 @@ export type AndroidActionButtonsOptions = {
 /** Runtime settings/state returned by `getNavigationSettings()`. */
 export type NavigationSettings = {
   isNavigating: boolean;
+  isCameraFollowing: boolean;
+  isCameraNotFollowing: boolean;
   mute: boolean;
   voiceVolume: number;
   distanceUnit: "metric" | "imperial";
   language: string;
+};
+
+export type CameraFollowingState = {
+  isCameraFollowing: boolean;
+  isCameraNotFollowing: boolean;
+  reason?: string;
 };
 
 /** Location update payload emitted by native layer. */
@@ -203,6 +211,7 @@ export interface MapboxNavigationModule {
   setLanguage(language: string): Promise<void>;
   getNavigationSettings(): Promise<NavigationSettings>;
   stopNavigation(): Promise<boolean>;
+  resumeCameraFollowing(): Promise<boolean>;
 }
 
 export interface MapboxNavigationViewProps {
@@ -265,6 +274,8 @@ export interface MapboxNavigationViewProps {
   onLocationChange?: (location: LocationUpdate) => void;
   /** Callback for route progress changes. */
   onRouteProgressChange?: (progress: RouteProgress) => void;
+  /** Callback when camera-following state changes (for example after map pan gesture). */
+  onCameraFollowingStateChange?: (state: CameraFollowingState) => void;
   /** Callback when active route geometry changes. */
   onRouteChange?: (event: RouteChangeEvent) => void;
   /** Callback with aggregated journey data for custom UI rendering. */
