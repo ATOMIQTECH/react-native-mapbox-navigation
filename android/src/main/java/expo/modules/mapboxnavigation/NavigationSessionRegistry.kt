@@ -7,6 +7,8 @@ internal object NavigationSessionRegistry {
   private val lock = ReentrantLock()
   private var owner: String? = null
   private val stopHandlers = mutableMapOf<String, () -> Unit>()
+  private val resumeCameraHandlers = mutableMapOf<String, () -> Unit>()
+  private val cameraFollowingProviders = mutableMapOf<String, () -> Boolean>()
 
   fun acquire(newOwner: String): Boolean {
     return lock.withLock {
@@ -25,12 +27,26 @@ internal object NavigationSessionRegistry {
         owner = null
       }
       stopHandlers.remove(releasingOwner)
+      resumeCameraHandlers.remove(releasingOwner)
+      cameraFollowingProviders.remove(releasingOwner)
     }
   }
 
   fun registerStopHandler(owner: String, handler: () -> Unit) {
     lock.withLock {
       stopHandlers[owner] = handler
+    }
+  }
+
+  fun registerResumeCameraFollowingHandler(owner: String, handler: () -> Unit) {
+    lock.withLock {
+      resumeCameraHandlers[owner] = handler
+    }
+  }
+
+  fun registerCameraFollowingProvider(owner: String, provider: () -> Boolean) {
+    lock.withLock {
+      cameraFollowingProviders[owner] = provider
     }
   }
 
@@ -41,5 +57,22 @@ internal object NavigationSessionRegistry {
     } ?: return false
     handler.invoke()
     return true
+  }
+
+  fun requestResumeCameraFollowingCurrent(): Boolean {
+    val handler = lock.withLock {
+      val current = owner ?: return false
+      resumeCameraHandlers[current]
+    } ?: return false
+    handler.invoke()
+    return true
+  }
+
+  fun isCurrentCameraFollowing(): Boolean {
+    val provider = lock.withLock {
+      val current = owner ?: return true
+      cameraFollowingProviders[current]
+    } ?: return true
+    return provider.invoke()
   }
 }
