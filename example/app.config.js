@@ -2,30 +2,18 @@ const mapboxDownloadsToken = process.env.MAPBOX_DOWNLOADS_TOKEN || "";
 
 module.exports = {
   expo: {
-    name: "example",
-    slug: "example",
+    name: "example-mapbox",
+    slug: "example-mapbox",
     version: "1.0.0",
     orientation: "portrait",
-    icon: "./assets/icon.png",
     userInterfaceStyle: "light",
-    splash: {
-      image: "./assets/splash-icon.png",
-      resizeMode: "contain",
-      backgroundColor: "#ffffff"
-    },
     ios: {
-      bundleIdentifier: "com.tujyane.example",
+      bundleIdentifier: "com.expomapboxnavigationexample",
       supportsTablet: true
     },
     android: {
-      adaptiveIcon: {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
       predictiveBackGestureEnabled: false,
-      package: "com.tujyane.example"
+      package: "com.expomapboxnavigationexample"
     },
     plugins: [
       [
@@ -48,4 +36,4 @@ module.exports = {
       "../app.plugin.js",
     ],
   },
-};
+}
