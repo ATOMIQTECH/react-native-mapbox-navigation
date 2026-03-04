@@ -44,6 +44,13 @@ class MapboxNavigationView: ExpoView {
   var usesNightStyleWhileInTunnel: Bool = true
   var routeLineTracksTraversal: Bool = false
   var annotatesIntersectionsAlongRoute: Bool = false
+  var nativeFloatingButtons: [String: Any]? = nil {
+    didSet {
+      if let navigationViewController {
+        applyNativeFloatingButtonsConfiguration(to: navigationViewController)
+      }
+    }
+  }
   var distanceUnit: String = "metric"
   var language: String = "en"
   
@@ -224,17 +231,12 @@ class MapboxNavigationView: ExpoView {
     NavigationSettings.shared.voiceMuted = mute
     NavigationSettings.shared.voiceVolume = Float(max(0, min(voiceVolume, 1)))
     viewController.showsSpeedLimits = showsSpeedLimits
+    applyNativeFloatingButtonsConfiguration(to: viewController)
     applyEmbeddedBannerVisibility(to: viewController)
     if !showsReportFeedback {
       warnUnsupportedOptionOnce(
         key: "showsReportFeedback",
         message: "showsReportFeedback is currently not supported on embedded iOS navigation and will be ignored."
-      )
-    }
-    if !showsEndOfRouteFeedback {
-      warnUnsupportedOptionOnce(
-        key: "showsEndOfRouteFeedback",
-        message: "showsEndOfRouteFeedback is currently not supported on embedded iOS navigation and will be ignored."
       )
     }
     if !showsContinuousAlternatives {
@@ -335,6 +337,38 @@ class MapboxNavigationView: ExpoView {
       bottom.cancelButton?.alpha = cancelVisible ? 1 : 0
       bottom.cancelButton?.isUserInteractionEnabled = cancelVisible
     }
+  }
+
+  private func applyNativeFloatingButtonsConfiguration(to viewController: NavigationViewController) {
+    let options = nativeFloatingButtons ?? [:]
+    let showOverview = (options["showOverviewButton"] as? Bool) ?? true
+    let showAudio = (options["showAudioGuidanceButton"] as? Bool) ?? true
+    let showFeedback = (options["showFeedbackButton"] as? Bool) ?? true
+
+    viewController.showsReportFeedback = showFeedback
+    viewController.loadViewIfNeeded()
+
+    let existingButtons = viewController.floatingButtons ?? []
+    guard !existingButtons.isEmpty else {
+      if !showOverview && !showAudio && !showFeedback {
+        viewController.floatingButtons = []
+      }
+      return
+    }
+
+    let filteredButtons = existingButtons.enumerated().compactMap { index, button in
+      switch index {
+      case 0:
+        return showOverview ? button : nil
+      case 1:
+        return showAudio ? button : nil
+      case 2:
+        return showFeedback ? button : nil
+      default:
+        return button
+      }
+    }
+    viewController.floatingButtons = filteredButtons
   }
 
   private func resolveTopBannerController(from viewController: NavigationViewController) -> UIViewController? {

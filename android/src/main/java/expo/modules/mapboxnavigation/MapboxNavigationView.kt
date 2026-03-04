@@ -46,6 +46,9 @@ import com.mapbox.navigation.dropin.RouteOptionsInterceptor
 import com.mapbox.navigation.dropin.map.MapViewObserver
 import com.mapbox.navigation.dropin.map.MapViewBinder
 import com.mapbox.navigation.dropin.navigationview.NavigationViewListener
+import com.mapbox.maps.plugin.Plugin
+import com.mapbox.maps.plugin.compass.CompassPlugin
+import com.mapbox.maps.plugin.scalebar.ScaleBarPlugin
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
@@ -109,6 +112,10 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private var usesNightStyleWhileInTunnel = true
   private var routeLineTracksTraversal = false
   private var annotatesIntersectionsAlongRoute = false
+  private var showNativeAudioGuidanceButton = true
+  private var showNativeCameraModeButton = true
+  private var showNativeRecenterButton = true
+  private var showNativeCompassButton = true
 
   private var navigationView: NavigationView? = null
   private var placeholderView: TextView? = null
@@ -152,6 +159,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         }
       }
       primeTextureViewIfPresent(mapView)
+      hideMapOrnaments(mapView)
     }
 
     override fun onDetached(mapView: com.mapbox.maps.MapView) = Unit
@@ -234,6 +242,13 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     emitJourneyData(banner = banner, progress = null)
   }
 
+  private fun emitArrivalIfNeeded() {
+    if (hasEmittedArrival) return
+    hasEmittedArrival = true
+    val name = (destination?.get("name") as? String)?.trim()?.takeIf { it.isNotEmpty() }
+    onArrive(mapOf("name" to (name ?: "Destination")))
+  }
+
   private val routeProgressObserver = RouteProgressObserver { progress: RouteProgress ->
     onRouteProgressChange(
       mapOf(
@@ -244,9 +259,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       )
     )
     if (!hasEmittedArrival && progress.distanceRemaining <= 5.0) {
-      hasEmittedArrival = true
-      val name = (destination?.get("name") as? String)?.trim()?.takeIf { it.isNotEmpty() }
-      onArrive(mapOf("name" to (name ?: "Destination")))
+      emitArrivalIfNeeded()
     }
     emitBannerInstruction(progress.bannerInstructions)
     emitJourneyData(banner = progress.bannerInstructions, progress = progress)
@@ -254,8 +267,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private val arrivalObserver = object : ArrivalObserver {
     override fun onFinalDestinationArrival(routeProgress: RouteProgress) {
-      val name = (destination?.get("name") as? String)?.trim()?.takeIf { it.isNotEmpty() }
-      onArrive(mapOf("name" to (name ?: "Destination")))
+      emitArrivalIfNeeded()
     }
 
     override fun onNextRouteLegStart(routeLegProgress: com.mapbox.navigation.base.trip.model.RouteLegProgress) = Unit
@@ -394,9 +406,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   fun setShowsEndOfRouteFeedback(enabled: Boolean) {
     showsEndOfRouteFeedback = enabled
-    if (!enabled) {
-      Log.w(TAG, "showsEndOfRouteFeedback is not supported by the Android embedded Drop-In view and will be ignored.")
-    }
   }
 
   fun setShowsContinuousAlternatives(enabled: Boolean) {
@@ -421,6 +430,14 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     if (androidActionButtons != null) {
       Log.w(TAG, "androidActionButtons is not supported by the Android embedded Drop-In view and will be ignored.")
     }
+  }
+
+  fun setNativeFloatingButtons(options: Map<String, Any>?) {
+    showNativeAudioGuidanceButton = options?.get("showAudioGuidanceButton") as? Boolean ?: true
+    showNativeCameraModeButton = options?.get("showCameraModeButton") as? Boolean ?: true
+    showNativeRecenterButton = options?.get("showRecenterButton") as? Boolean ?: true
+    showNativeCompassButton = options?.get("showCompassButton") as? Boolean ?: true
+    applyDropInOptions()
   }
 
   private fun hasLocationPermission(): Boolean {
@@ -799,20 +816,35 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       mapStyleUriDay = resolvedDay
       mapStyleUriNight = resolvedNight
 
-      // Embedded mode is custom-bottom-sheet-only. Keep native top maneuver only.
+      val nativeFloatingButtonsVisible =
+        showsActionButtons &&
+          (showNativeAudioGuidanceButton ||
+            showNativeCameraModeButton ||
+            showNativeRecenterButton ||
+            showNativeCompassButton)
+
+      // Keep the native top banner and suppress the lower route panel in embedded mode.
       showManeuver = true
+      showInfoPanelInFreeDrive = false
+      isInfoPanelHideable = true
+      infoPanelForcedState = 5
       showTripProgress = false
-      showActionButtons = false
+      showActionButtons = nativeFloatingButtonsVisible
+      showToggleAudioActionButton = showNativeAudioGuidanceButton
+      showCameraModeActionButton = showNativeCameraModeButton
+      showRecenterActionButton = showNativeRecenterButton
+      showCompassActionButton = showNativeCompassButton
       showRoadName = true
       showSpeedLimit = showsSpeedLimits
-      showArrivalText = true
+      showArrivalText = false
+      showPoiName = false
       enableMapLongClickIntercept = false
 
       // Hide all native bottom controls (preview/start/end/action panel).
       showStartNavigationButton = false
       showEndNavigationButton = false
       showRoutePreviewButton = false
-      showMapScalebar = true
+      showMapScalebar = false
     }
 
     hideNativeBottomPanelIfRequested(view)
@@ -850,11 +882,27 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     runCatching {
       val hiddenCount = hideViewsByClassNameHints(
         root = target,
-        hints = listOf("infopanel", "tripprogress", "bottombanner", "routepreview", "actionbutton", "bottomsheet")
+        hints = listOf("infopanel", "tripprogress", "bottombanner", "routepreview", "bottomsheet")
       )
       if (hiddenCount > 0) {
         nativeBottomPanelHidden = true
       }
+    }
+  }
+
+  private fun hideMapOrnaments(mapView: com.mapbox.maps.MapView) {
+    runCatching {
+      mapView.getPlugin<CompassPlugin>(Plugin.MAPBOX_COMPASS_PLUGIN_ID)
+    }.getOrNull()?.apply {
+      enabled = false
+      visibility = false
+      clickable = false
+    }
+
+    runCatching {
+      mapView.getPlugin<ScaleBarPlugin>(Plugin.MAPBOX_SCALEBAR_PLUGIN_ID)
+    }.getOrNull()?.apply {
+      enabled = false
     }
   }
 
