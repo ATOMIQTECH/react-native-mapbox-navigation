@@ -34,6 +34,7 @@ const DESTINATION: Waypoint = {
 export default function HomeScreen() {
   const [supportSheetOpen, setSupportSheetOpen] = useState(false);
   const [lastAction, setLastAction] = useState("none");
+  const [tripRating, setTripRating] = useState<number | null>(null);
   const [hasLocationPermission, setHasLocationPermission] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState<
     "checking" | "requesting" | "granted" | "denied" | "blocked"
@@ -141,6 +142,7 @@ export default function HomeScreen() {
         destination={DESTINATION}
         shouldSimulateRoute
         mute
+        showsEndOfRouteFeedback
         nativeFloatingButtons={{
           showCameraModeButton: false,
           showCompassButton: false,
@@ -154,6 +156,10 @@ export default function HomeScreen() {
         }}
         onOverlayBottomSheetActionPress={(event) => {
           setLastAction(`${event.source}:${event.actionId}`);
+        }}
+        onEndOfRouteFeedbackSubmit={(event) => {
+          setTripRating(event.rating);
+          setLastAction(`feedback:${event.rating}`);
         }}
       />
 
@@ -203,6 +209,14 @@ export default function HomeScreen() {
             >
               <Text style={styles.supportButtonLabel}>Close</Text>
             </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {tripRating != null ? (
+        <View pointerEvents="box-none" style={styles.ratingToastWrap}>
+          <View style={styles.ratingToast}>
+            <Text style={styles.ratingToastLabel}>Rated trip {tripRating}/5</Text>
           </View>
         </View>
       ) : null}
@@ -317,6 +331,26 @@ const styles = StyleSheet.create({
   supportButtonLabel: {
     color: "#ffffff",
     fontSize: 13,
+    fontWeight: "700",
+  },
+  ratingToastWrap: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 26,
+    alignItems: "center",
+  },
+  ratingToast: {
+    borderRadius: 999,
+    backgroundColor: "rgba(15,23,42,0.92)",
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.22)",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  ratingToastLabel: {
+    color: "#f8fafc",
+    fontSize: 12,
     fontWeight: "700",
   },
 });
