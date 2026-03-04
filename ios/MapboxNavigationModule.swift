@@ -204,6 +204,10 @@ public class MapboxNavigationModule: Module {
         view.distanceUnit = unit
       }
 
+      Prop("nativeFloatingButtons") { (view: MapboxNavigationView, value: [String: Any]?) in
+        view.nativeFloatingButtons = value
+      }
+
       Prop("language") { (view: MapboxNavigationView, language: String) in
         view.language = language
       }
