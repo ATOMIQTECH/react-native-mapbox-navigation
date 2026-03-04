@@ -8,7 +8,7 @@ npm install @atomiqlab/react-native-mapbox-navigation
 
 ## 2. Configure Mapbox token
 
-Set `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN` and run prebuild so native token resources are generated.
+Set `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN` and `MAPBOX_DOWNLOADS_TOKEN`, add the package plugin, then run prebuild so native token resources are generated.
 
 ## 3. Render embedded navigation
 
@@ -38,6 +38,22 @@ import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation"
   }}
   renderBottomSheet={({ bannerInstruction, routeProgress }) => (
     <YourSheet bannerInstruction={bannerInstruction} routeProgress={routeProgress} />
+  )}
+/>
+```
+
+## 5. Optional floating action buttons
+
+```tsx
+<MapboxNavigationView
+  enabled
+  style={{ flex: 1 }}
+  destination={{ latitude: 37.7847, longitude: -122.4073 }}
+  bottomSheet={{ enabled: true, mode: "overlay", initialState: "hidden" }}
+  renderFloatingButtons={({ expand }) => (
+    <Pressable onPress={expand}>
+      <Text>Open sheet</Text>
+    </Pressable>
   )}
 />
 ```

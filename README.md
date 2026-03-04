@@ -131,6 +131,24 @@ Platform behavior:
 - Android: `collapsed` and `expanded`
 - iOS: `hidden` and `expanded` (collapsed maps to hidden behavior)
 
+## Custom Floating Buttons
+
+Use the JS overlay layer for app-owned floating actions. This avoids any per-app native work and can drive either your own UI or the package bottom sheet.
+
+```tsx
+<MapboxNavigationView
+  enabled
+  style={{ flex: 1 }}
+  destination={destination}
+  bottomSheet={{ enabled: true, mode: "overlay", initialState: "hidden" }}
+  renderFloatingButtons={({ expand }) => (
+    <Pressable onPress={expand}>
+      <Text>Open Sheet</Text>
+    </Pressable>
+  )}
+/>
+```
+
 ## Runtime APIs
 
 - `setMuted(muted: boolean)`
