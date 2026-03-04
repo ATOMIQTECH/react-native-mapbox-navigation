@@ -1,189 +1,79 @@
 # Usage
 
-## Embedded Only
+`README.md` is the canonical API reference. This file focuses on behavior that is easy to miss when integrating the library.
 
-This package is embedded-only. Full-screen APIs were removed in `2.0.0`.
+## Embedded-Only Model
 
-## Basic
+`2.x` removed the full-screen navigation APIs. All navigation runs through `MapboxNavigationView`.
 
-```tsx
-import { MapboxNavigationView, type Waypoint } from "@atomiqlab/react-native-mapbox-navigation";
+Only one embedded session should be active at a time. If multiple enabled views mount together, expect `NAVIGATION_SESSION_CONFLICT`.
 
-const START: Waypoint = { latitude: 37.7749, longitude: -122.4194 };
-const DEST: Waypoint = { latitude: 37.7847, longitude: -122.4073 };
+## Origin Handling
 
-<MapboxNavigationView
-  enabled
-  style={{ flex: 1 }}
-  startOrigin={START}
-  destination={DEST}
-  shouldSimulateRoute
-/>
-```
+- Android can preview and start with the device location when `startOrigin` is omitted
+- iOS currently requires `startOrigin`
 
-## Overlay Sheet Behavior
+For a consistent cross-platform setup, pass `startOrigin` after you capture the current location.
 
-- Android: custom sheet uses `collapsed` and `expanded` states.
-- iOS: custom sheet uses `hidden` and `expanded` behavior (collapsed maps to hidden).
+## Overlay Architecture
 
-## Runtime Functions
+The library uses React overlays for app-owned UI:
 
-```ts
-import {
-  setMuted,
-  setVoiceVolume,
-  setDistanceUnit,
-  setLanguage,
-  getNavigationSettings,
-  stopNavigation,
-} from "@atomiqlab/react-native-mapbox-navigation";
-```
+- `bottomSheet` renders a React sheet over the native map
+- `floatingButtons` render a React action rail over the native map
+- `showsEndOfRouteFeedback` renders a React rating modal at arrival
 
-- `setMuted(muted: boolean): Promise<void>`
-- `setVoiceVolume(volume: number): Promise<void>`
-- `setDistanceUnit(unit: "metric" | "imperial"): Promise<void>`
-- `setLanguage(language: string): Promise<void>`
-- `getNavigationSettings(): Promise<NavigationSettings>`
-- `stopNavigation(): Promise<boolean>`
+This means:
 
-## Listeners
+- custom floating buttons do not require `bottomSheet`
+- the end-of-route rating modal is package-managed, not a native Mapbox modal
+- overlay props are intentionally handled in JS and are not forwarded to native view props
 
-```ts
-import {
-  addLocationChangeListener,
-  addRouteChangeListener,
-  addRouteProgressChangeListener,
-  addJourneyDataChangeListener,
-  addBannerInstructionListener,
-  addArriveListener,
-  addDestinationPreviewListener,
-  addDestinationChangedListener,
-  addCancelNavigationListener,
-  addErrorListener,
-  addBottomSheetActionPressListener,
-} from "@atomiqlab/react-native-mapbox-navigation";
-```
+## Native Floating Buttons
 
-- `addLocationChangeListener(listener)`
-- `addRouteChangeListener(listener)`
-- `addRouteProgressChangeListener(listener)`
-- `addJourneyDataChangeListener(listener)`
-- `addBannerInstructionListener(listener)`
-- `addArriveListener(listener)`
-- `addDestinationPreviewListener(listener)` Android-only
-- `addDestinationChangedListener(listener)` Android-only
-- `addCancelNavigationListener(listener)`
-- `addErrorListener(listener)`
-- `addBottomSheetActionPressListener(listener)`
+Use `nativeFloatingButtons` when you need to keep, remove, or partially trim the built-in native action buttons.
 
-## `MapboxNavigationView` Props
+Recommended pattern:
 
-### Core
-- `enabled?: boolean`
-- `style?: any`
-- `startOrigin?: Coordinate`
-- `destination: Waypoint`
-- `waypoints?: Waypoint[]`
-- `shouldSimulateRoute?: boolean`
+- keep native buttons visible unless you have a concrete reason to hide one
+- add custom React floating buttons with `floatingButtonsComponent`
+- only hide the exact native buttons you do not want
 
-### Voice / Locale
-- `mute?: boolean`
-- `voiceVolume?: number`
-- `distanceUnit?: "metric" | "imperial"`
-- `language?: string`
+## End-of-Route Feedback
 
-### Camera / Theme / Style
-- `cameraMode?: "following" | "overview"`
-- `cameraPitch?: number`
-- `cameraZoom?: number`
-- `uiTheme?: "system" | "light" | "dark" | "day" | "night"`
-- `mapStyleUri?: string`
-- `mapStyleUriDay?: string`
-- `mapStyleUriNight?: string`
+Three supported modes:
 
-### Navigation UI Toggles
-- `showCancelButton?: boolean`
-- `routeAlternatives?: boolean`
-- `showsSpeedLimits?: boolean`
-- `showsWayNameLabel?: boolean`
-- `showsTripProgress?: boolean`
-- `showsManeuverView?: boolean`
-- `showsActionButtons?: boolean`
-- `showsReportFeedback?: boolean`
-- `showsEndOfRouteFeedback?: boolean`
-- `showsContinuousAlternatives?: boolean`
-- `usesNightStyleWhileInTunnel?: boolean`
-- `routeLineTracksTraversal?: boolean`
-- `annotatesIntersectionsAlongRoute?: boolean`
-- `androidActionButtons?: AndroidActionButtonsOptions`
+- disabled: omit `showsEndOfRouteFeedback`
+- default modal: set `showsEndOfRouteFeedback`
+- custom modal: provide `renderEndOfRouteFeedback` or `endOfRouteFeedbackComponent`
 
-### Custom Bottom Sheet
-- `bottomSheet?: BottomSheetOptions`
-- `bottomSheetContent?: ReactNode`
-- `renderBottomSheet?: (context) => ReactNode`
-- `floatingButtons?: ReactNode`
-- `renderFloatingButtons?: (context) => ReactNode`
-- `floatingButtonsContainerStyle?: StyleProp<ViewStyle>`
+`hideFloatingButtonsOnArrival` defaults to `true`, so custom floating buttons disappear automatically when the trip ends.
 
-`renderBottomSheet` context:
-- `state: "hidden" | "collapsed" | "expanded"`
-- `hidden: boolean`
-- `expanded: boolean`
-- `show(state?)`
-- `hide()`
-- `expand()`
-- `collapse()`
-- `toggle()`
-- `bannerInstruction?`
-- `routeProgress?`
-- `location?`
-- `stopNavigation()`
-- `emitAction(actionId)`
+## Props That Are Not Reliable Today
 
-`renderFloatingButtons` context:
-- `show(state?)`
-- `hide()`
-- `expand()`
-- `collapse()`
-- `toggle()`
-- `bannerInstruction?`
-- `routeProgress?`
-- `location?`
-- `stopNavigation()`
-- `emitAction(actionId)`
+These types still exist, but you should not build product behavior around them yet:
 
-### Component Callbacks
-- `onLocationChange?(location)`
-- `onRouteChange?(event)` includes route `coordinates`
-- `onRouteProgressChange?(progress)`
-- `onJourneyDataChange?(data)`
-- `onArrive?(event)`
-- `onDestinationPreview?(event)` Android-only
-- `onDestinationChanged?(event)` Android-only
-- `onCancelNavigation?()`
-- `onError?(error)`
-- `onBannerInstruction?(instruction)`
-- `onOverlayBottomSheetActionPress?(event)`
+- `androidActionButtons`
+  Present for compatibility, effectively ignored in embedded mode
+- `showsReportFeedback`
+  Not a reliable cross-platform embedded toggle
+- `getNavigationSettings().isNavigating`
+  Currently not authoritative session state
 
-## `BottomSheetOptions` (active)
+## Recommended Integration Pattern
 
-- `enabled?: boolean`
-- `mode?: "overlay"`
-- `initialState?: "hidden" | "collapsed" | "expanded"`
-- `collapsedHeight?: number`
-- `collapsedBottomOffset?: number`
-- `expandedHeight?: number`
-- `showHandle?: boolean`
-- `enableTapToToggle?: boolean`
-- `overlayLocationUpdateIntervalMs?: number`
-- `overlayProgressUpdateIntervalMs?: number`
-- `showDefaultContent?: boolean`
-- `defaultManeuverTitle?: string`
-- `defaultTripProgressTitle?: string`
-- `showCurrentStreet?: boolean`
-- `showRemainingDistance?: boolean`
-- `showRemainingDuration?: boolean`
-- `showETA?: boolean`
-- `showCompletionPercent?: boolean`
-- `builtInQuickActions?: BottomSheetBuiltInQuickAction[]`
-- `colorMode?: "light" | "dark"`: only sheet background mode (`light => #fff`, `dark => #202020`)
+1. Request permission with `expo-location`
+2. Capture device location
+3. Pass `startOrigin` and `destination`
+4. Mount `MapboxNavigationView` with `enabled={true}`
+5. Add app-owned overlays with `floatingButtonsComponent`, `bottomSheetComponent`, or both
+6. Handle `onError` and `onArrive`
+
+## Example App
+
+The example app in `example/` demonstrates:
+
+- Expo location permission flow
+- custom floating buttons
+- selective native floating-button visibility
+- package-managed end-of-route feedback
