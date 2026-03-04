@@ -1,6 +1,10 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true
+    "strict": true,
+    "paths": {
+      "@atomiqlab/react-native-mapbox-navigation": ["../src/index"],
+      "@atomiqlab/react-native-mapbox-navigation/*": ["../src/*"]
+    }
   }
 }
