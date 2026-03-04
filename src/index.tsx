@@ -23,9 +23,11 @@ import {
 import type {
   ArrivalEvent,
   BannerInstruction,
+  BottomSheetRenderContext,
   BottomSheetActionEvent,
   DestinationChangedEvent,
   DestinationPreviewEvent,
+  FloatingButtonsRenderContext,
   JourneyData,
   LocationUpdate,
   MapboxNavigationModule as MapboxNavigationModuleType,
@@ -82,6 +84,17 @@ function normalizeNativeError(
   const code = candidate?.code ?? fallbackCode;
   const message = candidate?.message ?? "Unknown native error";
   return new Error(`[${code}] ${message}`);
+}
+
+function normalizeOverlayNode<T>(node: T): T | null {
+  if (
+    isValidElement(node) &&
+    node.type === Fragment &&
+    (node.props as any)?.children == null
+  ) {
+    return null;
+  }
+  return node;
 }
 
 function formatDuration(seconds: number): string {
@@ -546,9 +559,8 @@ export function MapboxNavigationView(
       : iosHiddenMode
         ? "hidden"
         : "collapsed";
-  const [sheetState, setSheetState] = useState<
-    "hidden" | "collapsed" | "expanded"
-  >(initialState);
+  const [sheetState, setSheetState] =
+    useState<BottomSheetRenderContext["state"]>(initialState);
   const [overlayBanner, setOverlayBanner] = useState<
     BannerInstruction | undefined
   >(undefined);
@@ -592,8 +604,10 @@ export function MapboxNavigationView(
     () => normalizeViewProps(propsWithBottomSheet),
     [propsWithBottomSheet],
   );
+  const useOverlayTelemetry =
+    useOverlayBottomSheet || typeof props.renderFloatingButtons === "function";
   const nativePropsWithOverlay = useMemo(() => {
-    if (!useOverlayBottomSheet) {
+    if (!useOverlayTelemetry) {
       return nativeProps;
     }
 
@@ -650,97 +664,153 @@ export function MapboxNavigationView(
   }, [
     nativeProps,
     overlayCameraMode,
-    useOverlayBottomSheet,
+    useOverlayTelemetry,
     overlayLocationMinIntervalMs,
     overlayProgressMinIntervalMs,
   ]);
+
+  const emitOverlayAction = (
+    actionId: string,
+    source: "builtin" | "custom" = "custom",
+  ) => {
+    props.onOverlayBottomSheetActionPress?.({ actionId, source });
+  };
+
+  const showOverlayBottomSheet = (
+    next: "collapsed" | "expanded" = "collapsed",
+  ) => {
+    if (!useOverlayBottomSheet) {
+      return;
+    }
+    setSheetState(
+      next === "expanded" ? "expanded" : iosHiddenMode ? "hidden" : "collapsed",
+    );
+  };
+
+  const hideOverlayBottomSheet = () => {
+    if (!useOverlayBottomSheet) {
+      return;
+    }
+    setSheetState(iosHiddenMode ? "hidden" : "collapsed");
+  };
+
+  const expandOverlayBottomSheet = () => {
+    if (!useOverlayBottomSheet) {
+      return;
+    }
+    setSheetState("expanded");
+  };
+
+  const collapseOverlayBottomSheet = () => {
+    if (!useOverlayBottomSheet) {
+      return;
+    }
+    setSheetState(iosHiddenMode ? "hidden" : "collapsed");
+  };
+
+  const toggleOverlayBottomSheet = () => {
+    if (!useOverlayBottomSheet) {
+      return;
+    }
+    setSheetState((value) =>
+      value === "expanded"
+        ? iosHiddenMode
+          ? "hidden"
+          : "collapsed"
+        : "expanded",
+    );
+  };
+
+  const floatingButtonsContext: FloatingButtonsRenderContext = {
+    show: showOverlayBottomSheet,
+    hide: hideOverlayBottomSheet,
+    expand: expandOverlayBottomSheet,
+    collapse: collapseOverlayBottomSheet,
+    toggle: toggleOverlayBottomSheet,
+    bannerInstruction: overlayBanner,
+    routeProgress: overlayProgress,
+    location: overlayLocation,
+    stopNavigation,
+    emitAction: (actionId: string) => emitOverlayAction(actionId, "custom"),
+  };
+
+  const renderFloatingButtons = () => {
+    const customButtons = normalizeOverlayNode(
+      props.renderFloatingButtons?.(floatingButtonsContext),
+    );
+    const staticButtons = normalizeOverlayNode(props.floatingButtons);
+    const content = customButtons ?? staticButtons;
+    if (!content) {
+      return null;
+    }
+
+    return (
+      <View pointerEvents="box-none" style={styles.floatingButtonsRoot}>
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.floatingButtonsContainer,
+            props.floatingButtonsContainerStyle,
+          ]}
+        >
+          {content}
+        </View>
+      </View>
+    );
+  };
+
   const renderOverlaySheet = () => {
     if (!useOverlayBottomSheet) {
       return null;
     }
 
-    const emitAction = (
-      actionId: string,
-      source: "builtin" | "custom" = "custom",
-    ) => {
-      props.onOverlayBottomSheetActionPress?.({ actionId, source });
-    };
-
     const runBuiltInQuickAction = async (actionId: string) => {
       switch (actionId) {
         case "overview":
           setOverlayCameraMode("overview");
-          emitAction(actionId, "builtin");
+          emitOverlayAction(actionId, "builtin");
           break;
         case "recenter":
           setOverlayCameraMode("following");
-          emitAction(actionId, "builtin");
+          emitOverlayAction(actionId, "builtin");
           break;
         case "mute":
           await setMuted(true);
           setOverlayMuted(true);
-          emitAction(actionId, "builtin");
+          emitOverlayAction(actionId, "builtin");
           break;
         case "unmute":
           await setMuted(false);
           setOverlayMuted(false);
-          emitAction(actionId, "builtin");
+          emitOverlayAction(actionId, "builtin");
           break;
         case "toggleMute": {
           const nextMuted = !overlayMuted;
           await setMuted(nextMuted);
           setOverlayMuted(nextMuted);
-          emitAction(actionId, "builtin");
+          emitOverlayAction(actionId, "builtin");
           break;
         }
         case "stop":
           await stopNavigation();
-          emitAction(actionId, "builtin");
+          emitOverlayAction(actionId, "builtin");
           break;
         default:
           break;
       }
     };
 
-    const context = {
+    const context: BottomSheetRenderContext = {
       state: sheetState,
       hidden: sheetState === "hidden",
       expanded: sheetState === "expanded",
-      show: (next: "collapsed" | "expanded" = "collapsed") =>
-        setSheetState(
-          next === "expanded"
-            ? "expanded"
-            : iosHiddenMode
-              ? "hidden"
-              : "collapsed",
-        ),
-      hide: () => setSheetState(iosHiddenMode ? "hidden" : "collapsed"),
-      expand: () => setSheetState("expanded"),
-      collapse: () => setSheetState(iosHiddenMode ? "hidden" : "collapsed"),
-      toggle: () =>
-        setSheetState((v) =>
-          v === "expanded"
-            ? iosHiddenMode
-              ? "hidden"
-              : "collapsed"
-            : "expanded",
-        ),
-      bannerInstruction: overlayBanner,
-      routeProgress: overlayProgress,
-      location: overlayLocation,
-      stopNavigation,
-      emitAction: (actionId: string) => emitAction(actionId, "custom"),
+      ...floatingButtonsContext,
     };
 
-    let customSheet = props.renderBottomSheet?.(context);
-    if (
-      isValidElement(customSheet) &&
-      customSheet.type === Fragment &&
-      (customSheet.props as any)?.children == null
-    ) {
-      customSheet = null;
-    }
-    const staticSheet = props.bottomSheetContent;
+    const customSheet = normalizeOverlayNode(
+      props.renderBottomSheet?.(context),
+    );
+    const staticSheet = normalizeOverlayNode(props.bottomSheetContent);
     const builtInQuickActions: {
       id: string;
       actionId: string;
@@ -965,10 +1035,10 @@ export function MapboxNavigationView(
                 onPress={() => {
                   if (action?.id.startsWith("__builtin_")) {
                     runBuiltInQuickAction(action?.actionId).catch(() => {
-                      emitAction(`error:${action?.actionId}`, "builtin");
+                      emitOverlayAction(`error:${action?.actionId}`, "builtin");
                     });
                   } else {
-                    emitAction(action?.actionId, "custom");
+                    emitOverlayAction(action?.actionId, "custom");
                   }
                 }}
                 style={[
@@ -1038,7 +1108,7 @@ export function MapboxNavigationView(
     const contentTopSpacing = 0;
 
     const backdropPress = () => {
-      setSheetState(iosHiddenMode ? "hidden" : "collapsed");
+      hideOverlayBottomSheet();
     };
 
     const backdropVisible = sheetState === "expanded";
@@ -1052,7 +1122,7 @@ export function MapboxNavigationView(
       onPanResponderTerminationRequest: () => false,
       onPanResponderRelease: (_evt, gesture) => {
         if (gesture.dy < -8 || gesture.vy < -0.3) {
-          setSheetState("expanded");
+          expandOverlayBottomSheet();
         }
       },
     });
@@ -1062,11 +1132,11 @@ export function MapboxNavigationView(
         Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 4,
       onPanResponderRelease: (_evt, gesture) => {
         if (gesture.dy < -10 || gesture.vy < -0.35) {
-          setSheetState("expanded");
+          expandOverlayBottomSheet();
           return;
         }
         if (gesture.dy > 10 || gesture.vy > 0.35) {
-          setSheetState(iosHiddenMode ? "hidden" : "collapsed");
+          collapseOverlayBottomSheet();
         }
       },
     });
@@ -1089,7 +1159,7 @@ export function MapboxNavigationView(
             >
               <Pressable
                 accessibilityRole="button"
-                onPress={() => setSheetState("expanded")}
+                onPress={expandOverlayBottomSheet}
                 style={[styles.hiddenGrabber, { backgroundColor: handleColor }]}
               />
             </View>
@@ -1141,7 +1211,12 @@ export function MapboxNavigationView(
     );
   };
 
-  if (!props.children && !useOverlayBottomSheet) {
+  if (
+    !props.children &&
+    !useOverlayBottomSheet &&
+    !props.floatingButtons &&
+    !props.renderFloatingButtons
+  ) {
     return <MapboxNavigationNativeView {...nativePropsWithOverlay} />;
   }
 
@@ -1156,12 +1231,23 @@ export function MapboxNavigationView(
           {props.children}
         </View>
       ) : null}
+      {renderFloatingButtons()}
       {renderOverlaySheet()}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  floatingButtonsRoot: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  floatingButtonsContainer: {
+    position: "absolute",
+    top: 72,
+    right: 16,
+    maxWidth: "78%",
+    alignItems: "flex-end",
+  },
   overlayRoot: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: "flex-end",

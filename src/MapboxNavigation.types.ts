@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { StyleProp, ViewStyle } from "react-native";
 
 /** Geographic coordinate in WGS84 format. */
 export type Coordinate = {
@@ -190,6 +191,34 @@ export type BottomSheetActionEvent = {
   actionId: "primary" | "secondary" | "cancel" | string;
 };
 
+/** Overlay sheet visibility state used by the JS renderer layer. */
+export type OverlayBottomSheetState = "hidden" | "collapsed" | "expanded";
+
+/** Shared overlay controls exposed to JS render callbacks. */
+export type OverlaySheetController = {
+  show: (state?: "collapsed" | "expanded") => void;
+  hide: () => void;
+  expand: () => void;
+  collapse: () => void;
+  toggle: () => void;
+};
+
+/** Context exposed to floating-button renderers. */
+export type FloatingButtonsRenderContext = OverlaySheetController & {
+  bannerInstruction?: BannerInstruction;
+  routeProgress?: RouteProgress;
+  location?: LocationUpdate;
+  stopNavigation: () => Promise<boolean>;
+  emitAction: (actionId: string) => void;
+};
+
+/** Context exposed to custom bottom-sheet renderers. */
+export type BottomSheetRenderContext = FloatingButtonsRenderContext & {
+  state: OverlayBottomSheetState;
+  hidden: boolean;
+  expanded: boolean;
+};
+
 /** Event subscription handle. */
 export type Subscription = {
   remove: () => void;
@@ -243,21 +272,13 @@ export interface MapboxNavigationViewProps {
   /** Static custom content rendered inside overlay bottom sheet. */
   bottomSheetContent?: ReactNode;
   /** Advanced custom sheet renderer. */
-  renderBottomSheet?: (context: {
-    state: "hidden" | "collapsed" | "expanded";
-    hidden: boolean;
-    expanded: boolean;
-    show: (state?: "collapsed" | "expanded") => void;
-    hide: () => void;
-    expand: () => void;
-    collapse: () => void;
-    toggle: () => void;
-    bannerInstruction?: BannerInstruction;
-    routeProgress?: RouteProgress;
-    location?: LocationUpdate;
-    stopNavigation: () => Promise<boolean>;
-    emitAction: (actionId: string) => void;
-  }) => ReactNode;
+  renderBottomSheet?: (context: BottomSheetRenderContext) => ReactNode;
+  /** Static floating action content rendered above the native navigation UI. */
+  floatingButtons?: ReactNode;
+  /** Advanced floating action renderer. */
+  renderFloatingButtons?: (context: FloatingButtonsRenderContext) => ReactNode;
+  /** Override the default floating button anchor container position. */
+  floatingButtonsContainerStyle?: StyleProp<ViewStyle>;
   /** Optional children overlayed above native navigation view. */
   children?: ReactNode;
 

@@ -121,11 +121,26 @@ import {
 - `bottomSheet?: BottomSheetOptions`
 - `bottomSheetContent?: ReactNode`
 - `renderBottomSheet?: (context) => ReactNode`
+- `floatingButtons?: ReactNode`
+- `renderFloatingButtons?: (context) => ReactNode`
+- `floatingButtonsContainerStyle?: StyleProp<ViewStyle>`
 
 `renderBottomSheet` context:
 - `state: "hidden" | "collapsed" | "expanded"`
 - `hidden: boolean`
 - `expanded: boolean`
+- `show(state?)`
+- `hide()`
+- `expand()`
+- `collapse()`
+- `toggle()`
+- `bannerInstruction?`
+- `routeProgress?`
+- `location?`
+- `stopNavigation()`
+- `emitAction(actionId)`
+
+`renderFloatingButtons` context:
 - `show(state?)`
 - `hide()`
 - `expand()`
