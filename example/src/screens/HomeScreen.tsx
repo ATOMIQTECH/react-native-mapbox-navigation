@@ -8,7 +8,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import {
   MapboxNavigationFloatingButton,
@@ -132,62 +132,80 @@ export default function HomeScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <SafeAreaView edges={["top"]} style={styles.screen}>
       <StatusBar barStyle="light-content" />
-        <MapboxNavigationView
-          enabled={hasLocationPermission}
-          style={StyleSheet.absoluteFill}
-          startOrigin={resolvedStartOrigin}
-          destination={DESTINATION}
-          shouldSimulateRoute
-          mute
-          nativeFloatingButtons={{
-            showOverviewButton: false,
-            showAudioGuidanceButton: false,
-            showFeedbackButton: false,
-            showCameraModeButton: false,
-            showRecenterButton: false,
-            showCompassButton: false,
-          }}
-          floatingButtonsComponent={FloatingButtons}
-          onLocationChange={(location) => {
-            setCapturedLocation(location);
-          }}
-          onError={(error) => {
-            setLastError(`${error.code}: ${error.message}`);
-          }}
-          onOverlayBottomSheetActionPress={(event) => {
-            setLastAction(`${event.source}:${event.actionId}`);
-          }}
-        />
+      <MapboxNavigationView
+        enabled={hasLocationPermission}
+        style={StyleSheet.absoluteFill}
+        startOrigin={resolvedStartOrigin}
+        destination={DESTINATION}
+        shouldSimulateRoute
+        mute
+        nativeFloatingButtons={{
+          showCameraModeButton: false,
+          showCompassButton: false,
+        }}
+        floatingButtonsComponent={FloatingButtons}
+        onLocationChange={(location) => {
+          setCapturedLocation(location);
+        }}
+        onError={(error) => {
+          setLastError(`${error.code}: ${error.message}`);
+        }}
+        onOverlayBottomSheetActionPress={(event) => {
+          setLastAction(`${event.source}:${event.actionId}`);
+        }}
+      />
 
-        {!hasLocationPermission ? (
-          <View style={styles.permissionOverlay}>
-            <Text style={styles.permissionTitle}>Location Permission Needed</Text>
-            <Text style={styles.permissionText}>
-              Grant location access to start embedded navigation and capture
-              device coordinates in this test app.
+      {!hasLocationPermission ? (
+        <View style={styles.permissionOverlay}>
+          <Text style={styles.permissionTitle}>Location Permission Needed</Text>
+          <Text style={styles.permissionText}>
+            Grant location access to start embedded navigation and capture
+            device coordinates in this test app.
+          </Text>
+          <Pressable
+            onPress={() => {
+              if (permissionStatus === "blocked") {
+                void Linking.openSettings();
+                return;
+              }
+              void requestLocationAccess();
+            }}
+            style={styles.permissionButton}
+          >
+            <Text style={styles.permissionButtonLabel}>
+              {permissionStatus === "requesting"
+                ? "Requesting..."
+                : permissionStatus === "blocked"
+                  ? "Open Settings"
+                  : "Grant Permission"}
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {supportSheetOpen ? (
+        <View pointerEvents="box-none" style={styles.supportOverlay}>
+          <Pressable
+            style={styles.supportBackdrop}
+            onPress={() => setSupportSheetOpen(false)}
+          />
+          <View style={styles.supportSheet}>
+            <Text style={styles.supportTitle}>App-Owned Sheet</Text>
+            <Text style={styles.supportText}>
+              This is React UI from the example app, separate from the package
+              bottom sheet.
             </Text>
             <Pressable
-              onPress={() => {
-                if (permissionStatus === "blocked") {
-                  void Linking.openSettings();
-                  return;
-                }
-                void requestLocationAccess();
-              }}
-              style={styles.permissionButton}
+              onPress={() => setSupportSheetOpen(false)}
+              style={styles.supportButton}
             >
-              <Text style={styles.permissionButtonLabel}>
-                {permissionStatus === "requesting"
-                  ? "Requesting..."
-                  : permissionStatus === "blocked"
-                    ? "Open Settings"
-                    : "Grant Permission"}
-              </Text>
+              <Text style={styles.supportButtonLabel}>Close</Text>
             </Pressable>
           </View>
-        ) : null}
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -195,7 +213,7 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    marginTop: 2, 
+    backgroundColor: "#020617",
   },
   header: {
     paddingHorizontal: 18,
