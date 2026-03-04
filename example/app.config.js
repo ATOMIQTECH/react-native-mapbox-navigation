@@ -8,10 +8,21 @@ module.exports = {
     orientation: "portrait",
     userInterfaceStyle: "light",
     ios: {
+      infoPlist: {
+        UIBackgroundModes: ['location', 'remote-notification'],
+        UIDesignRequiresCompatibility: true,
+      },
       bundleIdentifier: "com.expomapboxnavigationexample",
       supportsTablet: true
     },
     android: {
+      permissions: [
+        'android.permission.ACCESS_COARSE_LOCATION',
+        'android.permission.ACCESS_FINE_LOCATION',
+        'android.permission.ACCESS_BACKGROUND_LOCATION',
+        'android.permission.FOREGROUND_SERVICE',
+        'android.permission.FOREGROUND_SERVICE_LOCATION',
+      ],
       predictiveBackGestureEnabled: false,
       package: "com.expomapboxnavigationexample"
     },
