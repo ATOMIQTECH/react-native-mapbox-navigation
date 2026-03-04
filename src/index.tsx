@@ -28,6 +28,8 @@ import type {
   CameraFollowingState,
   DestinationChangedEvent,
   DestinationPreviewEvent,
+  EndOfRouteFeedbackEvent,
+  EndOfRouteFeedbackRenderContext,
   FloatingButtonsRenderContext,
   JourneyData,
   LocationUpdate,
@@ -37,6 +39,8 @@ import type {
   NavigationError,
   RouteChangeEvent,
   RouteProgress,
+  MapboxNavigationFloatingButtonProps,
+  MapboxNavigationFloatingButtonsStackProps,
   Subscription,
 } from "./MapboxNavigation.types";
 
@@ -272,6 +276,20 @@ function normalizeViewProps(
     showCancelButton,
     androidActionButtons: undefined,
     bottomSheet: undefined,
+    bottomSheetContent: undefined,
+    renderBottomSheet: undefined,
+    bottomSheetComponent: undefined,
+    floatingButtons: undefined,
+    renderFloatingButtons: undefined,
+    floatingButtonsComponent: undefined,
+    hideFloatingButtonsOnArrival: undefined,
+    floatingButtonsContainerStyle: undefined,
+    renderEndOfRouteFeedback: undefined,
+    endOfRouteFeedbackComponent: undefined,
+    children: undefined,
+    showsEndOfRouteFeedback: undefined,
+    onEndOfRouteFeedbackSubmit: undefined,
+    onOverlayBottomSheetActionPress: undefined,
     onLocationChange: wrappedOnLocationChange,
     onRouteProgressChange: wrappedOnRouteProgressChange,
     onCameraFollowingStateChange: wrappedOnCameraFollowingStateChange,
@@ -523,6 +541,47 @@ export function addBottomSheetActionPressListener(
   });
 }
 
+export function MapboxNavigationFloatingButton({
+  children,
+  onPress,
+  disabled,
+  accessibilityLabel,
+  style,
+  testID,
+}: MapboxNavigationFloatingButtonProps) {
+  const content =
+    typeof children === "string" || typeof children === "number" ? (
+      <Text style={styles.defaultFloatingButtonLabel}>{children}</Text>
+    ) : (
+      children
+    );
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.defaultFloatingButton,
+        pressed && !disabled ? styles.defaultFloatingButtonPressed : null,
+        disabled ? styles.defaultFloatingButtonDisabled : null,
+        style,
+      ]}
+      testID={testID}
+    >
+      {content}
+    </Pressable>
+  );
+}
+
+export function MapboxNavigationFloatingButtonsStack({
+  children,
+  style,
+}: MapboxNavigationFloatingButtonsStackProps) {
+  return <View style={[styles.defaultFloatingButtonsStack, style]}>{children}</View>;
+}
+
 /**
  * Embedded native navigation component.
  *
@@ -554,6 +613,15 @@ export function MapboxNavigationView(
     bottomSheet === props.bottomSheet ? props : { ...props, bottomSheet };
   const useOverlayBottomSheet =
     !!bottomSheet?.enabled && bottomSheet?.mode === "overlay";
+  const hasCustomEndOfRouteFeedbackRenderer =
+    typeof props.renderEndOfRouteFeedback === "function" ||
+    typeof props.endOfRouteFeedbackComponent === "function";
+  const useEndOfRouteFeedback =
+    props.showsEndOfRouteFeedback === true ||
+    (props.showsEndOfRouteFeedback !== false &&
+      hasCustomEndOfRouteFeedbackRenderer);
+  const hideCustomFloatingButtonsOnArrival =
+    props.hideFloatingButtonsOnArrival !== false;
   const overlayLocationMinIntervalMs = Math.max(
     0,
     Math.min(
@@ -578,6 +646,10 @@ export function MapboxNavigationView(
   const expandedHeight = Math.max(
     collapsedHeight,
     Math.min(bottomSheet?.expandedHeight ?? 280, 700),
+  );
+  const collapsedBottomOffset = Math.max(
+    0,
+    Math.min(bottomSheet?.collapsedBottomOffset ?? 24, 80),
   );
   const requestedInitialState =
     bottomSheet?.initialState === "expanded" ||
@@ -606,11 +678,22 @@ export function MapboxNavigationView(
   const [overlayCameraMode, setOverlayCameraMode] = useState<
     "following" | "overview" | undefined
   >(undefined);
+  const [overlayArrival, setOverlayArrival] = useState<ArrivalEvent | undefined>(
+    undefined,
+  );
+  const [endOfRouteFeedbackVisible, setEndOfRouteFeedbackVisible] =
+    useState(false);
   const overlayThrottleRef = useRef({
     locationAtMs: 0,
     progressAtMs: 0,
     bannerKey: "",
   });
+  const navigationResetKey = [
+    props.enabled === true ? "enabled" : "disabled",
+    props.destination.latitude,
+    props.destination.longitude,
+    props.destination.name ?? "",
+  ].join("|");
   useEffect(() => {
     if (!useOverlayBottomSheet) {
       return;
@@ -632,15 +715,42 @@ export function MapboxNavigationView(
     setOverlayCameraMode(undefined);
   }, [props.cameraMode]);
 
+  useEffect(() => {
+    setOverlayArrival(undefined);
+    setEndOfRouteFeedbackVisible(false);
+  }, [navigationResetKey]);
+
   const nativeProps = useMemo(
     () => normalizeViewProps(propsWithBottomSheet),
     [propsWithBottomSheet],
   );
   const useOverlayTelemetry =
-    useOverlayBottomSheet || typeof props.renderFloatingButtons === "function";
+    useOverlayBottomSheet ||
+    typeof props.renderFloatingButtons === "function" ||
+    typeof props.floatingButtonsComponent === "function";
   const nativePropsWithOverlay = useMemo(() => {
+    const onArrive = (event: unknown) => {
+      const payload = unwrapNativeEventPayload<ArrivalEvent>(event);
+      if (payload) {
+        setOverlayArrival(payload);
+        if (useEndOfRouteFeedback) {
+          setEndOfRouteFeedbackVisible(true);
+        }
+      }
+      nativeProps.onArrive?.(event as any);
+    };
+    const onCancelNavigation = () => {
+      setOverlayArrival(undefined);
+      setEndOfRouteFeedbackVisible(false);
+      nativeProps.onCancelNavigation?.();
+    };
+
     if (!useOverlayTelemetry) {
-      return nativeProps;
+      return {
+        ...nativeProps,
+        onArrive,
+        onCancelNavigation,
+      };
     }
 
     const onLocationChange = (event: unknown) => {
@@ -692,6 +802,8 @@ export function MapboxNavigationView(
       onLocationChange,
       onRouteProgressChange,
       onBannerInstruction,
+      onArrive,
+      onCancelNavigation,
     };
   }, [
     nativeProps,
@@ -699,6 +811,7 @@ export function MapboxNavigationView(
     useOverlayTelemetry,
     overlayLocationMinIntervalMs,
     overlayProgressMinIntervalMs,
+    useEndOfRouteFeedback,
   ]);
 
   const emitOverlayAction = (
@@ -715,7 +828,7 @@ export function MapboxNavigationView(
       return;
     }
     setSheetState(
-      next === "expanded" ? "expanded" : iosHiddenMode ? "hidden" : "collapsed",
+      next === "expanded" ? "expanded" : iosHiddenMode ? "expanded" : "collapsed",
     );
   };
 
@@ -765,16 +878,144 @@ export function MapboxNavigationView(
     stopNavigation,
     emitAction: (actionId: string) => emitOverlayAction(actionId, "custom"),
   };
+  const endOfRouteFeedbackContext: EndOfRouteFeedbackRenderContext = {
+    arrival: overlayArrival,
+    dismiss: () => {
+      setEndOfRouteFeedbackVisible(false);
+    },
+    submitRating: (rating: number) => {
+      if (!Number.isFinite(rating)) {
+        return;
+      }
+      const normalizedRating = Math.max(1, Math.min(5, Math.round(rating)));
+      const payload: EndOfRouteFeedbackEvent = {
+        rating: normalizedRating,
+        arrival: overlayArrival,
+      };
+      props.onEndOfRouteFeedbackSubmit?.(payload);
+      setEndOfRouteFeedbackVisible(false);
+    },
+    stopNavigation,
+  };
 
-  const renderFloatingButtons = () => {
-    const customButtons = normalizeOverlayNode(
-      props.renderFloatingButtons?.(floatingButtonsContext),
-    );
-    const staticButtons = normalizeOverlayNode(props.floatingButtons);
-    const content = customButtons ?? staticButtons;
-    if (!content) {
+  const renderEndOfRouteFeedback = () => {
+    if (!useEndOfRouteFeedback || !endOfRouteFeedbackVisible) {
       return null;
     }
+
+    const FeedbackComponent = props.endOfRouteFeedbackComponent;
+    const componentContent = FeedbackComponent ? (
+      <FeedbackComponent {...endOfRouteFeedbackContext} />
+    ) : null;
+    const renderedContent = normalizeOverlayNode(
+      props.renderEndOfRouteFeedback?.(endOfRouteFeedbackContext),
+    );
+    const content =
+      renderedContent ??
+      normalizeOverlayNode(componentContent) ?? (
+        <View style={styles.endOfRouteFeedbackCard}>
+          <Text style={styles.endOfRouteFeedbackTitle}>Rate This Trip</Text>
+          <Text style={styles.endOfRouteFeedbackSubtitle}>
+            {overlayArrival?.name
+              ? `You arrived at ${overlayArrival.name}.`
+              : "You reached your destination."}
+          </Text>
+          <View style={styles.endOfRouteFeedbackRatingRow}>
+            {[1, 2, 3, 4, 5].map((rating) => (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Rate trip ${rating} out of 5`}
+                key={`end-of-route-rating-${rating}`}
+                onPress={() => {
+                  endOfRouteFeedbackContext.submitRating(rating);
+                }}
+                style={styles.endOfRouteFeedbackRatingButton}
+              >
+                <Text style={styles.endOfRouteFeedbackRatingLabel}>
+                  {rating}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            onPress={endOfRouteFeedbackContext.dismiss}
+            style={styles.endOfRouteFeedbackDismissButton}
+          >
+            <Text style={styles.endOfRouteFeedbackDismissLabel}>Not Now</Text>
+          </Pressable>
+        </View>
+      );
+
+    return (
+      <View pointerEvents="box-none" style={styles.endOfRouteFeedbackRoot}>
+        <Pressable
+          accessibilityRole="button"
+          onPress={endOfRouteFeedbackContext.dismiss}
+          style={styles.endOfRouteFeedbackBackdrop}
+        />
+        <View pointerEvents="box-none" style={styles.endOfRouteFeedbackWrap}>
+          {content}
+        </View>
+      </View>
+    );
+  };
+
+  const renderFloatingButtons = () => {
+    if (hideCustomFloatingButtonsOnArrival && overlayArrival) {
+      return null;
+    }
+
+    const FloatingButtonsComponent = props.floatingButtonsComponent;
+    const componentButtonsNode = FloatingButtonsComponent ? (
+      <FloatingButtonsComponent {...floatingButtonsContext} />
+    ) : null;
+    const renderedButtonsNode = normalizeOverlayNode(
+      props.renderFloatingButtons?.(floatingButtonsContext),
+    );
+    const componentButtons = normalizeOverlayNode(componentButtonsNode);
+    const staticButtons = normalizeOverlayNode(props.floatingButtons);
+    const contentParts = [
+      renderedButtonsNode,
+      componentButtons,
+      staticButtons,
+    ].filter(Boolean);
+    if (contentParts.length === 0) {
+      return null;
+    }
+    const content =
+      contentParts.length === 1 ? (
+        contentParts[0]
+      ) : (
+        <View style={styles.defaultFloatingButtonsStack}>
+          {contentParts.map((node, index) => (
+            <Fragment key={`floating-buttons-part-${index}`}>{node}</Fragment>
+          ))}
+        </View>
+      );
+
+    const nativeBottomUiVisible =
+      !useOverlayBottomSheet &&
+      (Platform.OS === "android"
+        ? nativeProps.showsWayNameLabel !== false
+        : nativeProps.showsWayNameLabel !== false ||
+          nativeProps.showsTripProgress !== false ||
+          nativeProps.showsActionButtons !== false);
+    const defaultBottomInset = nativeBottomUiVisible
+      ? Platform.OS === "ios"
+        ? 136
+        : 104
+      : 24;
+    const floatingButtonsBottomInset = useOverlayBottomSheet
+      ? sheetState === "expanded"
+        ? expandedHeight + 16
+        : sheetState === "collapsed"
+          ? Math.max(defaultBottomInset, collapsedHeight - collapsedBottomOffset + 16)
+          : defaultBottomInset
+      : defaultBottomInset;
+    const floatingButtonsAnchorStyle = {
+      bottom: floatingButtonsBottomInset,
+    };
 
     return (
       <View pointerEvents="box-none" style={styles.floatingButtonsRoot}>
@@ -782,6 +1023,7 @@ export function MapboxNavigationView(
           pointerEvents="box-none"
           style={[
             styles.floatingButtonsContainer,
+            floatingButtonsAnchorStyle,
             props.floatingButtonsContainerStyle,
           ]}
         >
@@ -839,8 +1081,12 @@ export function MapboxNavigationView(
       ...floatingButtonsContext,
     };
 
+    const BottomSheetComponent = props.bottomSheetComponent;
+    const componentSheet = BottomSheetComponent ? (
+      <BottomSheetComponent {...context} />
+    ) : null;
     const customSheet = normalizeOverlayNode(
-      props.renderBottomSheet?.(context),
+      props.renderBottomSheet?.(context) ?? componentSheet,
     );
     const staticSheet = normalizeOverlayNode(props.bottomSheetContent);
     const builtInQuickActions: {
@@ -1128,10 +1374,6 @@ export function MapboxNavigationView(
         : sheetState === "collapsed"
           ? collapsedHeight
           : expandedHeight;
-    const collapsedBottomOffset = Math.max(
-      0,
-      Math.min(bottomSheet?.collapsedBottomOffset ?? 24, 80),
-    );
     const canToggle = bottomSheet?.enableTapToToggle !== false;
     const showHandle = bottomSheet?.showHandle !== false;
 
@@ -1256,7 +1498,9 @@ export function MapboxNavigationView(
     !props.children &&
     !useOverlayBottomSheet &&
     !props.floatingButtons &&
-    !props.renderFloatingButtons
+    !props.renderFloatingButtons &&
+    !props.floatingButtonsComponent &&
+    !useEndOfRouteFeedback
   ) {
     return <MapboxNavigationNativeView {...nativePropsWithOverlay} />;
   }
@@ -1274,6 +1518,7 @@ export function MapboxNavigationView(
       ) : null}
       {renderFloatingButtons()}
       {renderOverlaySheet()}
+      {renderEndOfRouteFeedback()}
     </View>
   );
 }
@@ -1284,10 +1529,107 @@ const styles = StyleSheet.create({
   },
   floatingButtonsContainer: {
     position: "absolute",
-    top: 72,
-    right: 16,
-    maxWidth: "78%",
+    bottom: 24,
+    right: 12,
+    maxWidth: "32%",
     alignItems: "flex-end",
+  },
+  defaultFloatingButtonsStack: {
+    gap: 10,
+    alignItems: "flex-end",
+  },
+  defaultFloatingButton: {
+    width: 56,
+    height: 56,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(15,23,42,0.96)",
+    shadowColor: "#020617",
+    shadowOpacity: 0.26,
+    shadowRadius: 10,
+    shadowOffset: {
+      width: 0,
+      height: 6,
+    },
+    elevation: 5,
+  },
+  defaultFloatingButtonPressed: {
+    opacity: 0.9,
+  },
+  defaultFloatingButtonDisabled: {
+    opacity: 0.45,
+  },
+  defaultFloatingButtonLabel: {
+    color: "#f8fafc",
+    fontSize: 12,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  endOfRouteFeedbackRoot: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    paddingHorizontal: 20,
+    zIndex: 3,
+  },
+  endOfRouteFeedbackBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(2,6,23,0.62)",
+  },
+  endOfRouteFeedbackWrap: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  endOfRouteFeedbackCard: {
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: 22,
+    backgroundColor: "rgba(15,23,42,0.96)",
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.2)",
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+    gap: 14,
+  },
+  endOfRouteFeedbackTitle: {
+    color: "#f8fafc",
+    fontSize: 18,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  endOfRouteFeedbackSubtitle: {
+    color: "rgba(226,232,240,0.84)",
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: "center",
+  },
+  endOfRouteFeedbackRatingRow: {
+    flexDirection: "row",
+    gap: 8,
+    justifyContent: "center",
+  },
+  endOfRouteFeedbackRatingButton: {
+    minWidth: 44,
+    borderRadius: 14,
+    backgroundColor: "#1d4ed8",
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  endOfRouteFeedbackRatingLabel: {
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  endOfRouteFeedbackDismissButton: {
+    alignSelf: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  endOfRouteFeedbackDismissLabel: {
+    color: "rgba(191,219,254,0.95)",
+    fontSize: 13,
+    fontWeight: "700",
   },
   overlayRoot: {
     ...StyleSheet.absoluteFillObject,
@@ -1419,5 +1761,7 @@ export default {
   addErrorListener,
   addBannerInstructionListener,
   addBottomSheetActionPressListener,
+  MapboxNavigationFloatingButton,
+  MapboxNavigationFloatingButtonsStack,
   MapboxNavigationView,
 };

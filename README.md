@@ -136,18 +136,33 @@ Platform behavior:
 Use the JS overlay layer for app-owned floating actions. This avoids any per-app native work and can drive either your own UI or the package bottom sheet.
 
 ```tsx
+function YourFloatingButtons({ expand }: FloatingButtonsRenderContext) {
+  return (
+    <MapboxNavigationFloatingButtonsStack>
+      <MapboxNavigationFloatingButton onPress={expand}>
+        <Text>UI</Text>
+      </MapboxNavigationFloatingButton>
+    </MapboxNavigationFloatingButtonsStack>
+  );
+}
+
 <MapboxNavigationView
   enabled
   style={{ flex: 1 }}
   destination={destination}
-  bottomSheet={{ enabled: true, mode: "overlay", initialState: "hidden" }}
-  renderFloatingButtons={({ expand }) => (
-    <Pressable onPress={expand}>
-      <Text>Open Sheet</Text>
-    </Pressable>
-  )}
+  nativeFloatingButtons={{
+    showOverviewButton: false,
+    showAudioGuidanceButton: false,
+    showFeedbackButton: false,
+    showCameraModeButton: false,
+    showRecenterButton: false,
+    showCompassButton: false,
+  }}
+  floatingButtonsComponent={YourFloatingButtons}
 />
 ```
+
+Custom floating buttons are independent from the custom bottom sheet and work when `bottomSheet` is omitted. Use `nativeFloatingButtons` to hide built-in native buttons individually, then render your own React buttons with `floatingButtonsComponent`. `MapboxNavigationFloatingButtonsStack` and `MapboxNavigationFloatingButton` keep custom controls aligned and styled like the default right-side Mapbox buttons. `YourFloatingButtons` receives `expand`, `collapse`, `toggle`, `stopNavigation`, route progress, banner instructions, and location. `YourCustomSheet` receives the same controls plus the current sheet state.
 
 ## Runtime APIs
 
