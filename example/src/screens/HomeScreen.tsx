@@ -1,54 +1,44 @@
-import { useEffect, useState } from "react";
-import * as Location from "expo-location";
 import {
-  Linking,
-  Pressable,
-  StatusBar,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-
-import {
+  type FloatingButtonsRenderContext,
+  type LocationUpdate,
   MapboxNavigationFloatingButton,
   MapboxNavigationFloatingButtonsStack,
   MapboxNavigationView,
-  type FloatingButtonsRenderContext,
-  type LocationUpdate,
   type Waypoint,
-} from "@atomiqlab/react-native-mapbox-navigation";
+} from '@atomiqlab/react-native-mapbox-navigation'
+import * as Location from 'expo-location'
+import { useEffect, useState } from 'react'
+import { Linking, Pressable, StatusBar, StyleSheet, Text, View } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 
 const START_ORIGIN: Waypoint = {
   latitude: 37.7749,
   longitude: -122.4194,
-  name: "San Francisco",
-};
+  name: 'San Francisco',
+}
 
 const DESTINATION: Waypoint = {
   latitude: 37.7847,
   longitude: -122.4073,
-  name: "Union Square",
-};
+  name: 'Union Square',
+}
 
 export default function HomeScreen() {
-  const [supportSheetOpen, setSupportSheetOpen] = useState(false);
-  const [lastAction, setLastAction] = useState("none");
-  const [tripRating, setTripRating] = useState<number | null>(null);
-  const [hasLocationPermission, setHasLocationPermission] = useState(false);
+  const [supportSheetOpen, setSupportSheetOpen] = useState(false)
+  const [lastAction, setLastAction] = useState('none')
+  const [tripRating, setTripRating] = useState<number | null>(null)
+  const [hasLocationPermission, setHasLocationPermission] = useState(false)
   const [permissionStatus, setPermissionStatus] = useState<
-    "checking" | "requesting" | "granted" | "denied" | "blocked"
-  >("checking");
-  const [capturedLocation, setCapturedLocation] = useState<
-    LocationUpdate | undefined
-  >(undefined);
-  const [lastError, setLastError] = useState<string | null>(null);
+    'checking' | 'requesting' | 'granted' | 'denied' | 'blocked'
+  >('checking')
+  const [capturedLocation, setCapturedLocation] = useState<LocationUpdate | undefined>(undefined)
+  const [lastError, setLastError] = useState<string | null>(null)
 
   const captureDeviceLocation = async () => {
     try {
       const position = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
-      });
+      })
       setCapturedLocation({
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
@@ -56,85 +46,80 @@ export default function HomeScreen() {
         altitude: position.coords.altitude ?? undefined,
         bearing: position.coords.heading ?? undefined,
         speed: position.coords.speed ?? undefined,
-      });
+      })
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unable to capture location.";
-      setLastError(`LOCATION_CAPTURE_FAILED: ${message}`);
+      const message = error instanceof Error ? error.message : 'Unable to capture location.'
+      setLastError(`LOCATION_CAPTURE_FAILED: ${message}`)
     }
-  };
+  }
 
   const requestLocationAccess = async () => {
-    const existingPermission = await Location.getForegroundPermissionsAsync();
+    const existingPermission = await Location.getForegroundPermissionsAsync()
     if (existingPermission.granted) {
-      setHasLocationPermission(true);
-      setPermissionStatus("granted");
-      await captureDeviceLocation();
-      return;
+      setHasLocationPermission(true)
+      setPermissionStatus('granted')
+      await captureDeviceLocation()
+      return
     }
 
-    setPermissionStatus("requesting");
-    const requestedPermission =
-      await Location.requestForegroundPermissionsAsync();
-    const granted = requestedPermission.granted;
-    const blocked = !granted && requestedPermission.canAskAgain === false;
+    setPermissionStatus('requesting')
+    const requestedPermission = await Location.requestForegroundPermissionsAsync()
+    const granted = requestedPermission.granted
+    const blocked = !granted && requestedPermission.canAskAgain === false
 
-    setHasLocationPermission(granted);
-    setPermissionStatus(granted ? "granted" : blocked ? "blocked" : "denied");
+    setHasLocationPermission(granted)
+    setPermissionStatus(granted ? 'granted' : blocked ? 'blocked' : 'denied')
     if (granted) {
-      await captureDeviceLocation();
+      await captureDeviceLocation()
     }
-  };
+  }
 
   useEffect(() => {
-    void requestLocationAccess();
-  }, []);
+    void requestLocationAccess()
+  }, [])
 
   const resolvedStartOrigin: Waypoint =
     capturedLocation != null
       ? {
           latitude: capturedLocation.latitude,
           longitude: capturedLocation.longitude,
-          name: "Current Location",
+          name: 'Current Location',
         }
-      : START_ORIGIN;
+      : START_ORIGIN
 
-  const FloatingButtons = ({
-    stopNavigation,
-    emitAction,
-  }: FloatingButtonsRenderContext) => (
+  const FloatingButtons = ({ stopNavigation, emitAction }: FloatingButtonsRenderContext) => (
     <MapboxNavigationFloatingButtonsStack>
       <MapboxNavigationFloatingButton
-        accessibilityLabel="Open chat sheet"
+        accessibilityLabel='Open chat sheet'
         onPress={() => {
-          setSupportSheetOpen(true);
-          emitAction("chat");
+          setSupportSheetOpen(true)
+          emitAction('chat')
         }}
       >
         CHAT
       </MapboxNavigationFloatingButton>
       <MapboxNavigationFloatingButton
-        accessibilityLabel="Log custom action"
+        accessibilityLabel='Log custom action'
         onPress={() => {
-          emitAction("custom-help");
+          emitAction('custom-help')
         }}
       >
         HELP
       </MapboxNavigationFloatingButton>
       <MapboxNavigationFloatingButton
-        accessibilityLabel="Stop navigation"
+        accessibilityLabel='Stop navigation'
         onPress={() => {
-          void stopNavigation();
+          void stopNavigation()
         }}
       >
         END
       </MapboxNavigationFloatingButton>
     </MapboxNavigationFloatingButtonsStack>
-  );
+  )
 
   return (
-    <SafeAreaView edges={["top"]} style={styles.screen}>
-      <StatusBar barStyle="light-content" />
+    <SafeAreaView edges={['top']} style={styles.screen}>
+      <StatusBar barStyle='light-content' />
       <MapboxNavigationView
         enabled={hasLocationPermission}
         style={StyleSheet.absoluteFill}
@@ -149,17 +134,17 @@ export default function HomeScreen() {
         }}
         floatingButtonsComponent={FloatingButtons}
         onLocationChange={(location) => {
-          setCapturedLocation(location);
+          setCapturedLocation(location)
         }}
         onError={(error) => {
-          setLastError(`${error.code}: ${error.message}`);
+          setLastError(`${error.code}: ${error.message}`)
         }}
         onOverlayBottomSheetActionPress={(event) => {
-          setLastAction(`${event.source}:${event.actionId}`);
+          setLastAction(`${event.source}:${event.actionId}`)
         }}
         onEndOfRouteFeedbackSubmit={(event) => {
-          setTripRating(event.rating);
-          setLastAction(`feedback:${event.rating}`);
+          setTripRating(event.rating)
+          setLastAction(`feedback:${event.rating}`)
         }}
       />
 
@@ -167,46 +152,39 @@ export default function HomeScreen() {
         <View style={styles.permissionOverlay}>
           <Text style={styles.permissionTitle}>Location Permission Needed</Text>
           <Text style={styles.permissionText}>
-            Grant location access to start embedded navigation and capture
-            device coordinates in this test app.
+            Grant location access to start embedded navigation and capture device coordinates in
+            this test app.
           </Text>
           <Pressable
             onPress={() => {
-              if (permissionStatus === "blocked") {
-                void Linking.openSettings();
-                return;
+              if (permissionStatus === 'blocked') {
+                void Linking.openSettings()
+                return
               }
-              void requestLocationAccess();
+              void requestLocationAccess()
             }}
             style={styles.permissionButton}
           >
             <Text style={styles.permissionButtonLabel}>
-              {permissionStatus === "requesting"
-                ? "Requesting..."
-                : permissionStatus === "blocked"
-                  ? "Open Settings"
-                  : "Grant Permission"}
+              {permissionStatus === 'requesting'
+                ? 'Requesting...'
+                : permissionStatus === 'blocked'
+                  ? 'Open Settings'
+                  : 'Grant Permission'}
             </Text>
           </Pressable>
         </View>
       ) : null}
 
       {supportSheetOpen ? (
-        <View pointerEvents="box-none" style={styles.supportOverlay}>
-          <Pressable
-            style={styles.supportBackdrop}
-            onPress={() => setSupportSheetOpen(false)}
-          />
+        <View pointerEvents='box-none' style={styles.supportOverlay}>
+          <Pressable style={styles.supportBackdrop} onPress={() => setSupportSheetOpen(false)} />
           <View style={styles.supportSheet}>
             <Text style={styles.supportTitle}>App-Owned Sheet</Text>
             <Text style={styles.supportText}>
-              This is React UI from the example app, separate from the package
-              bottom sheet.
+              This is React UI from the example app, separate from the package bottom sheet.
             </Text>
-            <Pressable
-              onPress={() => setSupportSheetOpen(false)}
-              style={styles.supportButton}
-            >
+            <Pressable onPress={() => setSupportSheetOpen(false)} style={styles.supportButton}>
               <Text style={styles.supportButtonLabel}>Close</Text>
             </Pressable>
           </View>
@@ -214,20 +192,20 @@ export default function HomeScreen() {
       ) : null}
 
       {tripRating != null ? (
-        <View pointerEvents="box-none" style={styles.ratingToastWrap}>
+        <View pointerEvents='box-none' style={styles.ratingToastWrap}>
           <View style={styles.ratingToast}>
             <Text style={styles.ratingToastLabel}>Rated trip {tripRating}/5</Text>
           </View>
         </View>
       ) : null}
     </SafeAreaView>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "#020617",
+    backgroundColor: '#020617',
   },
   header: {
     paddingHorizontal: 18,
@@ -236,121 +214,121 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   title: {
-    color: "#f8fafc",
+    color: '#f8fafc',
     fontSize: 26,
-    fontWeight: "800",
+    fontWeight: '800',
   },
   subtitle: {
-    color: "#bfdbfe",
+    color: '#bfdbfe',
     fontSize: 14,
     lineHeight: 20,
   },
   status: {
-    color: "#93c5fd",
+    color: '#93c5fd',
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: '600',
   },
   errorText: {
-    color: "#fca5a5",
+    color: '#fca5a5',
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: '600',
   },
   mapFrame: {
     flex: 1,
     marginHorizontal: 14,
     marginBottom: 14,
     borderRadius: 24,
-    overflow: "hidden",
+    overflow: 'hidden',
     borderWidth: 1,
-    borderColor: "rgba(148,163,184,0.2)",
-    backgroundColor: "#020617",
+    borderColor: 'rgba(148,163,184,0.2)',
+    backgroundColor: '#020617',
   },
   permissionOverlay: {
     ...StyleSheet.absoluteFillObject,
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingHorizontal: 24,
-    backgroundColor: "rgba(2,6,23,0.76)",
+    backgroundColor: 'rgba(2,6,23,0.76)',
     gap: 12,
   },
   permissionTitle: {
-    color: "#f8fafc",
+    color: '#f8fafc',
     fontSize: 20,
-    fontWeight: "800",
-    textAlign: "center",
+    fontWeight: '800',
+    textAlign: 'center',
   },
   permissionText: {
-    color: "#cbd5e1",
+    color: '#cbd5e1',
     fontSize: 14,
     lineHeight: 20,
-    textAlign: "center",
+    textAlign: 'center',
   },
   permissionButton: {
     borderRadius: 999,
-    backgroundColor: "#2563eb",
+    backgroundColor: '#2563eb',
     paddingHorizontal: 18,
     paddingVertical: 12,
   },
   permissionButtonLabel: {
-    color: "#ffffff",
+    color: '#ffffff',
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: '800',
   },
   supportOverlay: {
     ...StyleSheet.absoluteFillObject,
-    justifyContent: "flex-end",
+    justifyContent: 'flex-end',
   },
   supportBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(2,6,23,0.45)",
+    backgroundColor: 'rgba(2,6,23,0.45)',
   },
   supportSheet: {
     margin: 14,
     borderRadius: 24,
-    backgroundColor: "#ffffff",
+    backgroundColor: '#ffffff',
     padding: 18,
     gap: 10,
   },
   supportTitle: {
-    color: "#0f172a",
+    color: '#0f172a',
     fontSize: 18,
-    fontWeight: "800",
+    fontWeight: '800',
   },
   supportText: {
-    color: "#334155",
+    color: '#334155',
     fontSize: 14,
     lineHeight: 20,
   },
   supportButton: {
-    alignSelf: "flex-start",
+    alignSelf: 'flex-start',
     borderRadius: 999,
-    backgroundColor: "#0f172a",
+    backgroundColor: '#0f172a',
     paddingHorizontal: 16,
     paddingVertical: 10,
   },
   supportButtonLabel: {
-    color: "#ffffff",
+    color: '#ffffff',
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: '700',
   },
   ratingToastWrap: {
-    position: "absolute",
+    position: 'absolute',
     left: 0,
     right: 0,
     bottom: 26,
-    alignItems: "center",
+    alignItems: 'center',
   },
   ratingToast: {
     borderRadius: 999,
-    backgroundColor: "rgba(15,23,42,0.92)",
+    backgroundColor: 'rgba(15,23,42,0.92)',
     borderWidth: 1,
-    borderColor: "rgba(148,163,184,0.22)",
+    borderColor: 'rgba(148,163,184,0.22)',
     paddingHorizontal: 14,
     paddingVertical: 8,
   },
   ratingToastLabel: {
-    color: "#f8fafc",
+    color: '#f8fafc',
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: '700',
   },
-});
+})

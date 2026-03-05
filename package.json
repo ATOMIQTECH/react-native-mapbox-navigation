@@ -35,6 +35,8 @@
   "scripts": {
     "build": "expo-module build",
     "clean": "expo-module clean",
+    "format": "biome format --write",
+    "biome:check": "biome check",
     "lint": "expo-module lint -- --ext .ts,.tsx",
     "test": "expo-module test --passWithNoTests",
     "verify": "node ./scripts/verify-release.mjs"
@@ -72,6 +74,7 @@
     "react-native": "*"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.5",
     "expo-module-scripts": "^3.0.0",
     "typescript": "^5.9.3"
   }
