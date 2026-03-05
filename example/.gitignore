@@ -78,6 +78,7 @@ src/locale/locales/**/*.js
 .env.test
 .env.qa
 .env.uat
+.env
 
 .cursorrules
 CLAUDE.md

@@ -12,7 +12,6 @@ import android.os.Build
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
-import android.graphics.Rect
 import android.view.SurfaceView
 import android.view.TextureView
 import android.view.View
@@ -140,6 +139,9 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private var touchStartX = 0f
   private var touchStartY = 0f
   private val touchSlopPx = 8f * context.resources.displayMetrics.density
+  private var lastJourneyLocation: android.location.Location? = null
+  private var lastJourneyProgress: RouteProgress? = null
+  private var lastJourneyBanner: BannerInstructions? = null
 
   val onLocationChange by EventDispatcher()
   val onRouteProgressChange by EventDispatcher()
@@ -247,6 +249,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
     override fun onNewLocationMatcherResult(locationMatcherResult: LocationMatcherResult) {
       val location = locationMatcherResult.enhancedLocation
+      lastJourneyLocation = location
       onLocationChange(
         mapOf(
           "latitude" to location.latitude,
@@ -257,22 +260,14 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
           "accuracy" to location.accuracy.toDouble()
         )
       )
-      emitJourneyData(
-        banner = null,
-        progress = null,
-        latitude = location.latitude,
-        longitude = location.longitude,
-        bearing = location.bearing.toDouble(),
-        speed = location.speed.toDouble(),
-        altitude = location.altitude,
-        accuracy = location.accuracy.toDouble()
-      )
+      emitJourneySnapshot()
     }
   }
 
   private val bannerInstructionsObserver = BannerInstructionsObserver { banner ->
+    lastJourneyBanner = banner
     emitBannerInstruction(banner)
-    emitJourneyData(banner = banner, progress = null)
+    emitJourneySnapshot()
   }
 
   private fun emitArrivalIfNeeded() {
@@ -283,6 +278,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   }
 
   private val routeProgressObserver = RouteProgressObserver { progress: RouteProgress ->
+    lastJourneyProgress = progress
+    lastJourneyBanner = progress.bannerInstructions ?: lastJourneyBanner
     onRouteProgressChange(
       mapOf(
         "distanceTraveled" to progress.distanceTraveled.toDouble(),
@@ -295,7 +292,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       emitArrivalIfNeeded()
     }
     emitBannerInstruction(progress.bannerInstructions)
-    emitJourneyData(banner = progress.bannerInstructions, progress = progress)
+    emitJourneySnapshot()
   }
 
   private val arrivalObserver = object : ArrivalObserver {
@@ -851,6 +848,9 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     hidePlaceholder()
     hasRequestedRoute = false
     hasEmittedArrival = false
+    lastJourneyLocation = null
+    lastJourneyProgress = null
+    lastJourneyBanner = null
     setCameraFollowingState(true, "stop")
     if (emitCancel) onCancelNavigation(emptyMap())
     releaseSession()
@@ -874,21 +874,22 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
             showNativeCameraModeButton ||
             showNativeRecenterButton ||
             showNativeCompassButton)
+      val hideNativeBottomPanel = shouldHideNativeBottomPanel()
 
-      // Keep the native top banner and suppress the lower route panel in embedded mode.
-      showManeuver = true
+      // Preserve expected iOS parity by honoring UI props in Android as well.
+      showManeuver = showsManeuverView
       showInfoPanelInFreeDrive = false
       isInfoPanelHideable = true
-      infoPanelForcedState = 5
-      showTripProgress = false
+      infoPanelForcedState = if (hideNativeBottomPanel) 5 else 0
+      showTripProgress = showsTripProgress
       showActionButtons = nativeFloatingButtonsVisible
       showToggleAudioActionButton = showNativeAudioGuidanceButton
       showCameraModeActionButton = showNativeCameraModeButton
       showRecenterActionButton = showNativeRecenterButton
       showCompassActionButton = showNativeCompassButton
-      showRoadName = true
+      showRoadName = showsWayNameLabel
       showSpeedLimit = showsSpeedLimits
-      showArrivalText = false
+      showArrivalText = showsTripProgress
       showPoiName = false
       enableMapLongClickIntercept = false
 
@@ -903,6 +904,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   }
 
   private fun scheduleBottomPanelHidePasses() {
+    if (!shouldHideNativeBottomPanel()) return
     val view = navigationView ?: return
     fun hidePass(reason: String) {
       hideNativeBottomPanelIfRequested(view)
@@ -913,13 +915,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     mainHandler.postDelayed({ hidePass("post+650ms") }, 650)
     mainHandler.postDelayed({ hidePass("post+1400ms") }, 1400)
     mainHandler.postDelayed({ hidePass("post+2400ms") }, 2400)
-    fun loop() {
-      if (!enabled) return
-      val live = navigationView ?: return
-      hideNativeBottomPanelIfRequested(live)
-      mainHandler.postDelayed({ loop() }, 400)
-    }
-    mainHandler.postDelayed({ loop() }, 1000)
   }
 
   private fun tryStartActiveGuidance(view: NavigationView) {
@@ -937,6 +932,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   }
 
   private fun hideNativeBottomPanelIfRequested(view: NavigationView?) {
+    if (!shouldHideNativeBottomPanel()) return
     val target = view ?: return
     runCatching {
       hideViewsByClassNameHints(
@@ -949,11 +945,9 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
           "actionbutton",
           "bottomsheet",
           "routeinfo",
-          "maneuverfooter",
-          "instructionanddistance"
+          "maneuverfooter"
         )
       )
-      hideLowerNonMapContainers(target)
     }
   }
 
@@ -992,60 +986,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       }
     }
     return hidden
-  }
-
-  private fun hideLowerNonMapContainers(root: View): Int {
-    var hidden = 0
-    val cls = root.javaClass.name.lowercase()
-    val isMapNode =
-      root is com.mapbox.maps.MapView ||
-        root is SurfaceView ||
-        root is TextureView ||
-        cls.contains("mapview")
-    if (!isMapNode && isInLowerHalf(root) && root.width > 0 && root.height > 0) {
-      val looksLikePanelContainer =
-        root is ViewGroup &&
-          (cls.contains("constraintlayout") ||
-            cls.contains("framelayout") ||
-            cls.contains("linearlayout") ||
-            cls.contains("coordinatorlayout") ||
-            cls.contains("materialcardview"))
-      if (looksLikePanelContainer) {
-        root.visibility = View.GONE
-        root.alpha = 0f
-        root.isClickable = false
-        root.isEnabled = false
-        hidden += 1
-      }
-    }
-    if (root is ViewGroup) {
-      for (i in 0 until root.childCount) {
-        hidden += hideLowerNonMapContainers(root.getChildAt(i))
-      }
-    }
-    return hidden
-  }
-
-  private fun isInLowerHalf(view: View): Boolean {
-    val parent = navigationView ?: return false
-    val parentLoc = IntArray(2)
-    val viewLoc = IntArray(2)
-    parent.getLocationOnScreen(parentLoc)
-    view.getLocationOnScreen(viewLoc)
-    val parentRect = Rect(
-      parentLoc[0],
-      parentLoc[1],
-      parentLoc[0] + parent.width,
-      parentLoc[1] + parent.height
-    )
-    val viewRect = Rect(
-      viewLoc[0],
-      viewLoc[1],
-      viewLoc[0] + view.width,
-      viewLoc[1] + view.height
-    )
-    val centerY = viewRect.centerY()
-    return centerY >= (parentRect.top + parentRect.height() * 0.55)
   }
 
   private fun setNavigationBarsHidden(hidden: Boolean) {
@@ -1173,6 +1113,24 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private fun dpToPx(dp: Float): Int {
     return (dp * context.resources.displayMetrics.density).toInt()
+  }
+
+  private fun shouldHideNativeBottomPanel(): Boolean {
+    return !showsTripProgress
+  }
+
+  private fun emitJourneySnapshot() {
+    val location = lastJourneyLocation
+    emitJourneyData(
+      banner = lastJourneyBanner,
+      progress = lastJourneyProgress,
+      latitude = location?.latitude,
+      longitude = location?.longitude,
+      bearing = location?.bearing?.toDouble(),
+      speed = location?.speed?.toDouble(),
+      altitude = location?.altitude,
+      accuracy = location?.accuracy?.toDouble()
+    )
   }
 
   private fun emitBannerInstruction(instruction: BannerInstructions?) {
