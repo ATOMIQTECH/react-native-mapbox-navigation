@@ -8,3 +8,4 @@ node_modules
 *.iml
 .idea
 *.expo
+config.bat
