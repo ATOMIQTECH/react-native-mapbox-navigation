@@ -1,4 +1,4 @@
-import { createStaticNavigation, StaticParamList } from '@react-navigation/native'
+import { createStaticNavigation, type StaticParamList } from '@react-navigation/native'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 
 import HomeScreen from './screens/HomeScreen'

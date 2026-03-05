@@ -7,5 +7,4 @@ node_modules
 .DS_Store
 *.iml
 .idea
-.vscode
 *.expo

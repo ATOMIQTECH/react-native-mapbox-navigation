@@ -1,15 +1,5 @@
-import {
-  requireNativeModule,
-  requireNativeViewManager,
-} from "expo-modules-core";
-import {
-  Fragment,
-  isValidElement,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core'
+import { Fragment, isValidElement, useEffect, useMemo, useRef, useState } from 'react'
 import {
   PanResponder,
   Platform,
@@ -17,14 +7,14 @@ import {
   StyleSheet,
   Text,
   View,
-  ViewProps,
-} from "react-native";
+  type ViewProps,
+} from 'react-native'
 
 import type {
   ArrivalEvent,
   BannerInstruction,
-  BottomSheetRenderContext,
   BottomSheetActionEvent,
+  BottomSheetRenderContext,
   CameraFollowingState,
   DestinationChangedEvent,
   DestinationPreviewEvent,
@@ -33,243 +23,224 @@ import type {
   FloatingButtonsRenderContext,
   JourneyData,
   LocationUpdate,
-  MapboxNavigationModule as MapboxNavigationModuleType,
-  MapboxNavigationViewProps,
-  NavigationSettings,
-  NavigationError,
-  RouteChangeEvent,
-  RouteProgress,
   MapboxNavigationFloatingButtonProps,
   MapboxNavigationFloatingButtonsStackProps,
+  MapboxNavigationModule as MapboxNavigationModuleType,
+  MapboxNavigationViewProps,
+  NavigationError,
+  NavigationSettings,
+  RouteChangeEvent,
+  RouteProgress,
   Subscription,
-} from "./MapboxNavigation.types";
+} from './MapboxNavigation.types'
 
-const MapboxNavigationModule = requireNativeModule<MapboxNavigationModuleType>(
-  "MapboxNavigationModule",
-);
+const MapboxNavigationModule =
+  requireNativeModule<MapboxNavigationModuleType>('MapboxNavigationModule')
 
-const MapboxNavigationNativeView = requireNativeViewManager(
-  "MapboxNavigationModule",
-);
+const MapboxNavigationNativeView = requireNativeViewManager('MapboxNavigationModule')
 
 const emitter = MapboxNavigationModule as unknown as {
-  addListener: (
-    eventName: string,
-    listener: (...args: any[]) => void,
-  ) => Subscription;
-};
+  addListener: (eventName: string, listener: (...args: any[]) => void) => Subscription
+}
 
 function unwrapNativeEventPayload<T>(payload: unknown): T | undefined {
   if (payload == null) {
-    return undefined;
+    return undefined
   }
-  if (typeof payload === "object") {
+  if (typeof payload === 'object') {
     const value = payload as {
-      nativeEvent?: unknown;
-      payload?: unknown;
-      data?: unknown;
-    };
-    const first = value.nativeEvent ?? value.payload ?? value.data;
+      nativeEvent?: unknown
+      payload?: unknown
+      data?: unknown
+    }
+    const first = value.nativeEvent ?? value.payload ?? value.data
     if (first != null) {
-      return unwrapNativeEventPayload<T>(first);
+      return unwrapNativeEventPayload<T>(first)
     }
   }
-  return payload as T;
+  return payload as T
 }
 
-function normalizeNativeError(
-  error: unknown,
-  fallbackCode = "NATIVE_ERROR",
-): Error {
+function normalizeNativeError(error: unknown, fallbackCode = 'NATIVE_ERROR'): Error {
   if (error instanceof Error) {
-    return error;
+    return error
   }
 
-  const candidate = error as { code?: string; message?: string } | undefined;
-  const code = candidate?.code ?? fallbackCode;
-  const message = candidate?.message ?? "Unknown native error";
-  return new Error(`[${code}] ${message}`);
+  const candidate = error as { code?: string; message?: string } | undefined
+  const code = candidate?.code ?? fallbackCode
+  const message = candidate?.message ?? 'Unknown native error'
+  return new Error(`[${code}] ${message}`)
 }
 
 function normalizeOverlayNode<T>(node: T): T | null {
-  if (
-    isValidElement(node) &&
-    node.type === Fragment &&
-    (node.props as any)?.children == null
-  ) {
-    return null;
+  if (isValidElement(node) && node.type === Fragment && (node.props as any)?.children == null) {
+    return null
   }
-  return node;
+  return node
 }
 
 function formatDuration(seconds: number): string {
-  const totalMinutes = Math.max(0, Math.round(seconds / 60));
+  const totalMinutes = Math.max(0, Math.round(seconds / 60))
   if (totalMinutes < 60) {
-    return `${totalMinutes} min`;
+    return `${totalMinutes} min`
   }
-  const hours = Math.floor(totalMinutes / 60);
-  const mins = totalMinutes % 60;
-  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  const hours = Math.floor(totalMinutes / 60)
+  const mins = totalMinutes % 60
+  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
 }
 
 function formatEta(durationRemainingSeconds?: number): string | undefined {
-  if (!Number.isFinite(durationRemainingSeconds ?? NaN)) {
-    return undefined;
+  if (!Number.isFinite(durationRemainingSeconds ?? Number.NaN)) {
+    return undefined
   }
-  const etaDate = new Date(
-    Date.now() + (durationRemainingSeconds as number) * 1000,
-  );
+  const etaDate = new Date(Date.now() + (durationRemainingSeconds as number) * 1000)
   const time = etaDate.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-  return `Arrive ${time}`;
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+  return `Arrive ${time}`
 }
 
 function normalizeViewProps(
-  props: MapboxNavigationViewProps & ViewProps,
+  props: MapboxNavigationViewProps & ViewProps
 ): MapboxNavigationViewProps & ViewProps {
   const overlayModeActive =
-    props.bottomSheet?.enabled !== false &&
-    props.bottomSheet?.mode === "overlay";
-  let showsTripProgress = props.showsTripProgress;
-  let showsManeuverView = props.showsManeuverView;
-  let showsActionButtons = props.showsActionButtons;
-  let showCancelButton = props.showCancelButton;
+    props.bottomSheet?.enabled !== false && props.bottomSheet?.mode === 'overlay'
+  let showsTripProgress = props.showsTripProgress
+  let showsManeuverView = props.showsManeuverView
+  let showsActionButtons = props.showsActionButtons
+  let showCancelButton = props.showCancelButton
   if (props.bottomSheet && !overlayModeActive) {
-    const enabled = props.bottomSheet.enabled;
+    const enabled = props.bottomSheet.enabled
     if (enabled === false) {
-      showsTripProgress = false;
-      showsManeuverView = false;
-      showsActionButtons = false;
+      showsTripProgress = false
+      showsManeuverView = false
+      showsActionButtons = false
     } else {
       if (showsTripProgress == null) {
-        showsTripProgress = props.bottomSheet.showsTripProgress;
+        showsTripProgress = props.bottomSheet.showsTripProgress
       }
       if (showsManeuverView == null) {
-        showsManeuverView = props.bottomSheet.showsManeuverView;
+        showsManeuverView = props.bottomSheet.showsManeuverView
       }
       if (showsActionButtons == null) {
-        showsActionButtons = props.bottomSheet.showsActionButtons;
+        showsActionButtons = props.bottomSheet.showsActionButtons
       }
     }
   }
 
   if (overlayModeActive) {
-    if (Platform.OS === "android") {
+    if (Platform.OS === 'android') {
       // Android embedded mode keeps custom sheet as the only bottom UI.
-      showsTripProgress = false;
-      showsActionButtons = false;
-      showCancelButton = false;
+      showsTripProgress = false
+      showsActionButtons = false
+      showCancelButton = false
     }
   }
 
   const wrappedOnLocationChange = props.onLocationChange
     ? (event: unknown) => {
-        const payload = unwrapNativeEventPayload<LocationUpdate>(event);
+        const payload = unwrapNativeEventPayload<LocationUpdate>(event)
         if (payload) {
-          props.onLocationChange?.(payload);
+          props.onLocationChange?.(payload)
         }
       }
-    : undefined;
+    : undefined
   const wrappedOnRouteProgressChange = props.onRouteProgressChange
     ? (event: unknown) => {
-        const payload = unwrapNativeEventPayload<RouteProgress>(event);
+        const payload = unwrapNativeEventPayload<RouteProgress>(event)
         if (payload) {
-          props.onRouteProgressChange?.(payload);
+          props.onRouteProgressChange?.(payload)
         }
       }
-    : undefined;
+    : undefined
   const wrappedOnCameraFollowingStateChange = props.onCameraFollowingStateChange
     ? (event: unknown) => {
-        const payload = unwrapNativeEventPayload<CameraFollowingState>(event);
+        const payload = unwrapNativeEventPayload<CameraFollowingState>(event)
         if (payload) {
-          props.onCameraFollowingStateChange?.(payload);
+          props.onCameraFollowingStateChange?.(payload)
         }
       }
-    : undefined;
+    : undefined
   const wrappedOnJourneyDataChange = props.onJourneyDataChange
     ? (event: unknown) => {
-        const payload = unwrapNativeEventPayload<JourneyData>(event);
+        const payload = unwrapNativeEventPayload<JourneyData>(event)
         if (payload) {
-          props.onJourneyDataChange?.(payload);
+          props.onJourneyDataChange?.(payload)
         }
       }
-    : undefined;
+    : undefined
   const wrappedOnRouteChange = props.onRouteChange
     ? (event: unknown) => {
-        const payload = unwrapNativeEventPayload<RouteChangeEvent>(event);
+        const payload = unwrapNativeEventPayload<RouteChangeEvent>(event)
         if (payload) {
-          props.onRouteChange?.(payload);
+          props.onRouteChange?.(payload)
         }
       }
-    : undefined;
+    : undefined
   const wrappedOnBannerInstruction = props.onBannerInstruction
     ? (event: unknown) => {
-        const payload = unwrapNativeEventPayload<BannerInstruction>(event);
+        const payload = unwrapNativeEventPayload<BannerInstruction>(event)
         if (payload) {
-          props.onBannerInstruction?.(payload);
+          props.onBannerInstruction?.(payload)
         }
       }
-    : undefined;
+    : undefined
   const wrappedOnArrive = props.onArrive
     ? (event: unknown) => {
-        const payload = unwrapNativeEventPayload<ArrivalEvent>(event);
+        const payload = unwrapNativeEventPayload<ArrivalEvent>(event)
         if (payload) {
-          props.onArrive?.(payload);
+          props.onArrive?.(payload)
         }
       }
-    : undefined;
+    : undefined
   const wrappedOnDestinationPreview = props.onDestinationPreview
     ? (event: unknown) => {
-        const payload =
-          unwrapNativeEventPayload<DestinationPreviewEvent>(event);
+        const payload = unwrapNativeEventPayload<DestinationPreviewEvent>(event)
         if (payload) {
-          props.onDestinationPreview?.(payload);
+          props.onDestinationPreview?.(payload)
         }
       }
-    : undefined;
+    : undefined
   const wrappedOnDestinationChanged = props.onDestinationChanged
     ? (event: unknown) => {
-        const payload =
-          unwrapNativeEventPayload<DestinationChangedEvent>(event);
+        const payload = unwrapNativeEventPayload<DestinationChangedEvent>(event)
         if (payload) {
-          props.onDestinationChanged?.(payload);
+          props.onDestinationChanged?.(payload)
         }
       }
-    : undefined;
+    : undefined
   const wrappedOnError = (event: unknown) => {
-    const payload = unwrapNativeEventPayload<NavigationError>(event);
+    const payload = unwrapNativeEventPayload<NavigationError>(event)
     if (!payload) {
-      return;
+      return
     }
     if (props.onError) {
-      props.onError(payload);
-      return;
+      props.onError(payload)
+      return
     }
     console.warn(
-      `[react-native-mapbox-navigation] embedded onError: ${payload.code}: ${payload.message}`,
-    );
-  };
+      `[react-native-mapbox-navigation] embedded onError: ${payload.code}: ${payload.message}`
+    )
+  }
   const wrappedOnCancelNavigation = props.onCancelNavigation
     ? () => {
-        props.onCancelNavigation?.();
+        props.onCancelNavigation?.()
       }
-    : undefined;
+    : undefined
 
   const sanitizedStartOrigin = props.startOrigin
     ? {
         latitude: props.startOrigin.latitude,
         longitude: props.startOrigin.longitude,
       }
-    : undefined;
+    : undefined
 
   return {
     ...props,
     enabled: props.enabled === true,
     startOrigin: sanitizedStartOrigin,
-    routeAlternatives:
-      props.routeAlternatives ?? props.showsContinuousAlternatives,
+    routeAlternatives: props.routeAlternatives ?? props.showsContinuousAlternatives,
     showsTripProgress,
     showsManeuverView,
     showsActionButtons,
@@ -301,7 +272,7 @@ function normalizeViewProps(
     onDestinationChanged: wrappedOnDestinationChanged,
     onCancelNavigation: wrappedOnCancelNavigation,
     onError: wrappedOnError,
-  };
+  }
 }
 
 /**
@@ -311,9 +282,9 @@ function normalizeViewProps(
  */
 export async function setMuted(muted: boolean): Promise<void> {
   try {
-    await MapboxNavigationModule.setMuted(muted);
+    await MapboxNavigationModule.setMuted(muted)
   } catch (error) {
-    throw normalizeNativeError(error, "SET_MUTED_FAILED");
+    throw normalizeNativeError(error, 'SET_MUTED_FAILED')
   }
 }
 
@@ -322,22 +293,20 @@ export async function setMuted(muted: boolean): Promise<void> {
  */
 export async function setVoiceVolume(volume: number): Promise<void> {
   try {
-    await MapboxNavigationModule.setVoiceVolume(volume);
+    await MapboxNavigationModule.setVoiceVolume(volume)
   } catch (error) {
-    throw normalizeNativeError(error, "SET_VOICE_VOLUME_FAILED");
+    throw normalizeNativeError(error, 'SET_VOICE_VOLUME_FAILED')
   }
 }
 
 /**
  * Set spoken and displayed distance units.
  */
-export async function setDistanceUnit(
-  unit: "metric" | "imperial",
-): Promise<void> {
+export async function setDistanceUnit(unit: 'metric' | 'imperial'): Promise<void> {
   try {
-    await MapboxNavigationModule.setDistanceUnit(unit);
+    await MapboxNavigationModule.setDistanceUnit(unit)
   } catch (error) {
-    throw normalizeNativeError(error, "SET_DISTANCE_UNIT_FAILED");
+    throw normalizeNativeError(error, 'SET_DISTANCE_UNIT_FAILED')
   }
 }
 
@@ -346,9 +315,9 @@ export async function setDistanceUnit(
  */
 export async function setLanguage(language: string): Promise<void> {
   try {
-    await MapboxNavigationModule.setLanguage(language);
+    await MapboxNavigationModule.setLanguage(language)
   } catch (error) {
-    throw normalizeNativeError(error, "SET_LANGUAGE_FAILED");
+    throw normalizeNativeError(error, 'SET_LANGUAGE_FAILED')
   }
 }
 
@@ -357,25 +326,25 @@ export async function setLanguage(language: string): Promise<void> {
  */
 export async function getNavigationSettings(): Promise<NavigationSettings> {
   try {
-    return await MapboxNavigationModule.getNavigationSettings();
+    return await MapboxNavigationModule.getNavigationSettings()
   } catch (error) {
-    throw normalizeNativeError(error, "GET_NAVIGATION_SETTINGS_FAILED");
+    throw normalizeNativeError(error, 'GET_NAVIGATION_SETTINGS_FAILED')
   }
 }
 
 export async function stopNavigation(): Promise<boolean> {
   try {
-    return await MapboxNavigationModule.stopNavigation();
+    return await MapboxNavigationModule.stopNavigation()
   } catch (error) {
-    throw normalizeNativeError(error, "STOP_NAVIGATION_FAILED");
+    throw normalizeNativeError(error, 'STOP_NAVIGATION_FAILED')
   }
 }
 
 export async function resumeCameraFollowing(): Promise<boolean> {
   try {
-    return await MapboxNavigationModule.resumeCameraFollowing();
+    return await MapboxNavigationModule.resumeCameraFollowing()
   } catch (error) {
-    throw normalizeNativeError(error, "RESUME_CAMERA_FOLLOWING_FAILED");
+    throw normalizeNativeError(error, 'RESUME_CAMERA_FOLLOWING_FAILED')
   }
 }
 
@@ -383,162 +352,149 @@ export async function resumeCameraFollowing(): Promise<boolean> {
  * Subscribe to location updates from native navigation.
  */
 export function addLocationChangeListener(
-  listener: (location: LocationUpdate) => void,
+  listener: (location: LocationUpdate) => void
 ): Subscription {
-  return emitter.addListener("onLocationChange", (event: unknown) => {
-    const payload = unwrapNativeEventPayload<LocationUpdate>(event);
+  return emitter.addListener('onLocationChange', (event: unknown) => {
+    const payload = unwrapNativeEventPayload<LocationUpdate>(event)
     if (payload) {
-      listener(payload);
+      listener(payload)
     }
-  });
+  })
 }
 
 /**
  * Subscribe to route progress updates.
  */
 export function addRouteProgressChangeListener(
-  listener: (progress: RouteProgress) => void,
+  listener: (progress: RouteProgress) => void
 ): Subscription {
-  return emitter.addListener("onRouteProgressChange", (event: unknown) => {
-    const payload = unwrapNativeEventPayload<RouteProgress>(event);
+  return emitter.addListener('onRouteProgressChange', (event: unknown) => {
+    const payload = unwrapNativeEventPayload<RouteProgress>(event)
     if (payload) {
-      listener(payload);
+      listener(payload)
     }
-  });
+  })
 }
 
 export function addCameraFollowingStateChangeListener(
-  listener: (state: CameraFollowingState) => void,
+  listener: (state: CameraFollowingState) => void
 ): Subscription {
-  return emitter.addListener(
-    "onCameraFollowingStateChange",
-    (event: unknown) => {
-      const payload = unwrapNativeEventPayload<CameraFollowingState>(event);
-      if (payload) {
-        listener(payload);
-      }
-    },
-  );
+  return emitter.addListener('onCameraFollowingStateChange', (event: unknown) => {
+    const payload = unwrapNativeEventPayload<CameraFollowingState>(event)
+    if (payload) {
+      listener(payload)
+    }
+  })
 }
 
 /**
  * Subscribe to aggregated journey data (location + progress + instruction) for custom UI.
  */
-export function addJourneyDataChangeListener(
-  listener: (data: JourneyData) => void,
-): Subscription {
-  return emitter.addListener("onJourneyDataChange", (event: unknown) => {
-    const payload = unwrapNativeEventPayload<JourneyData>(event);
+export function addJourneyDataChangeListener(listener: (data: JourneyData) => void): Subscription {
+  return emitter.addListener('onJourneyDataChange', (event: unknown) => {
+    const payload = unwrapNativeEventPayload<JourneyData>(event)
     if (payload) {
-      listener(payload);
+      listener(payload)
     }
-  });
+  })
 }
 
-export function addRouteChangeListener(
-  listener: (event: RouteChangeEvent) => void,
-): Subscription {
-  return emitter.addListener("onRouteChange", (event: unknown) => {
-    const payload = unwrapNativeEventPayload<RouteChangeEvent>(event);
+export function addRouteChangeListener(listener: (event: RouteChangeEvent) => void): Subscription {
+  return emitter.addListener('onRouteChange', (event: unknown) => {
+    const payload = unwrapNativeEventPayload<RouteChangeEvent>(event)
     if (payload) {
-      listener(payload);
+      listener(payload)
     }
-  });
+  })
 }
 
 /**
  * Subscribe to arrival events.
  */
-export function addArriveListener(
-  listener: (point: ArrivalEvent) => void,
-): Subscription {
-  return emitter.addListener("onArrive", (event: unknown) => {
-    const payload = unwrapNativeEventPayload<ArrivalEvent>(event);
+export function addArriveListener(listener: (point: ArrivalEvent) => void): Subscription {
+  return emitter.addListener('onArrive', (event: unknown) => {
+    const payload = unwrapNativeEventPayload<ArrivalEvent>(event)
     if (payload) {
-      listener(payload);
+      listener(payload)
     }
-  });
+  })
 }
 
 /**
  * Subscribe to destination preview events.
  */
 export function addDestinationPreviewListener(
-  listener: (event: DestinationPreviewEvent) => void,
+  listener: (event: DestinationPreviewEvent) => void
 ): Subscription {
-  return emitter.addListener("onDestinationPreview", (event: unknown) => {
-    const payload = unwrapNativeEventPayload<DestinationPreviewEvent>(event);
+  return emitter.addListener('onDestinationPreview', (event: unknown) => {
+    const payload = unwrapNativeEventPayload<DestinationPreviewEvent>(event)
     if (payload) {
-      listener(payload);
+      listener(payload)
     }
-  });
+  })
 }
 
 /**
  * Subscribe to destination changed events.
  */
 export function addDestinationChangedListener(
-  listener: (event: DestinationChangedEvent) => void,
+  listener: (event: DestinationChangedEvent) => void
 ): Subscription {
-  return emitter.addListener("onDestinationChanged", (event: unknown) => {
-    const payload = unwrapNativeEventPayload<DestinationChangedEvent>(event);
+  return emitter.addListener('onDestinationChanged', (event: unknown) => {
+    const payload = unwrapNativeEventPayload<DestinationChangedEvent>(event)
     if (payload) {
-      listener(payload);
+      listener(payload)
     }
-  });
+  })
 }
 
 /**
  * Subscribe to cancellation events.
  */
-export function addCancelNavigationListener(
-  listener: () => void,
-): Subscription {
-  return emitter.addListener("onCancelNavigation", () => {
-    listener();
-  });
+export function addCancelNavigationListener(listener: () => void): Subscription {
+  return emitter.addListener('onCancelNavigation', () => {
+    listener()
+  })
 }
 
 /**
  * Subscribe to native errors (token issues, route fetch failures, permission failures, etc.).
  */
-export function addErrorListener(
-  listener: (error: NavigationError) => void,
-): Subscription {
-  return emitter.addListener("onError", (event: unknown) => {
-    const payload = unwrapNativeEventPayload<NavigationError>(event);
+export function addErrorListener(listener: (error: NavigationError) => void): Subscription {
+  return emitter.addListener('onError', (event: unknown) => {
+    const payload = unwrapNativeEventPayload<NavigationError>(event)
     if (payload) {
-      listener(payload);
+      listener(payload)
     }
-  });
+  })
 }
 
 /**
  * Subscribe to banner instruction updates.
  */
 export function addBannerInstructionListener(
-  listener: (instruction: BannerInstruction) => void,
+  listener: (instruction: BannerInstruction) => void
 ): Subscription {
-  return emitter.addListener("onBannerInstruction", (event: unknown) => {
-    const payload = unwrapNativeEventPayload<BannerInstruction>(event);
+  return emitter.addListener('onBannerInstruction', (event: unknown) => {
+    const payload = unwrapNativeEventPayload<BannerInstruction>(event)
     if (payload) {
-      listener(payload);
+      listener(payload)
     }
-  });
+  })
 }
 
 /**
  * Subscribe to native bottom-sheet action button presses.
  */
 export function addBottomSheetActionPressListener(
-  listener: (event: BottomSheetActionEvent) => void,
+  listener: (event: BottomSheetActionEvent) => void
 ): Subscription {
-  return emitter.addListener("onBottomSheetActionPress", (event: unknown) => {
-    const payload = unwrapNativeEventPayload<BottomSheetActionEvent>(event);
+  return emitter.addListener('onBottomSheetActionPress', (event: unknown) => {
+    const payload = unwrapNativeEventPayload<BottomSheetActionEvent>(event)
     if (payload) {
-      listener(payload);
+      listener(payload)
     }
-  });
+  })
 }
 
 export function MapboxNavigationFloatingButton({
@@ -550,15 +506,15 @@ export function MapboxNavigationFloatingButton({
   testID,
 }: MapboxNavigationFloatingButtonProps) {
   const content =
-    typeof children === "string" || typeof children === "number" ? (
+    typeof children === 'string' || typeof children === 'number' ? (
       <Text style={styles.defaultFloatingButtonLabel}>{children}</Text>
     ) : (
       children
-    );
+    )
 
   return (
     <Pressable
-      accessibilityRole="button"
+      accessibilityRole='button'
       accessibilityLabel={accessibilityLabel}
       disabled={disabled}
       onPress={onPress}
@@ -572,14 +528,14 @@ export function MapboxNavigationFloatingButton({
     >
       {content}
     </Pressable>
-  );
+  )
 }
 
 export function MapboxNavigationFloatingButtonsStack({
   children,
   style,
 }: MapboxNavigationFloatingButtonsStackProps) {
-  return <View style={[styles.defaultFloatingButtonsStack, style]}>{children}</View>;
+  return <View style={[styles.defaultFloatingButtonsStack, style]}>{children}</View>
 }
 
 /**
@@ -587,215 +543,177 @@ export function MapboxNavigationFloatingButtonsStack({
  *
  * Set `enabled={true}` to start embedded navigation. Default is disabled to avoid accidental session conflicts.
  */
-export function MapboxNavigationView(
-  props: MapboxNavigationViewProps & ViewProps,
-) {
-  const warnedCustomSheetOnlyRef = useRef(false);
+export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProps) {
+  const warnedCustomSheetOnlyRef = useRef(false)
   const bottomSheet =
     props.bottomSheet && props.bottomSheet.enabled !== false
       ? {
           ...props.bottomSheet,
-          mode: "overlay" as const,
+          mode: 'overlay' as const,
         }
-      : props.bottomSheet;
+      : props.bottomSheet
   if (
     props.bottomSheet?.enabled !== false &&
     props.bottomSheet &&
-    props.bottomSheet.mode !== "overlay" &&
+    props.bottomSheet.mode !== 'overlay' &&
     !warnedCustomSheetOnlyRef.current
   ) {
-    warnedCustomSheetOnlyRef.current = true;
+    warnedCustomSheetOnlyRef.current = true
     console.warn(
-      "[react-native-mapbox-navigation] Embedded mode is custom-sheet-only. Forcing bottomSheet.mode='overlay'.",
-    );
+      "[react-native-mapbox-navigation] Embedded mode is custom-sheet-only. Forcing bottomSheet.mode='overlay'."
+    )
   }
-  const propsWithBottomSheet =
-    bottomSheet === props.bottomSheet ? props : { ...props, bottomSheet };
-  const useOverlayBottomSheet =
-    !!bottomSheet?.enabled && bottomSheet?.mode === "overlay";
+  const propsWithBottomSheet = bottomSheet === props.bottomSheet ? props : { ...props, bottomSheet }
+  const useOverlayBottomSheet = !!bottomSheet?.enabled && bottomSheet?.mode === 'overlay'
   const hasCustomEndOfRouteFeedbackRenderer =
-    typeof props.renderEndOfRouteFeedback === "function" ||
-    typeof props.endOfRouteFeedbackComponent === "function";
+    typeof props.renderEndOfRouteFeedback === 'function' ||
+    typeof props.endOfRouteFeedbackComponent === 'function'
   const useEndOfRouteFeedback =
     props.showsEndOfRouteFeedback === true ||
-    (props.showsEndOfRouteFeedback !== false &&
-      hasCustomEndOfRouteFeedbackRenderer);
-  const hideCustomFloatingButtonsOnArrival =
-    props.hideFloatingButtonsOnArrival !== false;
+    (props.showsEndOfRouteFeedback !== false && hasCustomEndOfRouteFeedbackRenderer)
+  const hideCustomFloatingButtonsOnArrival = props.hideFloatingButtonsOnArrival !== false
   const overlayLocationMinIntervalMs = Math.max(
     0,
     Math.min(
-      bottomSheet?.overlayLocationUpdateIntervalMs ??
-        (Platform.OS === "android" ? 900 : 300),
-      3000,
-    ),
-  );
+      bottomSheet?.overlayLocationUpdateIntervalMs ?? (Platform.OS === 'android' ? 900 : 300),
+      3000
+    )
+  )
   const overlayProgressMinIntervalMs = Math.max(
     0,
     Math.min(
-      bottomSheet?.overlayProgressUpdateIntervalMs ??
-        (Platform.OS === "android" ? 700 : 300),
-      3000,
-    ),
-  );
-  const iosHiddenMode = Platform.OS === "ios";
-  const collapsedHeight = Math.max(
-    56,
-    Math.min(bottomSheet?.collapsedHeight ?? 112, 400),
-  );
+      bottomSheet?.overlayProgressUpdateIntervalMs ?? (Platform.OS === 'android' ? 700 : 300),
+      3000
+    )
+  )
+  const iosHiddenMode = Platform.OS === 'ios'
+  const collapsedHeight = Math.max(56, Math.min(bottomSheet?.collapsedHeight ?? 112, 400))
   const expandedHeight = Math.max(
     collapsedHeight,
-    Math.min(bottomSheet?.expandedHeight ?? 280, 700),
-  );
-  const collapsedBottomOffset = Math.max(
-    0,
-    Math.min(bottomSheet?.collapsedBottomOffset ?? 24, 80),
-  );
+    Math.min(bottomSheet?.expandedHeight ?? 280, 700)
+  )
+  const collapsedBottomOffset = Math.max(0, Math.min(bottomSheet?.collapsedBottomOffset ?? 24, 80))
   const requestedInitialState =
-    bottomSheet?.initialState === "expanded" ||
-    bottomSheet?.initialState === "collapsed" ||
-    bottomSheet?.initialState === "hidden"
+    bottomSheet?.initialState === 'expanded' ||
+    bottomSheet?.initialState === 'collapsed' ||
+    bottomSheet?.initialState === 'hidden'
       ? bottomSheet.initialState
-      : "collapsed";
+      : 'collapsed'
   const initialState =
-    requestedInitialState === "expanded"
-      ? "expanded"
-      : iosHiddenMode
-        ? "hidden"
-        : "collapsed";
-  const [sheetState, setSheetState] =
-    useState<BottomSheetRenderContext["state"]>(initialState);
-  const [overlayBanner, setOverlayBanner] = useState<
-    BannerInstruction | undefined
-  >(undefined);
-  const [overlayProgress, setOverlayProgress] = useState<
-    RouteProgress | undefined
-  >(undefined);
-  const [overlayLocation, setOverlayLocation] = useState<
-    LocationUpdate | undefined
-  >(undefined);
-  const [overlayMuted, setOverlayMuted] = useState(!!props.mute);
-  const [overlayCameraMode, setOverlayCameraMode] = useState<
-    "following" | "overview" | undefined
-  >(undefined);
-  const [overlayArrival, setOverlayArrival] = useState<ArrivalEvent | undefined>(
-    undefined,
-  );
-  const [endOfRouteFeedbackVisible, setEndOfRouteFeedbackVisible] =
-    useState(false);
+    requestedInitialState === 'expanded' ? 'expanded' : iosHiddenMode ? 'hidden' : 'collapsed'
+  const [sheetState, setSheetState] = useState<BottomSheetRenderContext['state']>(initialState)
+  const [overlayBanner, setOverlayBanner] = useState<BannerInstruction | undefined>(undefined)
+  const [overlayProgress, setOverlayProgress] = useState<RouteProgress | undefined>(undefined)
+  const [overlayLocation, setOverlayLocation] = useState<LocationUpdate | undefined>(undefined)
+  const [overlayMuted, setOverlayMuted] = useState(!!props.mute)
+  const [overlayCameraMode, setOverlayCameraMode] = useState<'following' | 'overview' | undefined>(
+    undefined
+  )
+  const [overlayArrival, setOverlayArrival] = useState<ArrivalEvent | undefined>(undefined)
+  const [endOfRouteFeedbackVisible, setEndOfRouteFeedbackVisible] = useState(false)
   const overlayThrottleRef = useRef({
     locationAtMs: 0,
     progressAtMs: 0,
-    bannerKey: "",
-  });
+    bannerKey: '',
+  })
   const navigationResetKey = [
-    props.enabled === true ? "enabled" : "disabled",
+    props.enabled === true ? 'enabled' : 'disabled',
     props.destination.latitude,
     props.destination.longitude,
-    props.destination.name ?? "",
-  ].join("|");
+    props.destination.name ?? '',
+  ].join('|')
   useEffect(() => {
     if (!useOverlayBottomSheet) {
-      return;
+      return
     }
     const next =
-      bottomSheet?.initialState === "expanded"
-        ? "expanded"
-        : iosHiddenMode
-          ? "hidden"
-          : "collapsed";
-    setSheetState(next);
-  }, [bottomSheet?.initialState, iosHiddenMode]);
+      bottomSheet?.initialState === 'expanded' ? 'expanded' : iosHiddenMode ? 'hidden' : 'collapsed'
+    setSheetState(next)
+  }, [bottomSheet?.initialState, iosHiddenMode])
 
   useEffect(() => {
-    setOverlayMuted(!!props.mute);
-  }, [props.mute]);
+    setOverlayMuted(!!props.mute)
+  }, [props.mute])
 
   useEffect(() => {
-    setOverlayCameraMode(undefined);
-  }, [props.cameraMode]);
+    setOverlayCameraMode(undefined)
+  }, [props.cameraMode])
 
   useEffect(() => {
-    setOverlayArrival(undefined);
-    setEndOfRouteFeedbackVisible(false);
-  }, [navigationResetKey]);
+    setOverlayArrival(undefined)
+    setEndOfRouteFeedbackVisible(false)
+  }, [navigationResetKey])
 
   const nativeProps = useMemo(
     () => normalizeViewProps(propsWithBottomSheet),
-    [propsWithBottomSheet],
-  );
+    [propsWithBottomSheet]
+  )
   const useOverlayTelemetry =
     useOverlayBottomSheet ||
-    typeof props.renderFloatingButtons === "function" ||
-    typeof props.floatingButtonsComponent === "function";
+    typeof props.renderFloatingButtons === 'function' ||
+    typeof props.floatingButtonsComponent === 'function'
   const nativePropsWithOverlay = useMemo(() => {
     const onArrive = (event: unknown) => {
-      const payload = unwrapNativeEventPayload<ArrivalEvent>(event);
+      const payload = unwrapNativeEventPayload<ArrivalEvent>(event)
       if (payload) {
-        setOverlayArrival(payload);
+        setOverlayArrival(payload)
         if (useEndOfRouteFeedback) {
-          setEndOfRouteFeedbackVisible(true);
+          setEndOfRouteFeedbackVisible(true)
         }
       }
-      nativeProps.onArrive?.(event as any);
-    };
+      nativeProps.onArrive?.(event as any)
+    }
     const onCancelNavigation = () => {
-      setOverlayArrival(undefined);
-      setEndOfRouteFeedbackVisible(false);
-      nativeProps.onCancelNavigation?.();
-    };
+      setOverlayArrival(undefined)
+      setEndOfRouteFeedbackVisible(false)
+      nativeProps.onCancelNavigation?.()
+    }
 
     if (!useOverlayTelemetry) {
       return {
         ...nativeProps,
         onArrive,
         onCancelNavigation,
-      };
+      }
     }
 
     const onLocationChange = (event: unknown) => {
-      const payload = unwrapNativeEventPayload<LocationUpdate>(event);
+      const payload = unwrapNativeEventPayload<LocationUpdate>(event)
       if (payload) {
-        const now = Date.now();
-        if (
-          now - overlayThrottleRef.current.locationAtMs >=
-          overlayLocationMinIntervalMs
-        ) {
-          overlayThrottleRef.current.locationAtMs = now;
-          setOverlayLocation(payload);
+        const now = Date.now()
+        if (now - overlayThrottleRef.current.locationAtMs >= overlayLocationMinIntervalMs) {
+          overlayThrottleRef.current.locationAtMs = now
+          setOverlayLocation(payload)
         }
       }
-      nativeProps.onLocationChange?.(event as any);
-    };
+      nativeProps.onLocationChange?.(event as any)
+    }
     const onRouteProgressChange = (event: unknown) => {
-      const payload = unwrapNativeEventPayload<RouteProgress>(event);
+      const payload = unwrapNativeEventPayload<RouteProgress>(event)
       if (payload) {
-        const now = Date.now();
-        if (
-          now - overlayThrottleRef.current.progressAtMs >=
-          overlayProgressMinIntervalMs
-        ) {
-          overlayThrottleRef.current.progressAtMs = now;
-          setOverlayProgress(payload);
+        const now = Date.now()
+        if (now - overlayThrottleRef.current.progressAtMs >= overlayProgressMinIntervalMs) {
+          overlayThrottleRef.current.progressAtMs = now
+          setOverlayProgress(payload)
         }
       }
-      nativeProps.onRouteProgressChange?.(event as any);
-    };
+      nativeProps.onRouteProgressChange?.(event as any)
+    }
     const onBannerInstruction = (event: unknown) => {
-      const payload = unwrapNativeEventPayload<BannerInstruction>(event);
+      const payload = unwrapNativeEventPayload<BannerInstruction>(event)
       if (payload) {
         const bannerKey = [
-          payload.primaryText ?? "",
-          payload.secondaryText ?? "",
+          payload.primaryText ?? '',
+          payload.secondaryText ?? '',
           Math.round(payload.stepDistanceRemaining ?? -1),
-        ].join("|");
+        ].join('|')
         if (bannerKey !== overlayThrottleRef.current.bannerKey) {
-          overlayThrottleRef.current.bannerKey = bannerKey;
-          setOverlayBanner(payload);
+          overlayThrottleRef.current.bannerKey = bannerKey
+          setOverlayBanner(payload)
         }
       }
-      nativeProps.onBannerInstruction?.(event as any);
-    };
+      nativeProps.onBannerInstruction?.(event as any)
+    }
     return {
       ...nativeProps,
       cameraMode: overlayCameraMode ?? nativeProps.cameraMode,
@@ -804,7 +722,7 @@ export function MapboxNavigationView(
       onBannerInstruction,
       onArrive,
       onCancelNavigation,
-    };
+    }
   }, [
     nativeProps,
     overlayCameraMode,
@@ -812,59 +730,48 @@ export function MapboxNavigationView(
     overlayLocationMinIntervalMs,
     overlayProgressMinIntervalMs,
     useEndOfRouteFeedback,
-  ]);
+  ])
 
-  const emitOverlayAction = (
-    actionId: string,
-    source: "builtin" | "custom" = "custom",
-  ) => {
-    props.onOverlayBottomSheetActionPress?.({ actionId, source });
-  };
+  const emitOverlayAction = (actionId: string, source: 'builtin' | 'custom' = 'custom') => {
+    props.onOverlayBottomSheetActionPress?.({ actionId, source })
+  }
 
-  const showOverlayBottomSheet = (
-    next: "collapsed" | "expanded" = "collapsed",
-  ) => {
+  const showOverlayBottomSheet = (next: 'collapsed' | 'expanded' = 'collapsed') => {
     if (!useOverlayBottomSheet) {
-      return;
+      return
     }
-    setSheetState(
-      next === "expanded" ? "expanded" : iosHiddenMode ? "expanded" : "collapsed",
-    );
-  };
+    setSheetState(next === 'expanded' ? 'expanded' : iosHiddenMode ? 'expanded' : 'collapsed')
+  }
 
   const hideOverlayBottomSheet = () => {
     if (!useOverlayBottomSheet) {
-      return;
+      return
     }
-    setSheetState(iosHiddenMode ? "hidden" : "collapsed");
-  };
+    setSheetState(iosHiddenMode ? 'hidden' : 'collapsed')
+  }
 
   const expandOverlayBottomSheet = () => {
     if (!useOverlayBottomSheet) {
-      return;
+      return
     }
-    setSheetState("expanded");
-  };
+    setSheetState('expanded')
+  }
 
   const collapseOverlayBottomSheet = () => {
     if (!useOverlayBottomSheet) {
-      return;
+      return
     }
-    setSheetState(iosHiddenMode ? "hidden" : "collapsed");
-  };
+    setSheetState(iosHiddenMode ? 'hidden' : 'collapsed')
+  }
 
   const toggleOverlayBottomSheet = () => {
     if (!useOverlayBottomSheet) {
-      return;
+      return
     }
     setSheetState((value) =>
-      value === "expanded"
-        ? iosHiddenMode
-          ? "hidden"
-          : "collapsed"
-        : "expanded",
-    );
-  };
+      value === 'expanded' ? (iosHiddenMode ? 'hidden' : 'collapsed') : 'expanded'
+    )
+  }
 
   const floatingButtonsContext: FloatingButtonsRenderContext = {
     show: showOverlayBottomSheet,
@@ -876,112 +783,104 @@ export function MapboxNavigationView(
     routeProgress: overlayProgress,
     location: overlayLocation,
     stopNavigation,
-    emitAction: (actionId: string) => emitOverlayAction(actionId, "custom"),
-  };
+    emitAction: (actionId: string) => emitOverlayAction(actionId, 'custom'),
+  }
   const endOfRouteFeedbackContext: EndOfRouteFeedbackRenderContext = {
     arrival: overlayArrival,
     dismiss: () => {
-      setEndOfRouteFeedbackVisible(false);
+      setEndOfRouteFeedbackVisible(false)
     },
     submitRating: (rating: number) => {
       if (!Number.isFinite(rating)) {
-        return;
+        return
       }
-      const normalizedRating = Math.max(1, Math.min(5, Math.round(rating)));
+      const normalizedRating = Math.max(1, Math.min(5, Math.round(rating)))
       const payload: EndOfRouteFeedbackEvent = {
         rating: normalizedRating,
         arrival: overlayArrival,
-      };
-      props.onEndOfRouteFeedbackSubmit?.(payload);
-      setEndOfRouteFeedbackVisible(false);
+      }
+      props.onEndOfRouteFeedbackSubmit?.(payload)
+      setEndOfRouteFeedbackVisible(false)
     },
     stopNavigation,
-  };
+  }
 
   const renderEndOfRouteFeedback = () => {
     if (!useEndOfRouteFeedback || !endOfRouteFeedbackVisible) {
-      return null;
+      return null
     }
 
-    const FeedbackComponent = props.endOfRouteFeedbackComponent;
+    const FeedbackComponent = props.endOfRouteFeedbackComponent
     const componentContent = FeedbackComponent ? (
       <FeedbackComponent {...endOfRouteFeedbackContext} />
-    ) : null;
+    ) : null
     const renderedContent = normalizeOverlayNode(
-      props.renderEndOfRouteFeedback?.(endOfRouteFeedbackContext),
-    );
-    const content =
-      renderedContent ??
-      normalizeOverlayNode(componentContent) ?? (
-        <View style={styles.endOfRouteFeedbackCard}>
-          <Text style={styles.endOfRouteFeedbackTitle}>Rate This Trip</Text>
-          <Text style={styles.endOfRouteFeedbackSubtitle}>
-            {overlayArrival?.name
-              ? `You arrived at ${overlayArrival.name}.`
-              : "You reached your destination."}
-          </Text>
-          <View style={styles.endOfRouteFeedbackRatingRow}>
-            {[1, 2, 3, 4, 5].map((rating) => (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`Rate trip ${rating} out of 5`}
-                key={`end-of-route-rating-${rating}`}
-                onPress={() => {
-                  endOfRouteFeedbackContext.submitRating(rating);
-                }}
-                style={styles.endOfRouteFeedbackRatingButton}
-              >
-                <Text style={styles.endOfRouteFeedbackRatingLabel}>
-                  {rating}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            onPress={endOfRouteFeedbackContext.dismiss}
-            style={styles.endOfRouteFeedbackDismissButton}
-          >
-            <Text style={styles.endOfRouteFeedbackDismissLabel}>Not Now</Text>
-          </Pressable>
+      props.renderEndOfRouteFeedback?.(endOfRouteFeedbackContext)
+    )
+    const content = renderedContent ?? normalizeOverlayNode(componentContent) ?? (
+      <View style={styles.endOfRouteFeedbackCard}>
+        <Text style={styles.endOfRouteFeedbackTitle}>Rate This Trip</Text>
+        <Text style={styles.endOfRouteFeedbackSubtitle}>
+          {overlayArrival?.name
+            ? `You arrived at ${overlayArrival.name}.`
+            : 'You reached your destination.'}
+        </Text>
+        <View style={styles.endOfRouteFeedbackRatingRow}>
+          {[1, 2, 3, 4, 5].map((rating) => (
+            <Pressable
+              accessibilityRole='button'
+              accessibilityLabel={`Rate trip ${rating} out of 5`}
+              key={`end-of-route-rating-${rating}`}
+              onPress={() => {
+                endOfRouteFeedbackContext.submitRating(rating)
+              }}
+              style={styles.endOfRouteFeedbackRatingButton}
+            >
+              <Text style={styles.endOfRouteFeedbackRatingLabel}>{rating}</Text>
+            </Pressable>
+          ))}
         </View>
-      );
+        <Pressable
+          accessibilityRole='button'
+          onPress={endOfRouteFeedbackContext.dismiss}
+          style={styles.endOfRouteFeedbackDismissButton}
+        >
+          <Text style={styles.endOfRouteFeedbackDismissLabel}>Not Now</Text>
+        </Pressable>
+      </View>
+    )
 
     return (
-      <View pointerEvents="box-none" style={styles.endOfRouteFeedbackRoot}>
+      <View pointerEvents='box-none' style={styles.endOfRouteFeedbackRoot}>
         <Pressable
-          accessibilityRole="button"
+          accessibilityRole='button'
           onPress={endOfRouteFeedbackContext.dismiss}
           style={styles.endOfRouteFeedbackBackdrop}
         />
-        <View pointerEvents="box-none" style={styles.endOfRouteFeedbackWrap}>
+        <View pointerEvents='box-none' style={styles.endOfRouteFeedbackWrap}>
           {content}
         </View>
       </View>
-    );
-  };
+    )
+  }
 
   const renderFloatingButtons = () => {
     if (hideCustomFloatingButtonsOnArrival && overlayArrival) {
-      return null;
+      return null
     }
 
-    const FloatingButtonsComponent = props.floatingButtonsComponent;
+    const FloatingButtonsComponent = props.floatingButtonsComponent
     const componentButtonsNode = FloatingButtonsComponent ? (
       <FloatingButtonsComponent {...floatingButtonsContext} />
-    ) : null;
+    ) : null
     const renderedButtonsNode = normalizeOverlayNode(
-      props.renderFloatingButtons?.(floatingButtonsContext),
-    );
-    const componentButtons = normalizeOverlayNode(componentButtonsNode);
-    const staticButtons = normalizeOverlayNode(props.floatingButtons);
-    const contentParts = [
-      renderedButtonsNode,
-      componentButtons,
-      staticButtons,
-    ].filter(Boolean);
+      props.renderFloatingButtons?.(floatingButtonsContext)
+    )
+    const componentButtons = normalizeOverlayNode(componentButtonsNode)
+    const staticButtons = normalizeOverlayNode(props.floatingButtons)
+    const contentParts = [renderedButtonsNode, componentButtons, staticButtons].filter(Boolean)
     if (contentParts.length === 0) {
-      return null;
+      return null
     }
     const content =
       contentParts.length === 1 ? (
@@ -992,35 +891,31 @@ export function MapboxNavigationView(
             <Fragment key={`floating-buttons-part-${index}`}>{node}</Fragment>
           ))}
         </View>
-      );
+      )
 
     const nativeBottomUiVisible =
       !useOverlayBottomSheet &&
-      (Platform.OS === "android"
+      (Platform.OS === 'android'
         ? nativeProps.showsWayNameLabel !== false
         : nativeProps.showsWayNameLabel !== false ||
           nativeProps.showsTripProgress !== false ||
-          nativeProps.showsActionButtons !== false);
-    const defaultBottomInset = nativeBottomUiVisible
-      ? Platform.OS === "ios"
-        ? 136
-        : 104
-      : 24;
+          nativeProps.showsActionButtons !== false)
+    const defaultBottomInset = nativeBottomUiVisible ? (Platform.OS === 'ios' ? 136 : 104) : 24
     const floatingButtonsBottomInset = useOverlayBottomSheet
-      ? sheetState === "expanded"
+      ? sheetState === 'expanded'
         ? expandedHeight + 16
-        : sheetState === "collapsed"
+        : sheetState === 'collapsed'
           ? Math.max(defaultBottomInset, collapsedHeight - collapsedBottomOffset + 16)
           : defaultBottomInset
-      : defaultBottomInset;
+      : defaultBottomInset
     const floatingButtonsAnchorStyle = {
       bottom: floatingButtonsBottomInset,
-    };
+    }
 
     return (
-      <View pointerEvents="box-none" style={styles.floatingButtonsRoot}>
+      <View pointerEvents='box-none' style={styles.floatingButtonsRoot}>
         <View
-          pointerEvents="box-none"
+          pointerEvents='box-none'
           style={[
             styles.floatingButtonsContainer,
             floatingButtonsAnchorStyle,
@@ -1030,197 +925,179 @@ export function MapboxNavigationView(
           {content}
         </View>
       </View>
-    );
-  };
+    )
+  }
 
   const renderOverlaySheet = () => {
     if (!useOverlayBottomSheet) {
-      return null;
+      return null
     }
 
     const runBuiltInQuickAction = async (actionId: string) => {
       switch (actionId) {
-        case "overview":
-          setOverlayCameraMode("overview");
-          emitOverlayAction(actionId, "builtin");
-          break;
-        case "recenter":
-          setOverlayCameraMode("following");
-          emitOverlayAction(actionId, "builtin");
-          break;
-        case "mute":
-          await setMuted(true);
-          setOverlayMuted(true);
-          emitOverlayAction(actionId, "builtin");
-          break;
-        case "unmute":
-          await setMuted(false);
-          setOverlayMuted(false);
-          emitOverlayAction(actionId, "builtin");
-          break;
-        case "toggleMute": {
-          const nextMuted = !overlayMuted;
-          await setMuted(nextMuted);
-          setOverlayMuted(nextMuted);
-          emitOverlayAction(actionId, "builtin");
-          break;
+        case 'overview':
+          setOverlayCameraMode('overview')
+          emitOverlayAction(actionId, 'builtin')
+          break
+        case 'recenter':
+          setOverlayCameraMode('following')
+          emitOverlayAction(actionId, 'builtin')
+          break
+        case 'mute':
+          await setMuted(true)
+          setOverlayMuted(true)
+          emitOverlayAction(actionId, 'builtin')
+          break
+        case 'unmute':
+          await setMuted(false)
+          setOverlayMuted(false)
+          emitOverlayAction(actionId, 'builtin')
+          break
+        case 'toggleMute': {
+          const nextMuted = !overlayMuted
+          await setMuted(nextMuted)
+          setOverlayMuted(nextMuted)
+          emitOverlayAction(actionId, 'builtin')
+          break
         }
-        case "stop":
-          await stopNavigation();
-          emitOverlayAction(actionId, "builtin");
-          break;
+        case 'stop':
+          await stopNavigation()
+          emitOverlayAction(actionId, 'builtin')
+          break
         default:
-          break;
+          break
       }
-    };
+    }
 
     const context: BottomSheetRenderContext = {
       state: sheetState,
-      hidden: sheetState === "hidden",
-      expanded: sheetState === "expanded",
+      hidden: sheetState === 'hidden',
+      expanded: sheetState === 'expanded',
       ...floatingButtonsContext,
-    };
+    }
 
-    const BottomSheetComponent = props.bottomSheetComponent;
-    const componentSheet = BottomSheetComponent ? (
-      <BottomSheetComponent {...context} />
-    ) : null;
-    const customSheet = normalizeOverlayNode(
-      props.renderBottomSheet?.(context) ?? componentSheet,
-    );
-    const staticSheet = normalizeOverlayNode(props.bottomSheetContent);
+    const BottomSheetComponent = props.bottomSheetComponent
+    const componentSheet = BottomSheetComponent ? <BottomSheetComponent {...context} /> : null
+    const customSheet = normalizeOverlayNode(props.renderBottomSheet?.(context) ?? componentSheet)
+    const staticSheet = normalizeOverlayNode(props.bottomSheetContent)
     const builtInQuickActions: {
-      id: string;
-      actionId: string;
-      label: string;
-      variant: "primary" | "secondary" | "ghost";
-    }[] = [];
-    (bottomSheet?.builtInQuickActions ?? []).forEach((actionId) => {
-      if (actionId === "overview") {
+      id: string
+      actionId: string
+      label: string
+      variant: 'primary' | 'secondary' | 'ghost'
+    }[] = []
+    ;(bottomSheet?.builtInQuickActions ?? []).forEach((actionId) => {
+      if (actionId === 'overview') {
         builtInQuickActions.push({
-          id: "__builtin_overview",
+          id: '__builtin_overview',
           actionId,
-          label: "Overview",
-          variant: "secondary",
-        });
-      } else if (actionId === "recenter") {
+          label: 'Overview',
+          variant: 'secondary',
+        })
+      } else if (actionId === 'recenter') {
         builtInQuickActions.push({
-          id: "__builtin_recenter",
+          id: '__builtin_recenter',
           actionId,
-          label: "Recenter",
-          variant: "secondary",
-        });
-      } else if (actionId === "mute") {
+          label: 'Recenter',
+          variant: 'secondary',
+        })
+      } else if (actionId === 'mute') {
         builtInQuickActions.push({
-          id: "__builtin_mute",
+          id: '__builtin_mute',
           actionId,
-          label: "Mute",
-          variant: "ghost",
-        });
-      } else if (actionId === "unmute") {
+          label: 'Mute',
+          variant: 'ghost',
+        })
+      } else if (actionId === 'unmute') {
         builtInQuickActions.push({
-          id: "__builtin_unmute",
+          id: '__builtin_unmute',
           actionId,
-          label: "Unmute",
-          variant: "ghost",
-        });
-      } else if (actionId === "toggleMute") {
+          label: 'Unmute',
+          variant: 'ghost',
+        })
+      } else if (actionId === 'toggleMute') {
         builtInQuickActions.push({
-          id: "__builtin_toggle_mute",
+          id: '__builtin_toggle_mute',
           actionId,
-          label: overlayMuted ? "Unmute" : "Mute",
-          variant: "ghost",
-        });
-      } else if (actionId === "stop") {
+          label: overlayMuted ? 'Unmute' : 'Mute',
+          variant: 'ghost',
+        })
+      } else if (actionId === 'stop') {
         builtInQuickActions.push({
-          id: "__builtin_stop",
+          id: '__builtin_stop',
           actionId,
-          label: "Stop",
-          variant: "primary",
-        });
+          label: 'Stop',
+          variant: 'primary',
+        })
       }
-    });
+    })
     const allQuickActions: {
-      id: string;
-      actionId: string;
-      label: string;
-      variant: "primary" | "secondary" | "ghost";
-    }[] = [...builtInQuickActions];
-    const etaText = formatEta(overlayProgress?.durationRemaining);
+      id: string
+      actionId: string
+      label: string
+      variant: 'primary' | 'secondary' | 'ghost'
+    }[] = [...builtInQuickActions]
+    const etaText = formatEta(overlayProgress?.durationRemaining)
     const durationText =
       overlayProgress?.durationRemaining != null
         ? formatDuration(overlayProgress.durationRemaining)
-        : undefined;
-    const showCurrentStreet = bottomSheet?.showCurrentStreet !== false;
-    const showRemainingDistance = bottomSheet?.showRemainingDistance !== false;
-    const showRemainingDuration = bottomSheet?.showRemainingDuration !== false;
-    const showETA = bottomSheet?.showETA !== false;
-    const showCompletionPercent = bottomSheet?.showCompletionPercent !== false;
-    const tripPrimaryParts: string[] = [];
+        : undefined
+    const showCurrentStreet = bottomSheet?.showCurrentStreet !== false
+    const showRemainingDistance = bottomSheet?.showRemainingDistance !== false
+    const showRemainingDuration = bottomSheet?.showRemainingDuration !== false
+    const showETA = bottomSheet?.showETA !== false
+    const showCompletionPercent = bottomSheet?.showCompletionPercent !== false
+    const tripPrimaryParts: string[] = []
     if (overlayProgress && showRemainingDistance) {
-      tripPrimaryParts.push(
-        `${Math.round(overlayProgress.distanceRemaining)} m`,
-      );
+      tripPrimaryParts.push(`${Math.round(overlayProgress.distanceRemaining)} m`)
     }
     if (overlayProgress && showRemainingDuration && durationText) {
-      tripPrimaryParts.push(durationText);
+      tripPrimaryParts.push(durationText)
     }
     if (overlayProgress && showETA && etaText) {
-      tripPrimaryParts.push(etaText);
+      tripPrimaryParts.push(etaText)
     }
-    const tripSecondaryParts: string[] = [];
+    const tripSecondaryParts: string[] = []
     if (showCurrentStreet && overlayBanner?.secondaryText) {
-      tripSecondaryParts.push(overlayBanner.secondaryText);
+      tripSecondaryParts.push(overlayBanner.secondaryText)
     }
     if (overlayProgress && showCompletionPercent) {
       tripSecondaryParts.push(
-        `${Math.round((overlayProgress.fractionTraveled || 0) * 100)}% completed`,
-      );
+        `${Math.round((overlayProgress.fractionTraveled || 0) * 100)}% completed`
+      )
     }
     const resolvedColorMode =
       bottomSheet?.colorMode ??
-      (props.uiTheme === "dark" || props.uiTheme === "night"
-        ? "dark"
-        : "light");
-    const isDark = resolvedColorMode === "dark";
-    const sheetBackgroundColor = isDark ? "#202020" : "#ffffff";
-    const sheetCornerRadius = 16;
-    const handleColor = isDark ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.3)";
-    const primaryTextColor = isDark ? "#ffffff" : "#0f172a";
-    const secondaryTextColor = isDark
-      ? "rgba(255,255,255,0.8)"
-      : "rgba(15,23,42,0.8)";
-    const labelTextColor = isDark
-      ? "rgba(255,255,255,0.72)"
-      : "rgba(15,23,42,0.65)";
-    const quickActionBorderColor = isDark
-      ? "rgba(255,255,255,0.35)"
-      : "rgba(15,23,42,0.25)";
-    const quickPrimaryBackground = "#2563eb";
-    const quickSecondaryBackground = isDark ? "#1d4ed8" : "#1e40af";
-    const quickGhostText = isDark ? "rgba(255,255,255,0.92)" : "#0f172a";
-    const quickPrimaryText = "#ffffff";
-    const quickSecondaryText = "#ffffff";
-    const defaultCardColor = isDark
-      ? "rgba(255,255,255,0.08)"
-      : "rgba(15,23,42,0.08)";
+      (props.uiTheme === 'dark' || props.uiTheme === 'night' ? 'dark' : 'light')
+    const isDark = resolvedColorMode === 'dark'
+    const sheetBackgroundColor = isDark ? '#202020' : '#ffffff'
+    const sheetCornerRadius = 16
+    const handleColor = isDark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.3)'
+    const primaryTextColor = isDark ? '#ffffff' : '#0f172a'
+    const secondaryTextColor = isDark ? 'rgba(255,255,255,0.8)' : 'rgba(15,23,42,0.8)'
+    const labelTextColor = isDark ? 'rgba(255,255,255,0.72)' : 'rgba(15,23,42,0.65)'
+    const quickActionBorderColor = isDark ? 'rgba(255,255,255,0.35)' : 'rgba(15,23,42,0.25)'
+    const quickPrimaryBackground = '#2563eb'
+    const quickSecondaryBackground = isDark ? '#1d4ed8' : '#1e40af'
+    const quickGhostText = isDark ? 'rgba(255,255,255,0.92)' : '#0f172a'
+    const quickPrimaryText = '#ffffff'
+    const quickSecondaryText = '#ffffff'
+    const defaultCardColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.08)'
     const defaultSheet = (
       <View style={styles.defaultSheet}>
         {nativeProps.showsManeuverView !== false ? (
-          <View
-            style={[styles.defaultCard, { backgroundColor: defaultCardColor }]}
-          >
+          <View style={[styles.defaultCard, { backgroundColor: defaultCardColor }]}>
             <Text
               style={[
                 styles.defaultLabel,
                 {
                   color: labelTextColor,
                   fontSize: 11,
-                  fontWeight: "500",
+                  fontWeight: '500',
                 },
               ]}
             >
-              {bottomSheet?.defaultManeuverTitle ?? "Maneuver"}
+              {bottomSheet?.defaultManeuverTitle ?? 'Maneuver'}
             </Text>
             <Text
               style={[
@@ -1228,13 +1105,12 @@ export function MapboxNavigationView(
                 {
                   color: primaryTextColor,
                   fontSize: 14,
-                  fontWeight: "700",
+                  fontWeight: '700',
                 },
               ]}
               numberOfLines={2}
             >
-              {overlayBanner?.primaryText ??
-                "Waiting for route instructions..."}
+              {overlayBanner?.primaryText ?? 'Waiting for route instructions...'}
             </Text>
             {overlayBanner?.secondaryText ? (
               <Text
@@ -1243,7 +1119,7 @@ export function MapboxNavigationView(
                   {
                     color: secondaryTextColor,
                     fontSize: 12,
-                    fontWeight: "500",
+                    fontWeight: '500',
                   },
                 ]}
                 numberOfLines={1}
@@ -1254,20 +1130,18 @@ export function MapboxNavigationView(
           </View>
         ) : null}
         {nativeProps.showsTripProgress !== false ? (
-          <View
-            style={[styles.defaultCard, { backgroundColor: defaultCardColor }]}
-          >
+          <View style={[styles.defaultCard, { backgroundColor: defaultCardColor }]}>
             <Text
               style={[
                 styles.defaultLabel,
                 {
                   color: labelTextColor,
                   fontSize: 11,
-                  fontWeight: "500",
+                  fontWeight: '500',
                 },
               ]}
             >
-              {bottomSheet?.defaultTripProgressTitle ?? "Trip Progress"}
+              {bottomSheet?.defaultTripProgressTitle ?? 'Trip Progress'}
             </Text>
             <Text
               style={[
@@ -1275,15 +1149,15 @@ export function MapboxNavigationView(
                 {
                   color: primaryTextColor,
                   fontSize: 14,
-                  fontWeight: "700",
+                  fontWeight: '700',
                 },
               ]}
             >
               {overlayProgress
                 ? tripPrimaryParts.length > 0
-                  ? tripPrimaryParts.join(" • ")
-                  : "Progress available"
-                : "Waiting for progress..."}
+                  ? tripPrimaryParts.join(' • ')
+                  : 'Progress available'
+                : 'Waiting for progress...'}
             </Text>
             <Text
               style={[
@@ -1291,17 +1165,17 @@ export function MapboxNavigationView(
                 {
                   color: secondaryTextColor,
                   fontSize: 12,
-                  fontWeight: "500",
+                  fontWeight: '500',
                 },
               ]}
             >
               {overlayProgress
                 ? tripSecondaryParts.length > 0
-                  ? tripSecondaryParts.join(" • ")
-                  : "On route"
+                  ? tripSecondaryParts.join(' • ')
+                  : 'On route'
                 : overlayLocation
                   ? `${overlayLocation.latitude.toFixed(5)}, ${overlayLocation.longitude.toFixed(5)}`
-                  : "Location not available"}
+                  : 'Location not available'}
             </Text>
           </View>
         ) : null}
@@ -1311,12 +1185,12 @@ export function MapboxNavigationView(
               <Pressable
                 key={action?.id}
                 onPress={() => {
-                  if (action?.id.startsWith("__builtin_")) {
+                  if (action?.id.startsWith('__builtin_')) {
                     runBuiltInQuickAction(action?.actionId).catch(() => {
-                      emitOverlayAction(`error:${action?.actionId}`, "builtin");
-                    });
+                      emitOverlayAction(`error:${action?.actionId}`, 'builtin')
+                    })
                   } else {
-                    emitOverlayAction(action?.actionId, "custom");
+                    emitOverlayAction(action?.actionId, 'custom')
                   }
                 }}
                 style={[
@@ -1328,13 +1202,13 @@ export function MapboxNavigationView(
                     minHeight: 34,
                     backgroundColor: quickPrimaryBackground,
                   },
-                  action?.variant === "secondary" && [
+                  action?.variant === 'secondary' && [
                     styles.quickActionButtonSecondary,
                     { backgroundColor: quickSecondaryBackground },
                   ],
-                  action?.variant === "ghost" && [
+                  action?.variant === 'ghost' && [
                     styles.quickActionButtonGhost,
-                    { backgroundColor: "transparent" },
+                    { backgroundColor: 'transparent' },
                   ],
                 ]}
               >
@@ -1343,13 +1217,13 @@ export function MapboxNavigationView(
                     styles.quickActionLabel,
                     {
                       fontSize: 12,
-                      fontWeight: "700",
+                      fontWeight: '700',
                       color: quickPrimaryText,
                     },
-                    action?.variant === "secondary" && {
+                    action?.variant === 'secondary' && {
                       color: quickSecondaryText,
                     },
-                    action?.variant === "ghost" && [
+                    action?.variant === 'ghost' && [
                       styles.quickActionLabelGhost,
                       { color: quickGhostText },
                     ],
@@ -1363,35 +1237,31 @@ export function MapboxNavigationView(
           </View>
         ) : null}
       </View>
-    );
+    )
     const content =
       customSheet ??
       staticSheet ??
-      (bottomSheet?.showDefaultContent === false ? null : defaultSheet);
+      (bottomSheet?.showDefaultContent === false ? null : defaultSheet)
     const currentHeight =
-      sheetState === "hidden"
-        ? 0
-        : sheetState === "collapsed"
-          ? collapsedHeight
-          : expandedHeight;
-    const canToggle = bottomSheet?.enableTapToToggle !== false;
-    const showHandle = bottomSheet?.showHandle !== false;
+      sheetState === 'hidden' ? 0 : sheetState === 'collapsed' ? collapsedHeight : expandedHeight
+    const canToggle = bottomSheet?.enableTapToToggle !== false
+    const showHandle = bottomSheet?.showHandle !== false
 
-    const contentHorizontalPadding = 14;
-    const contentBottomPadding = 14;
-    const contentTopSpacing = 0;
+    const contentHorizontalPadding = 14
+    const contentBottomPadding = 14
+    const contentTopSpacing = 0
 
     const iosHiddenTouchHeight = Math.max(
       40,
-      Math.min(bottomSheet?.revealGestureHotzoneHeight ?? 120, 220),
-    );
-    const iosHiddenHotzoneBottom = 36;
+      Math.min(bottomSheet?.revealGestureHotzoneHeight ?? 120, 220)
+    )
+    const iosHiddenHotzoneBottom = 36
 
     const backdropPress = () => {
-      hideOverlayBottomSheet();
-    };
+      hideOverlayBottomSheet()
+    }
 
-    const backdropVisible = sheetState === "expanded";
+    const backdropVisible = sheetState === 'expanded'
     const hiddenGrabberResponder = PanResponder.create({
       onStartShouldSetPanResponder: () => false,
       onStartShouldSetPanResponderCapture: () => false,
@@ -1402,30 +1272,30 @@ export function MapboxNavigationView(
       onPanResponderTerminationRequest: () => false,
       onPanResponderRelease: (_evt, gesture) => {
         if (gesture.dy < -8 || gesture.vy < -0.3) {
-          expandOverlayBottomSheet();
+          expandOverlayBottomSheet()
         }
       },
-    });
+    })
     const sheetPanResponder = PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_evt, gesture) =>
         Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 4,
       onPanResponderRelease: (_evt, gesture) => {
         if (gesture.dy < -10 || gesture.vy < -0.35) {
-          expandOverlayBottomSheet();
-          return;
+          expandOverlayBottomSheet()
+          return
         }
         if (gesture.dy > 10 || gesture.vy > 0.35) {
-          collapseOverlayBottomSheet();
+          collapseOverlayBottomSheet()
         }
       },
-    });
+    })
 
     return (
-      <View pointerEvents="box-none" style={styles.overlayRoot}>
-        {iosHiddenMode && sheetState === "hidden" ? (
+      <View pointerEvents='box-none' style={styles.overlayRoot}>
+        {iosHiddenMode && sheetState === 'hidden' ? (
           <View
-            pointerEvents="auto"
+            pointerEvents='auto'
             style={[
               styles.iosHiddenHotzone,
               { height: iosHiddenTouchHeight, bottom: iosHiddenHotzoneBottom },
@@ -1433,15 +1303,15 @@ export function MapboxNavigationView(
             {...hiddenGrabberResponder.panHandlers}
           />
         ) : null}
-        {sheetState === "hidden" ? (
-          <View pointerEvents="box-none" style={styles.hiddenGrabberWrap}>
+        {sheetState === 'hidden' ? (
+          <View pointerEvents='box-none' style={styles.hiddenGrabberWrap}>
             <View
-              pointerEvents="auto"
+              pointerEvents='auto'
               style={styles.hiddenGrabberTouchArea}
               {...hiddenGrabberResponder.panHandlers}
             >
               <Pressable
-                accessibilityRole="button"
+                accessibilityRole='button'
                 onPress={expandOverlayBottomSheet}
                 style={[styles.hiddenGrabber, { backgroundColor: handleColor }]}
               />
@@ -1457,9 +1327,9 @@ export function MapboxNavigationView(
             {
               height: currentHeight,
               bottom:
-                sheetState === "collapsed"
+                sheetState === 'collapsed'
                   ? -collapsedBottomOffset
-                  : sheetState === "hidden"
+                  : sheetState === 'hidden'
                     ? -(collapsedHeight + 80)
                     : 0,
               backgroundColor: sheetBackgroundColor,
@@ -1468,11 +1338,11 @@ export function MapboxNavigationView(
             },
           ]}
           {...sheetPanResponder.panHandlers}
-          pointerEvents="auto"
+          pointerEvents='auto'
         >
           {showHandle ? (
             <Pressable
-              accessibilityRole="button"
+              accessibilityRole='button'
               onPress={canToggle ? context.toggle : undefined}
               style={[styles.sheetHandle, { backgroundColor: handleColor }]}
             />
@@ -1491,8 +1361,8 @@ export function MapboxNavigationView(
           </View>
         </View>
       </View>
-    );
-  };
+    )
+  }
 
   if (
     !props.children &&
@@ -1502,17 +1372,14 @@ export function MapboxNavigationView(
     !props.floatingButtonsComponent &&
     !useEndOfRouteFeedback
   ) {
-    return <MapboxNavigationNativeView {...nativePropsWithOverlay} />;
+    return <MapboxNavigationNativeView {...nativePropsWithOverlay} />
   }
 
   return (
     <View style={props.style}>
-      <MapboxNavigationNativeView
-        {...nativePropsWithOverlay}
-        style={StyleSheet.absoluteFill}
-      />
+      <MapboxNavigationNativeView {...nativePropsWithOverlay} style={StyleSheet.absoluteFill} />
       {props.children ? (
-        <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
+        <View pointerEvents='box-none' style={StyleSheet.absoluteFill}>
           {props.children}
         </View>
       ) : null}
@@ -1520,7 +1387,7 @@ export function MapboxNavigationView(
       {renderOverlaySheet()}
       {renderEndOfRouteFeedback()}
     </View>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -1528,24 +1395,24 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
   },
   floatingButtonsContainer: {
-    position: "absolute",
+    position: 'absolute',
     bottom: 24,
     right: 12,
-    maxWidth: "32%",
-    alignItems: "flex-end",
+    maxWidth: '32%',
+    alignItems: 'flex-end',
   },
   defaultFloatingButtonsStack: {
     gap: 10,
-    alignItems: "flex-end",
+    alignItems: 'flex-end',
   },
   defaultFloatingButton: {
     width: 56,
     height: 56,
     borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(15,23,42,0.96)",
-    shadowColor: "#020617",
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(15,23,42,0.96)',
+    shadowColor: '#020617',
     shadowOpacity: 0.26,
     shadowRadius: 10,
     shadowOffset: {
@@ -1561,123 +1428,123 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
   defaultFloatingButtonLabel: {
-    color: "#f8fafc",
+    color: '#f8fafc',
     fontSize: 12,
-    fontWeight: "800",
-    textAlign: "center",
+    fontWeight: '800',
+    textAlign: 'center',
   },
   endOfRouteFeedbackRoot: {
     ...StyleSheet.absoluteFillObject,
-    justifyContent: "center",
+    justifyContent: 'center',
     paddingHorizontal: 20,
     zIndex: 3,
   },
   endOfRouteFeedbackBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(2,6,23,0.62)",
+    backgroundColor: 'rgba(2,6,23,0.62)',
   },
   endOfRouteFeedbackWrap: {
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   endOfRouteFeedbackCard: {
-    width: "100%",
+    width: '100%',
     maxWidth: 360,
     borderRadius: 22,
-    backgroundColor: "rgba(15,23,42,0.96)",
+    backgroundColor: 'rgba(15,23,42,0.96)',
     borderWidth: 1,
-    borderColor: "rgba(148,163,184,0.2)",
+    borderColor: 'rgba(148,163,184,0.2)',
     paddingHorizontal: 18,
     paddingVertical: 18,
     gap: 14,
   },
   endOfRouteFeedbackTitle: {
-    color: "#f8fafc",
+    color: '#f8fafc',
     fontSize: 18,
-    fontWeight: "800",
-    textAlign: "center",
+    fontWeight: '800',
+    textAlign: 'center',
   },
   endOfRouteFeedbackSubtitle: {
-    color: "rgba(226,232,240,0.84)",
+    color: 'rgba(226,232,240,0.84)',
     fontSize: 13,
     lineHeight: 19,
-    textAlign: "center",
+    textAlign: 'center',
   },
   endOfRouteFeedbackRatingRow: {
-    flexDirection: "row",
+    flexDirection: 'row',
     gap: 8,
-    justifyContent: "center",
+    justifyContent: 'center',
   },
   endOfRouteFeedbackRatingButton: {
     minWidth: 44,
     borderRadius: 14,
-    backgroundColor: "#1d4ed8",
+    backgroundColor: '#1d4ed8',
     paddingHorizontal: 10,
     paddingVertical: 12,
-    alignItems: "center",
+    alignItems: 'center',
   },
   endOfRouteFeedbackRatingLabel: {
-    color: "#ffffff",
+    color: '#ffffff',
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: '800',
   },
   endOfRouteFeedbackDismissButton: {
-    alignSelf: "center",
+    alignSelf: 'center',
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
   endOfRouteFeedbackDismissLabel: {
-    color: "rgba(191,219,254,0.95)",
+    color: 'rgba(191,219,254,0.95)',
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: '700',
   },
   overlayRoot: {
     ...StyleSheet.absoluteFillObject,
-    justifyContent: "flex-end",
+    justifyContent: 'flex-end',
   },
   overlayBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.35)",
+    backgroundColor: 'rgba(0,0,0,0.35)',
   },
   iosHiddenHotzone: {
-    position: "absolute",
+    position: 'absolute',
     left: 0,
     right: 0,
     zIndex: 1,
-    backgroundColor: "transparent",
+    backgroundColor: 'transparent',
   },
   hiddenGrabberWrap: {
-    position: "absolute",
+    position: 'absolute',
     left: 0,
     right: 0,
     bottom: 10,
-    alignItems: "center",
+    alignItems: 'center',
     zIndex: 2,
   },
   hiddenGrabberTouchArea: {
     width: 160,
     height: 28,
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   hiddenGrabber: {
     width: 84,
     height: 8,
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.35)",
+    backgroundColor: 'rgba(255,255,255,0.35)',
   },
   sheetContainer: {
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
-    backgroundColor: "rgba(12, 18, 32, 0.94)",
-    overflow: "hidden",
+    backgroundColor: 'rgba(12, 18, 32, 0.94)',
+    overflow: 'hidden',
   },
   sheetHandle: {
-    alignSelf: "center",
+    alignSelf: 'center',
     width: 42,
     height: 5,
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.35)",
+    backgroundColor: 'rgba(255,255,255,0.35)',
     marginTop: 10,
     marginBottom: 8,
   },
@@ -1690,56 +1557,56 @@ const styles = StyleSheet.create({
   },
   defaultCard: {
     borderRadius: 10,
-    backgroundColor: "rgba(255,255,255,0.08)",
+    backgroundColor: 'rgba(255,255,255,0.08)',
     paddingHorizontal: 10,
     paddingVertical: 8,
     gap: 2,
   },
   defaultLabel: {
-    color: "rgba(255,255,255,0.72)",
+    color: 'rgba(255,255,255,0.72)',
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: '600',
   },
   defaultPrimary: {
-    color: "#fff",
+    color: '#fff',
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: '700',
   },
   defaultSecondary: {
-    color: "rgba(255,255,255,0.8)",
+    color: 'rgba(255,255,255,0.8)',
     fontSize: 12,
-    fontWeight: "500",
+    fontWeight: '500',
   },
   quickActionsRow: {
-    flexDirection: "row",
+    flexDirection: 'row',
     gap: 8,
-    flexWrap: "wrap",
+    flexWrap: 'wrap',
   },
   quickActionButton: {
-    backgroundColor: "#2563eb",
+    backgroundColor: '#2563eb',
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
   quickActionButtonSecondary: {
-    backgroundColor: "#1d4ed8",
+    backgroundColor: '#1d4ed8',
   },
   quickActionButtonGhost: {
-    backgroundColor: "transparent",
+    backgroundColor: 'transparent',
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.35)",
+    borderColor: 'rgba(255,255,255,0.35)',
   },
   quickActionLabel: {
-    color: "#ffffff",
+    color: '#ffffff',
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: '700',
   },
   quickActionLabelGhost: {
-    color: "rgba(255,255,255,0.92)",
+    color: 'rgba(255,255,255,0.92)',
   },
-});
+})
 
-export * from "./MapboxNavigation.types";
+export * from './MapboxNavigation.types'
 
 export default {
   setMuted,
@@ -1764,4 +1631,4 @@ export default {
   MapboxNavigationFloatingButton,
   MapboxNavigationFloatingButtonsStack,
   MapboxNavigationView,
-};
+}
