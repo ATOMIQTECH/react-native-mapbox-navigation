@@ -6,7 +6,6 @@ module.exports = {
     slug: "example-mapbox",
     version: "1.0.0",
     orientation: "portrait",
-    userInterfaceStyle: "light",
     ios: {
       infoPlist: {
         UIBackgroundModes: ['location', 'remote-notification'],
