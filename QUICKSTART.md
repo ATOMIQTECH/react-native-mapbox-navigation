@@ -1,16 +1,43 @@
 # Quickstart
 
+Use this if you need the shortest path to a working embedded navigation screen.
+
 ## 1. Install
 
 ```bash
 npm install @atomiqlab/react-native-mapbox-navigation
 ```
 
-## 2. Configure Mapbox token
+## 2. Set Mapbox Tokens
 
-Set `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN` and run prebuild so native token resources are generated.
+Required during prebuild:
 
-## 3. Render embedded navigation
+- `EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN` (`pk.` public token)
+- `MAPBOX_DOWNLOADS_TOKEN` (`sk.` secret token with `DOWNLOADS:READ`)
+
+Example:
+
+```bash
+EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN=pk.your_public_token
+MAPBOX_DOWNLOADS_TOKEN=sk.your_secret_token
+```
+
+## 3. Rebuild Native Code
+
+This package uses an Expo config plugin and native SDKs, so you must rebuild after install or config changes.
+
+```bash
+npx expo prebuild
+npx expo run:android
+# or
+npx expo run:ios
+```
+
+## 4. Request Location Permission
+
+Grant foreground location permission before enabling `MapboxNavigationView`.
+
+## 5. Render the View
 
 ```tsx
 import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation";
@@ -18,30 +45,17 @@ import { MapboxNavigationView } from "@atomiqlab/react-native-mapbox-navigation"
 <MapboxNavigationView
   enabled
   style={{ flex: 1 }}
+  startOrigin={{ latitude: 37.7749, longitude: -122.4194 }}
   destination={{ latitude: 37.7847, longitude: -122.4073 }}
   shouldSimulateRoute
 />
 ```
 
-## 4. Optional custom overlay sheet
+## 6. Important Platform Note
 
-```tsx
-<MapboxNavigationView
-  enabled
-  destination={{ latitude: 37.7847, longitude: -122.4073 }}
-  bottomSheet={{
-    enabled: true,
-    mode: "overlay",
-    initialState: "hidden",
-    revealGestureHotzoneHeight: 120,
-    revealGestureRightExclusionWidth: 0,
-  }}
-  renderBottomSheet={({ bannerInstruction, routeProgress }) => (
-    <YourSheet bannerInstruction={bannerInstruction} routeProgress={routeProgress} />
-  )}
-/>
-```
+- Android can fall back to device location when `startOrigin` is omitted
+- iOS currently needs `startOrigin`
 
-## 2.0.0 Note
+## Next
 
-This package is embedded-only. Full-screen APIs were removed.
+- For custom floating buttons, bottom-sheet overlays, and end-of-route feedback, use the canonical docs in [README.md](./README.md)

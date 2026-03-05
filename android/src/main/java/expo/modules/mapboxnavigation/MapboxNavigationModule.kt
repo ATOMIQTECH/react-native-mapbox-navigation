@@ -222,6 +222,10 @@ class MapboxNavigationModule : Module() {
         view.setAndroidActionButtons(value)
       }
 
+      Prop("nativeFloatingButtons") { view: MapboxNavigationView, value: Map<String, Any>? ->
+        view.setNativeFloatingButtons(value)
+      }
+
       Prop("distanceUnit") { view: MapboxNavigationView, value: String ->
         view.setDistanceUnit(value)
       }

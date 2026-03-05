@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
+import type { StyleProp, ViewStyle } from "react-native";
 
 /** Geographic coordinate in WGS84 format. */
 export type Coordinate = {
@@ -102,6 +103,22 @@ export type AndroidActionButtonsOptions = {
   showEndNavigationFeedbackButton?: boolean;
 };
 
+/** Built-in native floating/map controls visibility. */
+export type NativeFloatingButtonsOptions = {
+  /** iOS: overview button. */
+  showOverviewButton?: boolean;
+  /** iOS + Android: mute/audio-guidance button. */
+  showAudioGuidanceButton?: boolean;
+  /** iOS: feedback/report button. */
+  showFeedbackButton?: boolean;
+  /** Android: camera-mode button. */
+  showCameraModeButton?: boolean;
+  /** Android: recenter button. */
+  showRecenterButton?: boolean;
+  /** Android: compass button. */
+  showCompassButton?: boolean;
+};
+
 /** Runtime settings/state returned by `getNavigationSettings()`. */
 export type NavigationSettings = {
   isNavigating: boolean;
@@ -198,6 +215,64 @@ export type BottomSheetActionEvent = {
   actionId: "primary" | "secondary" | "cancel" | string;
 };
 
+/** Overlay sheet visibility state used by the JS renderer layer. */
+export type OverlayBottomSheetState = "hidden" | "collapsed" | "expanded";
+
+/** Shared overlay controls exposed to JS render callbacks. */
+export type OverlaySheetController = {
+  show: (state?: "collapsed" | "expanded") => void;
+  hide: () => void;
+  expand: () => void;
+  collapse: () => void;
+  toggle: () => void;
+};
+
+/** Context exposed to floating-button renderers. */
+export type FloatingButtonsRenderContext = OverlaySheetController & {
+  bannerInstruction?: BannerInstruction;
+  routeProgress?: RouteProgress;
+  location?: LocationUpdate;
+  stopNavigation: () => Promise<boolean>;
+  emitAction: (actionId: string) => void;
+};
+
+/** Context exposed to custom bottom-sheet renderers. */
+export type BottomSheetRenderContext = FloatingButtonsRenderContext & {
+  state: OverlayBottomSheetState;
+  hidden: boolean;
+  expanded: boolean;
+};
+
+/** End-of-route feedback submission payload from the package modal. */
+export type EndOfRouteFeedbackEvent = {
+  rating: number;
+  arrival?: ArrivalEvent;
+};
+
+/** Context exposed to end-of-route feedback renderers. */
+export type EndOfRouteFeedbackRenderContext = {
+  arrival?: ArrivalEvent;
+  dismiss: () => void;
+  submitRating: (rating: number) => void;
+  stopNavigation: () => Promise<boolean>;
+};
+
+/** Default-styled floating button props matching the package overlay controls. */
+export type MapboxNavigationFloatingButtonProps = {
+  children?: ReactNode;
+  onPress?: () => void;
+  disabled?: boolean;
+  accessibilityLabel?: string;
+  style?: StyleProp<ViewStyle>;
+  testID?: string;
+};
+
+/** Default stack wrapper for floating buttons aligned to the native control rail. */
+export type MapboxNavigationFloatingButtonsStackProps = {
+  children?: ReactNode;
+  style?: StyleProp<ViewStyle>;
+};
+
 /** Event subscription handle. */
 export type Subscription = {
   remove: () => void;
@@ -241,32 +316,39 @@ export interface MapboxNavigationViewProps {
   showsManeuverView?: boolean;
   showsActionButtons?: boolean;
   showsReportFeedback?: boolean;
+  /** Opt in to the package-managed end-of-route rating modal in embedded mode. */
   showsEndOfRouteFeedback?: boolean;
   showsContinuousAlternatives?: boolean;
   usesNightStyleWhileInTunnel?: boolean;
   routeLineTracksTraversal?: boolean;
   annotatesIntersectionsAlongRoute?: boolean;
   androidActionButtons?: AndroidActionButtonsOptions;
+  /** Visibility for built-in native floating/map buttons. */
+  nativeFloatingButtons?: NativeFloatingButtonsOptions;
   /** Bottom sheet controls (expanded into section visibility toggles). */
   bottomSheet?: BottomSheetOptions;
   /** Static custom content rendered inside overlay bottom sheet. */
   bottomSheetContent?: ReactNode;
   /** Advanced custom sheet renderer. */
-  renderBottomSheet?: (context: {
-    state: "hidden" | "collapsed" | "expanded";
-    hidden: boolean;
-    expanded: boolean;
-    show: (state?: "collapsed" | "expanded") => void;
-    hide: () => void;
-    expand: () => void;
-    collapse: () => void;
-    toggle: () => void;
-    bannerInstruction?: BannerInstruction;
-    routeProgress?: RouteProgress;
-    location?: LocationUpdate;
-    stopNavigation: () => Promise<boolean>;
-    emitAction: (actionId: string) => void;
-  }) => ReactNode;
+  renderBottomSheet?: (context: BottomSheetRenderContext) => ReactNode;
+  /** React component type rendered inside the overlay bottom sheet. */
+  bottomSheetComponent?: ComponentType<BottomSheetRenderContext>;
+  /** Static floating action content rendered above the native navigation UI. */
+  floatingButtons?: ReactNode;
+  /** Advanced floating action renderer. */
+  renderFloatingButtons?: (context: FloatingButtonsRenderContext) => ReactNode;
+  /** React component type rendered for floating buttons. */
+  floatingButtonsComponent?: ComponentType<FloatingButtonsRenderContext>;
+  /** Hide custom floating buttons once the destination is reached. Defaults to `true`. */
+  hideFloatingButtonsOnArrival?: boolean;
+  /** Override the default floating button anchor container position. */
+  floatingButtonsContainerStyle?: StyleProp<ViewStyle>;
+  /** Advanced custom renderer for the end-of-route feedback modal. */
+  renderEndOfRouteFeedback?: (
+    context: EndOfRouteFeedbackRenderContext,
+  ) => ReactNode;
+  /** React component type rendered for the end-of-route feedback modal. */
+  endOfRouteFeedbackComponent?: ComponentType<EndOfRouteFeedbackRenderContext>;
   /** Optional children overlayed above native navigation view. */
   children?: ReactNode;
 
@@ -292,6 +374,8 @@ export interface MapboxNavigationViewProps {
   onError?: (error: NavigationError) => void;
   /** Callback for banner instruction updates. */
   onBannerInstruction?: (instruction: BannerInstruction) => void;
+  /** Callback when the package-managed end-of-route rating modal submits a score. */
+  onEndOfRouteFeedbackSubmit?: (event: EndOfRouteFeedbackEvent) => void;
   /** Embedded overlay-only callback for quick/custom sheet actions. */
   onOverlayBottomSheetActionPress?: (event: {
     actionId: string;
