@@ -1,19 +1,18 @@
-const mapboxDownloadsToken = process.env.MAPBOX_DOWNLOADS_TOKEN || "";
+const mapboxDownloadsToken = process.env.MAPBOX_DOWNLOADS_TOKEN || ''
 
 module.exports = {
   expo: {
-    name: "example-mapbox",
-    slug: "example-mapbox",
-    version: "1.0.0",
-    orientation: "portrait",
-    userInterfaceStyle: "light",
+    name: 'example-mapbox',
+    slug: 'example-mapbox',
+    version: '1.0.0',
+    orientation: 'portrait',
     ios: {
       infoPlist: {
         UIBackgroundModes: ['location', 'remote-notification'],
         UIDesignRequiresCompatibility: true,
       },
-      bundleIdentifier: "com.expomapboxnavigationexample",
-      supportsTablet: true
+      bundleIdentifier: 'com.expomapboxnavigationexample',
+      supportsTablet: true,
     },
     android: {
       permissions: [
@@ -24,27 +23,27 @@ module.exports = {
         'android.permission.FOREGROUND_SERVICE_LOCATION',
       ],
       predictiveBackGestureEnabled: false,
-      package: "com.expomapboxnavigationexample"
+      package: 'com.expomapboxnavigationexample',
     },
     plugins: [
       [
-        "expo-build-properties",
+        'expo-build-properties',
         {
           android: {
             extraMavenRepos: [
               {
-                url: "https://api.mapbox.com/downloads/v2/releases/maven",
+                url: 'https://api.mapbox.com/downloads/v2/releases/maven',
                 credentials: {
-                  username: "mapbox",
+                  username: 'mapbox',
                   password: mapboxDownloadsToken,
                 },
-                authentication: "basic",
+                authentication: 'basic',
               },
             ],
           },
         },
       ],
-      "../app.plugin.js",
+      '../app.plugin.js',
     ],
   },
 }
