@@ -385,3 +385,11 @@ These are important review findings from the current codebase and the docs below
 - [docs/USAGE.md](./docs/USAGE.md)
 - [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)
 - [CHANGELOG.md](./CHANGELOG.md)
+
+## Contributors
+
+- 🧑‍💻 **Remy Tresor**  
+  [![GitHub](https://img.shields.io/badge/GitHub-Remy--Tresor250-181717?style=for-the-badge&logo=github)](https://github.com/Remy-Tresor250)
+
+- 🧑‍💻 **Irere Emmanuel**  
+  [![GitHub](https://img.shields.io/badge/GitHub-Irere123-181717?style=for-the-badge&logo=github)](https://github.com/Irere123)
