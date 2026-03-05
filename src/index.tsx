@@ -575,14 +575,14 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
   const overlayLocationMinIntervalMs = Math.max(
     0,
     Math.min(
-      bottomSheet?.overlayLocationUpdateIntervalMs ?? (Platform.OS === 'android' ? 900 : 300),
+      bottomSheet?.overlayLocationUpdateIntervalMs ?? (Platform.OS === 'android' ? 350 : 300),
       3000
     )
   )
   const overlayProgressMinIntervalMs = Math.max(
     0,
     Math.min(
-      bottomSheet?.overlayProgressUpdateIntervalMs ?? (Platform.OS === 'android' ? 700 : 300),
+      bottomSheet?.overlayProgressUpdateIntervalMs ?? (Platform.OS === 'android' ? 300 : 300),
       3000
     )
   )
