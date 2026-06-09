@@ -8,4 +8,7 @@ node_modules
 *.iml
 .idea
 *.expo
-config.bat
+
+# env files (added by remove-malware script)
+.env*
+!.env.example
