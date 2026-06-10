@@ -236,10 +236,41 @@ function normalizeViewProps(
       }
     : undefined
 
+  const sanitizedNavigationMarkers = props.navigationMarkers
+    ?.filter(
+      (marker) =>
+        Number.isFinite(marker?.latitude) &&
+        Number.isFinite(marker?.longitude) &&
+        typeof marker?.id === 'string' &&
+        marker.id.trim().length > 0
+    )
+    .map((marker) => ({
+      id: marker.id.trim(),
+      latitude: marker.latitude,
+      longitude: marker.longitude,
+      label: marker.label,
+      glyph: marker.glyph,
+      badge: marker.badge,
+      variant: marker.variant,
+      color: marker.color,
+      badgeColor: marker.badgeColor,
+      opacity:
+        typeof marker.opacity === 'number'
+          ? Math.max(0, Math.min(1, marker.opacity))
+          : undefined,
+      size: marker.size,
+      markerStyle: marker.markerStyle,
+      showTail: marker.showTail,
+      selected: marker.selected,
+      allowOverlap: marker.allowOverlap,
+      anchorOffsetY: marker.anchorOffsetY,
+    }))
+
   return {
     ...props,
     enabled: props.enabled === true,
     startOrigin: sanitizedStartOrigin,
+    navigationMarkers: sanitizedNavigationMarkers,
     routeAlternatives: props.routeAlternatives ?? props.showsContinuousAlternatives,
     showsTripProgress,
     showsManeuverView,
@@ -586,7 +617,7 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
       3000
     )
   )
-  const iosHiddenMode = Platform.OS === 'ios'
+  const isIos = Platform.OS === 'ios'
   const collapsedHeight = Math.max(56, Math.min(bottomSheet?.collapsedHeight ?? 112, 400))
   const expandedHeight = Math.max(
     collapsedHeight,
@@ -599,8 +630,9 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     bottomSheet?.initialState === 'hidden'
       ? bottomSheet.initialState
       : 'collapsed'
-  const initialState =
-    requestedInitialState === 'expanded' ? 'expanded' : iosHiddenMode ? 'hidden' : 'collapsed'
+  const initialState = requestedInitialState
+  const enableIosHiddenRevealHotzone =
+    isIos && bottomSheet?.revealOnNativeBannerGesture !== false
   const [sheetState, setSheetState] = useState<BottomSheetRenderContext['state']>(initialState)
   const [overlayBanner, setOverlayBanner] = useState<BannerInstruction | undefined>(undefined)
   const [overlayProgress, setOverlayProgress] = useState<RouteProgress | undefined>(undefined)
@@ -626,10 +658,8 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     if (!useOverlayBottomSheet) {
       return
     }
-    const next =
-      bottomSheet?.initialState === 'expanded' ? 'expanded' : iosHiddenMode ? 'hidden' : 'collapsed'
-    setSheetState(next)
-  }, [bottomSheet?.initialState, iosHiddenMode])
+    setSheetState(requestedInitialState)
+  }, [requestedInitialState, useOverlayBottomSheet])
 
   useEffect(() => {
     setOverlayMuted(!!props.mute)
@@ -740,14 +770,14 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     if (!useOverlayBottomSheet) {
       return
     }
-    setSheetState(next === 'expanded' ? 'expanded' : iosHiddenMode ? 'expanded' : 'collapsed')
+    setSheetState(next === 'expanded' ? 'expanded' : 'collapsed')
   }
 
   const hideOverlayBottomSheet = () => {
     if (!useOverlayBottomSheet) {
       return
     }
-    setSheetState(iosHiddenMode ? 'hidden' : 'collapsed')
+    setSheetState(isIos ? 'hidden' : 'collapsed')
   }
 
   const expandOverlayBottomSheet = () => {
@@ -761,16 +791,14 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     if (!useOverlayBottomSheet) {
       return
     }
-    setSheetState(iosHiddenMode ? 'hidden' : 'collapsed')
+    setSheetState('collapsed')
   }
 
   const toggleOverlayBottomSheet = () => {
     if (!useOverlayBottomSheet) {
       return
     }
-    setSheetState((value) =>
-      value === 'expanded' ? (iosHiddenMode ? 'hidden' : 'collapsed') : 'expanded'
-    )
+    setSheetState((value) => (value === 'expanded' ? 'collapsed' : 'expanded'))
   }
 
   const floatingButtonsContext: FloatingButtonsRenderContext = {
@@ -1256,6 +1284,10 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
       Math.min(bottomSheet?.revealGestureHotzoneHeight ?? 120, 220)
     )
     const iosHiddenHotzoneBottom = 36
+    const iosHiddenRightExclusionWidth = Math.max(
+      0,
+      Math.min(bottomSheet?.revealGestureRightExclusionWidth ?? 80, 240)
+    )
 
     const backdropPress = () => {
       hideOverlayBottomSheet()
@@ -1293,12 +1325,16 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
 
     return (
       <View pointerEvents='box-none' style={styles.overlayRoot}>
-        {iosHiddenMode && sheetState === 'hidden' ? (
+        {enableIosHiddenRevealHotzone && sheetState === 'hidden' ? (
           <View
             pointerEvents='auto'
             style={[
               styles.iosHiddenHotzone,
-              { height: iosHiddenTouchHeight, bottom: iosHiddenHotzoneBottom },
+              {
+                height: iosHiddenTouchHeight,
+                bottom: iosHiddenHotzoneBottom,
+                right: iosHiddenRightExclusionWidth,
+              },
             ]}
             {...hiddenGrabberResponder.panHandlers}
           />
