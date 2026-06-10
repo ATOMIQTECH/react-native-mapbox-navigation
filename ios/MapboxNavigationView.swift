@@ -4,6 +4,60 @@ import MapboxDirections
 import MapboxCoreNavigation
 import CoreLocation
 import UIKit
+import MapboxMaps
+import Turf
+
+private struct NavigationMarkerPayload {
+  let id: String
+  let coordinate: CLLocationCoordinate2D
+  let label: String?
+  let glyph: String
+  let badge: String?
+  let variant: String
+  // Customization: these override variant-based defaults when set
+  let customColor: UIColor?
+  let customBadgeColor: UIColor?
+  let customOpacity: CGFloat?
+  let size: String
+  let markerStyle: String   // "pin" | "dot"
+  let showTail: Bool
+  let selected: Bool
+  let allowOverlap: Bool
+  let anchorOffsetY: CGFloat?  // custom Y offset, overrides size-preset
+}
+
+private struct NavigationMarkerMetrics {
+  let bubbleSize: CGFloat
+  let badgeSize: CGFloat
+  let strokeWidth: CGFloat
+  let tailSize: CGFloat
+  let glyphFontSize: CGFloat
+  let badgeFontSize: CGFloat
+  let tailOverlap: CGFloat
+  let badgeInset: CGFloat
+  let markerHeight: CGFloat
+  let markerWidth: CGFloat
+  let offsetY: CGFloat
+}
+
+private enum NavigationMarkerViewTag {
+  static let bubble = 9101
+  static let glyph = 9102
+  static let badge = 9103
+  static let tail = 9104
+}
+
+private extension String {
+  var nilIfEmpty: String? {
+    isEmpty ? nil : self
+  }
+}
+
+private extension Comparable {
+  func clamped(to range: ClosedRange<Self>) -> Self {
+    min(max(self, range.lowerBound), range.upperBound)
+  }
+}
 
 class MapboxNavigationView: ExpoView {
   private static weak var activeInstance: MapboxNavigationView?
@@ -29,6 +83,9 @@ class MapboxNavigationView: ExpoView {
   }
   var waypoints: [[String: Any]]? {
     didSet { startNavigationIfReady() }
+  }
+  var navigationMarkers: [[String: Any]]? {
+    didSet { renderNavigationMarkersIfPossible() }
   }
   var shouldSimulateRoute: Bool = false {
     didSet { startNavigationIfReady() }
@@ -87,6 +144,7 @@ class MapboxNavigationView: ExpoView {
   var language: String = "en"
   
   private var navigationViewController: NavigationViewController?
+  private var navigationMarkerViews = [String: UIView]()
   private var hostViewController: UIViewController?
   private var isRouteCalculationInProgress = false
   private var hasPendingSessionConflict = false
@@ -322,6 +380,7 @@ class MapboxNavigationView: ExpoView {
       viewController.didMove(toParent: parent)
       
       navigationViewController = viewController
+      renderNavigationMarkersIfPossible()
       hostViewController = parent
     } else {
       NavigationSessionRegistry.shared.release(owner: sessionOwner)
@@ -345,6 +404,7 @@ class MapboxNavigationView: ExpoView {
     // Invalidate any in-flight route calculation callback so it can't re-attach navigation after teardown.
     routeRequestToken = UUID()
     isRouteCalculationInProgress = false
+    clearNavigationMarkers()
     navigationViewController?.willMove(toParent: nil)
     navigationViewController?.view.removeFromSuperview()
     navigationViewController?.removeFromParent()
@@ -356,6 +416,338 @@ class MapboxNavigationView: ExpoView {
       MapboxNavigationView.activeInstance = nil
     }
     hasPendingSessionConflict = false
+  }
+
+  private func currentNavigationMapView() -> MapView? {
+    navigationViewController?.navigationMapView?.mapView
+  }
+
+  private func renderNavigationMarkersIfPossible() {
+    guard let mapView = currentNavigationMapView() else { return }
+    guard let annotationManager = mapView.viewAnnotations else { return }
+
+    let markerPayloads = (navigationMarkers ?? []).compactMap(parseNavigationMarker)
+    let nextIds = Set(markerPayloads.map(\.id))
+
+    for (markerId, markerView) in Array(navigationMarkerViews) where !nextIds.contains(markerId) {
+      annotationManager.remove(markerView)
+      navigationMarkerViews.removeValue(forKey: markerId)
+    }
+
+    for marker in markerPayloads {
+      let metrics = resolveNavigationMarkerMetrics(marker.size)
+      let existingView = navigationMarkerViews[marker.id]
+      let markerView = existingView ?? makeNavigationMarkerView(marker, metrics: metrics)
+      bindNavigationMarkerView(markerView, marker: marker, metrics: metrics)
+      let options = makeNavigationMarkerOptions(marker: marker, metrics: metrics)
+
+      if existingView == nil {
+        do {
+          try annotationManager.add(markerView, id: marker.id, options: options)
+          navigationMarkerViews[marker.id] = markerView
+        } catch {
+          NSLog("[react-native-mapbox-navigation] Failed to add marker '%@': %@", marker.id, error.localizedDescription)
+        }
+      } else {
+        do {
+          try annotationManager.update(markerView, options: options)
+        } catch {
+          annotationManager.remove(markerView)
+          do {
+            try annotationManager.add(markerView, id: marker.id, options: options)
+          } catch {
+            NSLog("[react-native-mapbox-navigation] Failed to update marker '%@': %@", marker.id, error.localizedDescription)
+          }
+        }
+      }
+    }
+  }
+
+  private func clearNavigationMarkers() {
+    guard let mapView = currentNavigationMapView(),
+          let annotationManager = mapView.viewAnnotations else {
+      navigationMarkerViews.removeAll()
+      return
+    }
+    for markerView in navigationMarkerViews.values {
+      annotationManager.remove(markerView)
+    }
+    navigationMarkerViews.removeAll()
+  }
+
+  private func parseNavigationMarker(_ value: [String: Any]) -> NavigationMarkerPayload? {
+    guard let rawId = value["id"] as? String else { return nil }
+    let id = rawId.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !id.isEmpty else { return nil }
+
+    guard let latitude = (value["latitude"] as? NSNumber)?.doubleValue,
+          let longitude = (value["longitude"] as? NSNumber)?.doubleValue,
+          latitude.isFinite,
+          longitude.isFinite else { return nil }
+
+    let label = (value["label"] as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .nilIfEmpty
+    let glyph = ((value["glyph"] as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .nilIfEmpty ?? "•")
+      .prefix(2)
+    let badge = (value["badge"] as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .nilIfEmpty?
+      .prefix(3)
+    let variant = normalizeMarkerVariant(value["variant"] as? String)
+    let customColor = parseHexColor(value["color"])
+    let customBadgeColor = parseHexColor(value["badgeColor"])
+    let customOpacity = (value["opacity"] as? NSNumber).map { CGFloat($0.doubleValue).clamped(to: 0...1) }
+    let size = normalizeMarkerSize(value["size"] as? String)
+    let markerStyle = normalizeMarkerStyle(value["markerStyle"] as? String)
+    let showTail = (value["showTail"] as? Bool) ?? (markerStyle == "pin")
+    let selected = (value["selected"] as? Bool) ?? (variant == "primary" || variant == "success")
+    let allowOverlap = (value["allowOverlap"] as? Bool) ?? true
+    let anchorOffsetY = (value["anchorOffsetY"] as? NSNumber).map { CGFloat($0.doubleValue) }
+
+    return NavigationMarkerPayload(
+      id: id,
+      coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude),
+      label: label,
+      glyph: String(glyph),
+      badge: badge.map(String.init),
+      variant: variant,
+      customColor: customColor,
+      customBadgeColor: customBadgeColor,
+      customOpacity: customOpacity,
+      size: size,
+      markerStyle: markerStyle,
+      showTail: showTail,
+      selected: selected,
+      allowOverlap: allowOverlap,
+      anchorOffsetY: anchorOffsetY
+    )
+  }
+
+  private func makeNavigationMarkerOptions(
+    marker: NavigationMarkerPayload,
+    metrics: NavigationMarkerMetrics
+  ) -> ViewAnnotationOptions {
+    let offsetY = marker.anchorOffsetY ?? metrics.offsetY
+    return ViewAnnotationOptions(
+      geometry: Turf.Point(marker.coordinate),
+      width: metrics.markerWidth,
+      height: metrics.markerHeight,
+      associatedFeatureId: nil,
+      allowOverlap: marker.allowOverlap,
+      visible: true,
+      anchor: .bottom,
+      offsetX: 0,
+      offsetY: offsetY,
+      selected: marker.selected
+    )
+  }
+
+  private func makeNavigationMarkerView(
+    _ marker: NavigationMarkerPayload,
+    metrics: NavigationMarkerMetrics
+  ) -> UIView {
+    let markerView = UIView(frame: CGRect(origin: .zero,
+      size: CGSize(width: metrics.markerWidth, height: metrics.markerHeight)))
+    markerView.backgroundColor = .clear
+    markerView.clipsToBounds = false
+    markerView.isUserInteractionEnabled = false
+    markerView.accessibilityLabel = marker.label ?? marker.id
+
+    let bubble = UIView()
+    bubble.tag = NavigationMarkerViewTag.bubble
+    bubble.clipsToBounds = false
+
+    let glyphLabel = UILabel()
+    glyphLabel.tag = NavigationMarkerViewTag.glyph
+    glyphLabel.textAlignment = .center
+    glyphLabel.textColor = .white
+
+    let badgeLabel = UILabel()
+    badgeLabel.tag = NavigationMarkerViewTag.badge
+    badgeLabel.textAlignment = .center
+    badgeLabel.textColor = .white
+
+    let tail = UIView()
+    tail.tag = NavigationMarkerViewTag.tail
+
+    markerView.addSubview(bubble)
+    bubble.addSubview(glyphLabel)
+    bubble.addSubview(badgeLabel)
+    markerView.addSubview(tail)
+
+    bindNavigationMarkerView(markerView, marker: marker, metrics: metrics)
+    return markerView
+  }
+
+  private func bindNavigationMarkerView(
+    _ markerView: UIView,
+    marker: NavigationMarkerPayload,
+    metrics: NavigationMarkerMetrics
+  ) {
+    guard let bubble = markerView.viewWithTag(NavigationMarkerViewTag.bubble),
+          let glyphLabel = markerView.viewWithTag(NavigationMarkerViewTag.glyph) as? UILabel,
+          let badgeLabel = markerView.viewWithTag(NavigationMarkerViewTag.badge) as? UILabel,
+          let tail = markerView.viewWithTag(NavigationMarkerViewTag.tail) else { return }
+
+    let fillColor = marker.customColor ?? resolveMarkerFillColor(marker.variant)
+    let alpha = marker.customOpacity ?? resolveMarkerAlpha(marker.variant, selected: marker.selected)
+    let bubbleOriginX = (metrics.markerWidth - metrics.bubbleSize) / 2
+
+    markerView.frame = CGRect(origin: .zero,
+      size: CGSize(width: metrics.markerWidth, height: metrics.markerHeight))
+    markerView.bounds = markerView.frame
+    markerView.alpha = alpha
+    markerView.accessibilityLabel = marker.label ?? marker.id
+
+    bubble.frame = CGRect(x: bubbleOriginX, y: 0, width: metrics.bubbleSize, height: metrics.bubbleSize)
+    bubble.layer.cornerRadius = metrics.bubbleSize / 2
+    bubble.layer.borderWidth = metrics.strokeWidth
+    bubble.layer.borderColor = UIColor.white.cgColor
+    bubble.backgroundColor = fillColor
+    bubble.layer.shadowColor = UIColor.black.withAlphaComponent(0.2).cgColor
+    bubble.layer.shadowOpacity = 1
+    bubble.layer.shadowRadius = 8
+    bubble.layer.shadowOffset = CGSize(width: 0, height: 4)
+
+    glyphLabel.frame = bubble.bounds
+    glyphLabel.font = .boldSystemFont(ofSize: metrics.glyphFontSize)
+    glyphLabel.text = marker.glyph
+
+    // Tail: only for pin style when showTail is true
+    let showTailView = marker.markerStyle == "pin" && marker.showTail
+    tail.isHidden = !showTailView
+    if showTailView {
+      tail.transform = .identity
+      tail.frame = CGRect(
+        x: (metrics.markerWidth - metrics.tailSize) / 2,
+        y: bubble.frame.maxY - metrics.tailOverlap,
+        width: metrics.tailSize,
+        height: metrics.tailSize
+      )
+      tail.backgroundColor = fillColor
+      tail.layer.cornerRadius = 2
+      tail.transform = CGAffineTransform(rotationAngle: .pi / 4)
+    }
+
+    if let badge = marker.badge {
+      badgeLabel.isHidden = false
+      badgeLabel.text = badge
+      badgeLabel.font = .boldSystemFont(ofSize: metrics.badgeFontSize)
+      let badgeColor = marker.customBadgeColor ?? resolveMarkerBadgeColor(marker.variant)
+      badgeLabel.frame = CGRect(
+        x: bubble.frame.maxX - metrics.badgeSize + metrics.badgeInset,
+        y: -metrics.badgeInset,
+        width: metrics.badgeSize,
+        height: metrics.badgeSize
+      )
+      badgeLabel.layer.cornerRadius = metrics.badgeSize / 2
+      badgeLabel.layer.masksToBounds = true
+      badgeLabel.layer.borderWidth = max(metrics.strokeWidth - 1, 1)
+      badgeLabel.layer.borderColor = UIColor.white.cgColor
+      badgeLabel.backgroundColor = badgeColor
+    } else {
+      badgeLabel.isHidden = true
+    }
+  }
+
+  private func normalizeMarkerVariant(_ raw: String?) -> String {
+    switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "primary": return "primary"
+    case "success": return "success"
+    case "warning": return "warning"
+    case "danger":  return "danger"
+    case "muted":   return "muted"
+    default:        return "default"
+    }
+  }
+
+  private func normalizeMarkerSize(_ raw: String?) -> String {
+    switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "small": return "small"
+    case "large": return "large"
+    default:      return "medium"
+    }
+  }
+
+  private func normalizeMarkerStyle(_ raw: String?) -> String {
+    switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "dot": return "dot"
+    default:    return "pin"
+    }
+  }
+
+  private func parseHexColor(_ raw: Any?) -> UIColor? {
+    guard let str = raw as? String else { return nil }
+    var hex = str.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !hex.isEmpty else { return nil }
+    if hex.hasPrefix("#") { hex = String(hex.dropFirst()) }
+    guard hex.count == 6 || hex.count == 8,
+          let value = UInt32(hex.prefix(6), radix: 16) else { return nil }
+    return hexColor(value)
+  }
+
+  private func resolveNavigationMarkerMetrics(_ size: String) -> NavigationMarkerMetrics {
+    switch size {
+    case "small":
+      return NavigationMarkerMetrics(
+        bubbleSize: 32, badgeSize: 18, strokeWidth: 2, tailSize: 10,
+        glyphFontSize: 14, badgeFontSize: 9, tailOverlap: 3, badgeInset: 3,
+        markerHeight: 40, markerWidth: 44, offsetY: 20
+      )
+    case "large":
+      return NavigationMarkerMetrics(
+        bubbleSize: 48, badgeSize: 22, strokeWidth: 3, tailSize: 14,
+        glyphFontSize: 18, badgeFontSize: 10, tailOverlap: 4, badgeInset: 4,
+        markerHeight: 58, markerWidth: 56, offsetY: 30
+      )
+    default:
+      return NavigationMarkerMetrics(
+        bubbleSize: 40, badgeSize: 20, strokeWidth: 3, tailSize: 12,
+        glyphFontSize: 16, badgeFontSize: 10, tailOverlap: 4, badgeInset: 4,
+        markerHeight: 50, markerWidth: 48, offsetY: 26
+      )
+    }
+  }
+
+  private func resolveMarkerFillColor(_ variant: String) -> UIColor {
+    switch variant {
+    case "primary": return hexColor(0x2563EB)
+    case "success": return hexColor(0x15803D)
+    case "warning": return hexColor(0xC2410C)
+    case "danger":  return hexColor(0xB91C1C)
+    case "muted":   return hexColor(0x475569)
+    default:        return hexColor(0x1F2937)
+    }
+  }
+
+  private func resolveMarkerBadgeColor(_ variant: String) -> UIColor {
+    switch variant {
+    case "primary": return hexColor(0x1D4ED8)
+    case "success": return hexColor(0x166534)
+    case "warning": return hexColor(0x9A3412)
+    case "danger":  return hexColor(0x991B1B)
+    case "muted":   return hexColor(0x334155)
+    default:        return hexColor(0x111827)
+    }
+  }
+
+  private func resolveMarkerAlpha(_ variant: String, selected: Bool) -> CGFloat {
+    if variant == "muted" { return 0.72 }
+    if !selected && variant == "default" { return 0.92 }
+    if !selected { return 0.96 }
+    return 1
+  }
+
+  private func hexColor(_ hex: UInt32) -> UIColor {
+    UIColor(
+      red:   CGFloat((hex & 0xFF0000) >> 16) / 255,
+      green: CGFloat((hex & 0x00FF00) >> 8)  / 255,
+      blue:  CGFloat( hex & 0x0000FF)         / 255,
+      alpha: 1
+    )
   }
 
   private func applyDynamicUIOptionsIfPossible() {
@@ -645,6 +1037,8 @@ class MapboxNavigationView: ExpoView {
     return viewController.value(forKey: "bottomBannerViewController") as? BottomBannerViewController
   }
 
+  // MARK: -
+
   private func applyCameraConfiguration(to viewController: NavigationViewController) {
     guard
       let navigationMapView = viewController.navigationMapView,
@@ -742,8 +1136,17 @@ class MapboxNavigationView: ExpoView {
 
   private func emitRouteChange(from response: RouteResponse) {
     guard let route = response.routes?.first else { return }
+    emitRouteChange(route: route)
+  }
+
+  private func emitRouteChange(route: Route) {
     guard let shape = route.shape else { return }
-    let coords = shape.coordinates.map { coordinate in
+    emitRouteChange(coordinates: shape.coordinates)
+  }
+
+  private func emitRouteChange(coordinates: [CLLocationCoordinate2D]) {
+    guard !coordinates.isEmpty else { return }
+    let coords = coordinates.map { coordinate in
       [
         "latitude": coordinate.latitude,
         "longitude": coordinate.longitude
@@ -766,6 +1169,15 @@ class MapboxNavigationView: ExpoView {
 
 // MARK: - NavigationViewControllerDelegate
 extension MapboxNavigationView: NavigationViewControllerDelegate {
+  func navigationViewController(
+    _ navigationViewController: NavigationViewController,
+    didRerouteAlong route: Route,
+    at location: CLLocation?,
+    proactive: Bool
+  ) {
+    emitRouteChange(route: route)
+  }
+
   func navigationViewController(
     _ navigationViewController: NavigationViewController,
     didUpdate progress: RouteProgress,

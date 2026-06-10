@@ -124,6 +124,88 @@ export function EmbeddedNavigation() {
 - Only one embedded navigation session should be active at a time.
 - The package uses native UI for the main map/navigation chrome and React overlays for custom controls.
 
+## Display-Only Navigation Markers
+
+`navigationMarkers` renders lightweight native pin annotations directly on the embedded navigation map.
+These are **display-only** — they do not affect routing. Use `waypoints` for intermediate route stops.
+
+```tsx
+<MapboxNavigationView
+  enabled
+  style={{ flex: 1 }}
+  startOrigin={origin}
+  destination={destination}
+  navigationMarkers={[
+    {
+      id: "pickup-1",
+      latitude: 37.7858,
+      longitude: -122.4064,
+      label: "Pickup – Alice",
+      glyph: "P",
+      badge: "2",
+      variant: "primary",
+      size: "large",
+      selected: true,
+    },
+    {
+      id: "dropoff-1",
+      latitude: 37.7901,
+      longitude: -122.4019,
+      label: "Dropoff – Alice",
+      glyph: "D",
+      variant: "success",
+    },
+    {
+      id: "custom-stop",
+      latitude: 37.788,
+      longitude: -122.408,
+      label: "Custom Stop",
+      glyph: "★",
+      // Fully custom color — overrides `variant`
+      color: "#7C3AED",
+      badgeColor: "#5B21B6",
+      opacity: 0.9,
+      markerStyle: "dot",   // simple circle, no tail
+      size: "small",
+    },
+  ]}
+/>
+```
+
+### Marker fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `id` | `string` | **required** | Stable key — used to update/remove markers in place |
+| `latitude` | `number` | **required** | WGS84 latitude |
+| `longitude` | `number` | **required** | WGS84 longitude |
+| `label` | `string` | — | Accessibility label and debug description |
+| `glyph` | `string` | `"•"` | Short text rendered inside the bubble (max 2 chars) |
+| `badge` | `string` | — | Badge text in the upper-right corner (max 3 chars) |
+| `variant` | `NavigationMarkerVariant` | `"default"` | Semantic color preset |
+| `color` | `string` | — | Custom fill hex (e.g. `"#7C3AED"`). Overrides `variant` |
+| `badgeColor` | `string` | — | Custom badge hex. Falls back to a darker shade of `color`/`variant` |
+| `opacity` | `number` | auto | Marker opacity 0..1. Overrides the `variant`/`selected` default |
+| `size` | `NavigationMarkerSize` | `"medium"` | Size preset |
+| `markerStyle` | `NavigationMarkerStyle` | `"pin"` | `"pin"` = bubble + tail, `"dot"` = circle only |
+| `showTail` | `boolean` | `true` | Show the pointer tail (only applies to `"pin"` style) |
+| `selected` | `boolean` | auto | Forwarded to the native annotation `selected` state |
+| `allowOverlap` | `boolean` | `true` | Allow overlap with other annotations |
+| `anchorOffsetY` | `number` | auto | Custom Y-axis pixel offset from the anchor point |
+
+### Variant presets
+
+| Variant | Fill color | Badge color | Default opacity |
+|---------|-----------|-------------|-----------------|
+| `"default"` | `#1F2937` | `#111827` | 0.92 (unselected) / 1 |
+| `"primary"` | `#2563EB` | `#1D4ED8` | 1 |
+| `"success"` | `#15803D` | `#166534` | 1 |
+| `"warning"` | `#C2410C` | `#9A3412` | 1 |
+| `"danger"` | `#B91C1C` | `#991B1B` | 1 |
+| `"muted"` | `#475569` | `#334155` | 0.72 |
+
+Use `color` + `badgeColor` + `opacity` together for fully custom branding without touching `variant`.
+
 ## Overlay Bottom Sheet
 
 `bottomSheet` is overlay-only. The package renders a React layer above the native navigation UI.

@@ -15,6 +15,107 @@ export type Waypoint = Coordinate & {
   name?: string
 }
 
+export type NavigationMarkerVariant =
+  | 'default'
+  | 'primary'
+  | 'success'
+  | 'warning'
+  | 'danger'
+  | 'muted'
+
+export type NavigationMarkerSize = 'small' | 'medium' | 'large'
+
+/**
+ * Visual style of the marker bubble.
+ * - `pin` (default): round bubble with a downward pointer tail.
+ * - `dot`: simple circle with no tail.
+ */
+export type NavigationMarkerStyle = 'pin' | 'dot'
+
+/**
+ * A display-only annotation rendered directly on the embedded navigation map.
+ *
+ * Markers are purely visual — they do not affect routing. Use `waypoints` for
+ * intermediate route stops.
+ *
+ * @example
+ * ```tsx
+ * navigationMarkers={[
+ *   {
+ *     id: 'pickup-1',
+ *     latitude: 37.7858,
+ *     longitude: -122.4064,
+ *     label: 'Pickup – Alice',
+ *     glyph: 'P',
+ *     badge: '2',
+ *     variant: 'primary',
+ *     size: 'large',
+ *   },
+ *   {
+ *     id: 'dropoff-1',
+ *     latitude: 37.7901,
+ *     longitude: -122.4019,
+ *     label: 'Dropoff – Alice',
+ *     glyph: 'D',
+ *     color: '#7C3AED',
+ *     markerStyle: 'dot',
+ *   },
+ * ]}
+ * ```
+ */
+export type NavigationMarker = Coordinate & {
+  /** Stable identifier — used to update or remove an existing marker in place. */
+  id: string
+  /** Accessibility label and debug description. */
+  label?: string
+  /** Short glyph rendered inside the bubble (max 2 characters). */
+  glyph?: string
+  /** Badge text rendered in the upper-right corner of the bubble (max 3 characters). */
+  badge?: string
+  /**
+   * Semantic color variant. Use `color` for a fully custom fill.
+   * Defaults to `'default'` (dark charcoal).
+   */
+  variant?: NavigationMarkerVariant
+  /**
+   * Custom fill color as a CSS/Android hex string (e.g. `"#2563EB"`).
+   * Takes priority over `variant` when provided.
+   */
+  color?: string
+  /**
+   * Custom badge background color (hex string).
+   * Defaults to a darkened shade of `color` or the `variant` badge color.
+   */
+  badgeColor?: string
+  /**
+   * Marker opacity in the range 0..1.
+   * Overrides the automatic opacity derived from `variant` and `selected`.
+   */
+  opacity?: number
+  /** Size preset. Defaults to `'medium'`. */
+  size?: NavigationMarkerSize
+  /**
+   * Visual style of the marker bubble.
+   * - `'pin'` (default): bubble with a downward pointer tail.
+   * - `'dot'`: simple circle, no tail.
+   */
+  markerStyle?: NavigationMarkerStyle
+  /**
+   * Whether to render the pointer tail. Only applies to `markerStyle: 'pin'`.
+   * Defaults to `true`.
+   */
+  showTail?: boolean
+  /** Forwarded to the native view-annotation `selected` state. */
+  selected?: boolean
+  /** Allow the marker to overlap other annotations. Defaults to `true`. */
+  allowOverlap?: boolean
+  /**
+   * Custom Y-axis pixel offset from the map anchor point.
+   * Positive values move the marker upward. Overrides the size-preset default.
+   */
+  anchorOffsetY?: number
+}
+
 /** Bottom sheet visibility/customization controls. */
 export type BottomSheetOptions = {
   /** Master switch for bottom sheet sections. */
@@ -295,6 +396,8 @@ export interface MapboxNavigationViewProps {
   style?: any
   startOrigin?: Coordinate
   destination: Waypoint
+  /** Display-only markers rendered directly on the native navigation map. */
+  navigationMarkers?: NavigationMarker[]
   waypoints?: Waypoint[]
   shouldSimulateRoute?: boolean
   showCancelButton?: boolean

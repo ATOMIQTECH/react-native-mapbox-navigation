@@ -126,6 +126,10 @@ class MapboxNavigationModule : Module() {
         view.setWaypoints(waypoints)
       }
 
+      Prop("navigationMarkers") { view: MapboxNavigationView, markers: List<Map<String, Any>>? ->
+        view.setNavigationMarkers(markers)
+      }
+
       Prop("shouldSimulateRoute") { view: MapboxNavigationView, simulate: Boolean ->
         view.setShouldSimulateRoute(simulate)
       }
