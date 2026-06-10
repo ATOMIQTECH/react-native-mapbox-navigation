@@ -18,7 +18,7 @@ const MAPBOX_REPO_BLOCK = `    maven {
       }
     }`
 
-const MAPBOX_TOKEN_LINES = `        def mapboxPublicToken = project.findProperty("MAPBOX_PUBLIC_TOKEN") ?: System.getenv("EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN") ?: ""
+const MAPBOX_TOKEN_LINES = `        def mapboxPublicToken = project.findProperty("MAPBOX_PUBLIC_TOKEN") ?: System.getenv("MAPBOX_PUBLIC_TOKEN") ?: System.getenv("EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN") ?: ""
         resValue "string", "mapbox_access_token", mapboxPublicToken`
 
 const MAPBOX_SETTINGS_REPO_BLOCK = `        maven {
@@ -67,33 +67,48 @@ function validateMapboxTokenShape(token, expectedPrefix) {
   return token.startsWith(expectedPrefix) && token.length > 20
 }
 
-function assertRequiredTokens(config) {
+/**
+ * Validate tokens when present, warn when absent.
+ *
+ * Tokens are intentionally not required at config-eval time so that CI/build
+ * environments that inject them via build-time env vars (EAS Secrets, Gradle
+ * properties, etc.) can prebuild without having the tokens available locally.
+ */
+function validateTokensIfPresent(config) {
   const publicToken = resolveToken(
     config,
     ['EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN', 'MAPBOX_PUBLIC_TOKEN'],
     ['mapboxPublicToken', 'expoPublicMapboxAccessToken', 'mapboxAccessToken']
   )
-  const downloadsToken = resolveToken(config, ['MAPBOX_DOWNLOADS_TOKEN'], ['mapboxDownloadsToken'])
+  const downloadsToken = resolveToken(
+    config,
+    ['MAPBOX_DOWNLOADS_TOKEN'],
+    ['mapboxDownloadsToken']
+  )
 
-  if (!publicToken) {
-    throw new Error(
-      '[@atomiqlab/react-native-mapbox-navigation] Missing EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN (or MAPBOX_PUBLIC_TOKEN / expo.extra.mapboxPublicToken).'
-    )
-  }
-  if (!validateMapboxTokenShape(publicToken, 'pk.')) {
+  if (publicToken && !validateMapboxTokenShape(publicToken, 'pk.')) {
     throw new Error(
       "[@atomiqlab/react-native-mapbox-navigation] Invalid public token format. Expected a Mapbox public token starting with 'pk.'."
     )
   }
 
-  if (!downloadsToken) {
-    throw new Error(
-      '[@atomiqlab/react-native-mapbox-navigation] Missing MAPBOX_DOWNLOADS_TOKEN (or expo.extra.mapboxDownloadsToken).'
-    )
-  }
-  if (!validateMapboxTokenShape(downloadsToken, 'sk.')) {
+  if (downloadsToken && !validateMapboxTokenShape(downloadsToken, 'sk.')) {
     throw new Error(
       "[@atomiqlab/react-native-mapbox-navigation] Invalid downloads token format. Expected a Mapbox secret token starting with 'sk.' and DOWNLOADS:READ scope."
+    )
+  }
+
+  if (!publicToken) {
+    console.warn(
+      '[@atomiqlab/react-native-mapbox-navigation] EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN not found during expo config evaluation. ' +
+        'This is fine if it will be provided by the build environment (EAS Secrets, Gradle properties, etc.).'
+    )
+  }
+
+  if (!downloadsToken) {
+    console.warn(
+      '[@atomiqlab/react-native-mapbox-navigation] MAPBOX_DOWNLOADS_TOKEN not found during expo config evaluation. ' +
+        'This is fine if it will be provided by the build environment (EAS Secrets, Gradle properties, etc.).'
     )
   }
 }
@@ -226,7 +241,7 @@ function withMapboxNavigationIos(config) {
 }
 
 const withMapboxNavigation = (config) => {
-  assertRequiredTokens(config)
+  validateTokensIfPresent(config)
   config = withMapboxNavigationAndroid(config)
   config = withMapboxNavigationIos(config)
   return config

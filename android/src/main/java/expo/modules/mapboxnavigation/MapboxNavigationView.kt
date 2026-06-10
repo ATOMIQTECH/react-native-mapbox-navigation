@@ -6,6 +6,8 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
 import android.os.Build
@@ -18,6 +20,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -36,8 +39,9 @@ import com.mapbox.navigation.base.route.RouterFailure
 import com.mapbox.navigation.base.route.RouterOrigin
 import com.mapbox.navigation.base.trip.model.RouteProgress
 import com.mapbox.navigation.core.MapboxNavigation
-import com.mapbox.navigation.core.MapboxNavigationProvider
 import com.mapbox.navigation.core.arrival.ArrivalObserver
+import com.mapbox.navigation.core.directions.session.RoutesObserver
+import com.mapbox.navigation.core.lifecycle.MapboxNavigationApp
 import com.mapbox.navigation.core.trip.session.BannerInstructionsObserver
 import com.mapbox.navigation.core.trip.session.LocationMatcherResult
 import com.mapbox.navigation.core.trip.session.LocationObserver
@@ -47,9 +51,11 @@ import com.mapbox.navigation.dropin.RouteOptionsInterceptor
 import com.mapbox.navigation.dropin.map.MapViewObserver
 import com.mapbox.navigation.dropin.map.MapViewBinder
 import com.mapbox.navigation.dropin.navigationview.NavigationViewListener
+import com.mapbox.maps.MapView
 import com.mapbox.maps.plugin.Plugin
 import com.mapbox.maps.plugin.compass.CompassPlugin
 import com.mapbox.maps.plugin.scalebar.ScaleBarPlugin
+import com.mapbox.maps.viewannotation.viewAnnotationOptions
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
@@ -62,6 +68,38 @@ import java.util.UUID
  * including the route preview info panel and the Start Navigation button.
  */
 class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
+  private data class NavigationMarkerPayload(
+    val id: String,
+    val point: Point,
+    val label: String?,
+    val glyph: String,
+    val badge: String?,
+    val variant: String,
+    // Customization: custom colors/opacity override variant-based defaults
+    val customColor: Int?,
+    val customBadgeColor: Int?,
+    val customOpacity: Float?,
+    val size: String,
+    val markerStyle: String,  // "pin" | "dot"
+    val showTail: Boolean,
+    val selected: Boolean,
+    val allowOverlap: Boolean,
+    val anchorOffsetY: Int?,  // custom dp offset, overrides size-preset
+  )
+
+  private data class NavigationMarkerMetrics(
+    val bubbleSizeDp: Int,
+    val badgeSizeDp: Int,
+    val strokeWidthDp: Int,
+    val tailSizeDp: Int,
+    val glyphTextSp: Float,
+    val badgeTextSp: Float,
+    val tailOverlapDp: Int,
+    val badgeInsetDp: Int,
+    val elevationDp: Int,
+    val offsetYDp: Int,
+  )
+
   companion object {
     private const val TAG = "MapboxNavigationView"
     private const val EMBEDDED_BUILD = "2.0.0-embedded-2026-03-02-r1"
@@ -99,6 +137,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private var startOrigin: Map<String, Any>? = null
   private var destination: Map<String, Any>? = null
   private var waypoints: List<Map<String, Any>>? = null
+  private var navigationMarkers: List<Map<String, Any>>? = null
 
   private var shouldSimulateRoute = false
   private var mute = false
@@ -127,10 +166,13 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private var showNativeCameraModeButton = true
   private var showNativeRecenterButton = true
   private var showNativeCompassButton = true
+  private var cameraMode = "following"
 
   private var navigationView: NavigationView? = null
   private var placeholderView: TextView? = null
   private var immersiveNavBarsHidden = false
+  private var attachedMapView: MapView? = null
+  private val navigationMarkerViews = linkedMapOf<String, View>()
 
   private var mapboxNavigation: MapboxNavigation? = null
   private var hasRequestedRoute = false
@@ -161,7 +203,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   }
 
   private val mapViewObserver = object : MapViewObserver() {
-    override fun onAttached(mapView: com.mapbox.maps.MapView) {
+    override fun onAttached(mapView: MapView) {
+      attachedMapView = mapView
       // If Drop-In uses SurfaceView, it can render behind RN in some hierarchies.
       // Make SurfaceView explicitly top/overlay when present.
       val (textureCount, surfaceCount) = countTextureAndSurfaceViews(mapView)
@@ -195,9 +238,15 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         false
       }
       hideMapOrnaments(mapView)
+      renderNavigationMarkersIfPossible()
     }
 
-    override fun onDetached(mapView: com.mapbox.maps.MapView) = Unit
+    override fun onDetached(mapView: MapView) {
+      if (attachedMapView === mapView) {
+        clearNavigationMarkers(mapView)
+        attachedMapView = null
+      }
+    }
   }
 
   private val navigationViewListener = object : NavigationViewListener() {
@@ -215,9 +264,22 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     override fun onActiveNavigation() {
       // Re-apply options once active guidance starts to ensure maneuver/top UI is visible.
       applyDropInOptions()
+      applyCameraMode("active-navigation")
       hideNativeBottomPanelIfRequested(navigationView)
       scheduleBottomPanelHidePasses()
       hidePlaceholder()
+    }
+
+    override fun onIdleCameraMode() {
+      setCameraFollowingState(false, "idle-camera")
+    }
+
+    override fun onOverviewCameraMode() {
+      setCameraFollowingState(false, "overview-camera")
+    }
+
+    override fun onFollowingCameraMode() {
+      setCameraFollowingState(true, "following-camera")
     }
 
     override fun onFreeDrive() {
@@ -235,6 +297,16 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       onError(mapOf("code" to "ROUTE_ERROR", "message" to "Route fetch failed: $message"))
       showPlaceholder("Route fetch failed.\n$message")
       hasRequestedRoute = false
+    }
+
+    override fun onRouteFetchCanceled(routeOptions: RouteOptions, routerOrigin: RouterOrigin) {
+      hasRequestedRoute = false
+      onError(
+        mapOf(
+          "code" to "ROUTE_FETCH_CANCELED",
+          "message" to "Route fetch canceled (origin: $routerOrigin)."
+        )
+      )
     }
 
     override fun onRouteFetchSuccessful(routes: List<NavigationRoute>) {
@@ -304,6 +376,12 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     override fun onWaypointArrival(routeProgress: RouteProgress) = Unit
   }
 
+  private val routesObserver = RoutesObserver { routeUpdateResult ->
+    routeUpdateResult.navigationRoutes.firstOrNull()?.let { route ->
+      emitRouteChange(route)
+    }
+  }
+
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
     Log.i(TAG, "Embedded Drop-In attached ($EMBEDDED_BUILD)")
@@ -342,6 +420,11 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     if (enabled) startIfReady()
   }
 
+  fun setNavigationMarkers(markers: List<Map<String, Any>>?) {
+    navigationMarkers = markers
+    renderNavigationMarkersIfPossible()
+  }
+
   fun setShouldSimulateRoute(simulate: Boolean) {
     shouldSimulateRoute = simulate
     navigationView?.api?.routeReplayEnabled(simulate)
@@ -374,11 +457,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   fun setCameraMode(mode: String) {
     val normalized = mode.trim().lowercase()
-    if (normalized == "overview") {
-      setCameraFollowingState(false, "prop")
-    } else if (normalized == "following") {
-      resumeCameraFollowingInternal("prop")
-    }
+    cameraMode = if (normalized == "overview") "overview" else "following"
+    applyCameraMode("prop")
   }
   fun setCameraPitch(pitch: Double) = Unit
   fun setCameraZoom(zoom: Double) = Unit
@@ -625,32 +705,14 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private fun ensureNavigation() {
     if (mapboxNavigation != null) return
 
-    val token = runCatching { getMapboxAccessToken() }.getOrElse { return }
-
-    if (!MapboxNavigationProvider.isCreated()) {
-      runCatching {
-        val navOptionsClass = Class.forName("com.mapbox.navigation.base.options.NavigationOptions")
-        val builderClass = Class.forName("com.mapbox.navigation.base.options.NavigationOptions\$Builder")
-        val hostContext = expoAppContext.currentActivity ?: context
-        val builder = builderClass.getConstructor(Context::class.java).newInstance(hostContext)
-        builderClass.methods.firstOrNull { m ->
-          m.name == "accessToken" && m.parameterTypes.size == 1 && m.parameterTypes[0] == String::class.java
-        }?.invoke(builder, token)
-        val build = builderClass.methods.firstOrNull { it.name == "build" && it.parameterTypes.isEmpty() }
-          ?: throw IllegalStateException("NavigationOptions.Builder.build() not found")
-        val options = build.invoke(builder)
-        val create = MapboxNavigationProvider::class.java.methods.firstOrNull { m ->
-          m.name == "create" && m.parameterTypes.size == 1 && m.parameterTypes[0].name == navOptionsClass.name
-        } ?: throw IllegalStateException("MapboxNavigationProvider.create(NavigationOptions) not found")
-        create.invoke(null, options)
-      }.onFailure { throwable ->
-        Log.w(TAG, "Failed to create MapboxNavigationProvider via NavigationOptions reflection", throwable)
-      }
-    }
-
-    val nav = runCatching { MapboxNavigationProvider.retrieve() }.getOrElse { throwable ->
+    val nav = runCatching { MapboxNavigationApp.current() }.getOrElse { throwable ->
       onError(mapOf("code" to "NAVIGATION_INIT_FAILED", "message" to (throwable.message ?: "Failed to init MapboxNavigation")))
       showPlaceholder("Failed to init navigation.\n${throwable.message ?: ""}".trim())
+      return
+    } ?: run {
+      val message = "MapboxNavigationApp is not attached yet."
+      onError(mapOf("code" to "NAVIGATION_INIT_FAILED", "message" to message))
+      showPlaceholder("Failed to init navigation.\n$message")
       return
     }
 
@@ -659,6 +721,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     nav.registerRouteProgressObserver(routeProgressObserver)
     nav.registerBannerInstructionsObserver(bannerInstructionsObserver)
     nav.registerArrivalObserver(arrivalObserver)
+    nav.registerRoutesObserver(routesObserver)
 
     MapboxAudioGuidanceController.setMuted(mute)
     MapboxAudioGuidanceController.setVoiceVolume(voiceVolume)
@@ -682,7 +745,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     ensureNavigation()
     applyDropInOptions()
     setNavigationBarsHidden(true)
-    setCameraFollowingState(true, "start")
+    applyCameraMode("start")
 
     val nav = mapboxNavigation ?: return
     val view = navigationView ?: return
@@ -720,7 +783,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
             .steps(true)
             .bannerInstructions(true)
             .voiceInstructions(true)
-            .layersList(MutableList(coordinates.size) { 0 })
+            .layersList(MutableList<Int?>(coordinates.size) { null })
         }
       )
     } else {
@@ -756,7 +819,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     } else {
       applyDropInOptions()
       mainHandler.postDelayed({ applyDropInOptions() }, 180)
-      tryStartActiveGuidance(view)
+      tryStartActiveGuidance(view, nav)
     }
   }
 
@@ -780,6 +843,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       .steps(true)
       .bannerInstructions(true)
       .voiceInstructions(true)
+      .layersList(MutableList<Int?>(coordinates.size) { null })
       .build()
 
     nav.requestRoutes(
@@ -806,7 +870,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
           } else {
             applyDropInOptions()
             mainHandler.postDelayed({ applyDropInOptions() }, 180)
-            tryStartActiveGuidance(view)
+            tryStartActiveGuidance(view, nav)
           }
         }
 
@@ -828,6 +892,11 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private fun stopEmbedded(emitCancel: Boolean) {
     mainHandler.removeCallbacksAndMessages(null)
 
+    attachedMapView?.let { mapView ->
+      clearNavigationMarkers(mapView)
+    }
+    attachedMapView = null
+
     navigationView?.let { nv ->
       runCatching { nv.removeListener(navigationViewListener) }
       runCatching { nv.unregisterMapObserver(mapViewObserver) }
@@ -841,6 +910,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       runCatching { nav.unregisterRouteProgressObserver(routeProgressObserver) }
       runCatching { nav.unregisterBannerInstructionsObserver(bannerInstructionsObserver) }
       runCatching { nav.unregisterArrivalObserver(arrivalObserver) }
+      runCatching { nav.unregisterRoutesObserver(routesObserver) }
       runCatching { nav.setNavigationRoutes(emptyList()) }
     }
     mapboxNavigation = null
@@ -906,28 +976,49 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private fun scheduleBottomPanelHidePasses() {
     if (!shouldHideNativeBottomPanel()) return
     val view = navigationView ?: return
-    fun hidePass(reason: String) {
+    fun stylePass(reason: String) {
       hideNativeBottomPanelIfRequested(view)
-      Log.d(TAG, "bottom panel hide pass ($EMBEDDED_BUILD): $reason")
+      Log.d(TAG, "dropin style pass ($EMBEDDED_BUILD): $reason")
     }
-    mainHandler.post { hidePass("post") }
-    mainHandler.postDelayed({ hidePass("post+180ms") }, 180)
-    mainHandler.postDelayed({ hidePass("post+650ms") }, 650)
-    mainHandler.postDelayed({ hidePass("post+1400ms") }, 1400)
-    mainHandler.postDelayed({ hidePass("post+2400ms") }, 2400)
+    mainHandler.post { stylePass("post") }
+    mainHandler.postDelayed({ stylePass("post+180ms") }, 180)
+    mainHandler.postDelayed({ stylePass("post+650ms") }, 650)
+    mainHandler.postDelayed({ stylePass("post+1400ms") }, 1400)
+    mainHandler.postDelayed({ stylePass("post+2400ms") }, 2400)
   }
 
-  private fun tryStartActiveGuidance(view: NavigationView) {
+  private fun tryStartActiveGuidance(view: NavigationView, nav: MapboxNavigation) {
+    var didStartGuidance = false
+
     runCatching {
-      val api = view.api
-      val methods = api.javaClass.methods
-      val direct = methods.firstOrNull { it.name == "startActiveGuidance" && it.parameterTypes.isEmpty() }
-      if (direct != null) {
-        direct.invoke(api)
-        return
+      val expected = view.api.startActiveGuidance()
+      if (!expected.isError) {
+        didStartGuidance = true
+        return@runCatching
       }
-      val fallback = methods.firstOrNull { it.name == "startNavigation" && it.parameterTypes.isEmpty() }
-      fallback?.invoke(api)
+
+      val fallbackRoutes = nav.getNavigationRoutes()
+      if (fallbackRoutes.isEmpty()) {
+        Log.w(TAG, "Drop-In startActiveGuidance returned an error and no routes are available ($EMBEDDED_BUILD): ${expected.error}")
+        return@runCatching
+      }
+
+      val fallback = view.api.startActiveGuidance(fallbackRoutes)
+      if (!fallback.isError) {
+        didStartGuidance = true
+      } else {
+        Log.w(TAG, "Drop-In startActiveGuidance fallback failed ($EMBEDDED_BUILD): ${fallback.error}")
+      }
+    }.onFailure { throwable ->
+      Log.w(TAG, "Failed to request Drop-In active guidance ($EMBEDDED_BUILD)", throwable)
+    }
+
+    if (!didStartGuidance) return
+
+    runCatching {
+      if (shouldSimulateRoute) nav.startReplayTripSession() else nav.startTripSession()
+    }.onFailure { throwable ->
+      Log.w(TAG, "Failed to start shared Mapbox trip session ($EMBEDDED_BUILD)", throwable)
     }
   }
 
@@ -942,7 +1033,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
           "tripprogress",
           "bottombanner",
           "routepreview",
-          "actionbutton",
           "bottomsheet",
           "routeinfo",
           "maneuverfooter"
@@ -950,6 +1040,299 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       )
     }
   }
+
+  // ── Navigation Marker Rendering ──────────────────────────────────────────────
+
+  private fun renderNavigationMarkersIfPossible() {
+    val mapView = attachedMapView ?: return
+    val markerPayloads = navigationMarkers.orEmpty().mapNotNull(::parseNavigationMarker)
+    val nextIds = markerPayloads.mapTo(linkedSetOf()) { it.id }
+    val annotationManager = mapView.viewAnnotationManager
+
+    navigationMarkerViews.entries.toList().forEach { (markerId, markerView) ->
+      if (!nextIds.contains(markerId)) {
+        runCatching { annotationManager.removeViewAnnotation(markerView) }
+        navigationMarkerViews.remove(markerId)
+      }
+    }
+
+    markerPayloads.forEach { marker ->
+      val existingView = navigationMarkerViews[marker.id]
+      val markerView = existingView ?: createNavigationMarkerView(marker)
+      bindNavigationMarkerView(markerView, marker)
+      val metrics = resolveNavigationMarkerMetrics(marker.size)
+      val viewOptions = viewAnnotationOptions {
+        geometry(marker.point)
+        allowOverlap(marker.allowOverlap)
+        visible(true)
+        selected(marker.selected)
+        offsetY(dp(marker.anchorOffsetY ?: metrics.offsetYDp))
+      }
+
+      if (existingView == null) {
+        runCatching {
+          annotationManager.addViewAnnotation(markerView, viewOptions)
+          navigationMarkerViews[marker.id] = markerView
+        }.onFailure { throwable ->
+          Log.w(TAG, "Failed to add navigation marker '${marker.id}'", throwable)
+        }
+      } else {
+        runCatching {
+          if (!annotationManager.updateViewAnnotation(existingView, viewOptions)) {
+            annotationManager.removeViewAnnotation(existingView)
+            annotationManager.addViewAnnotation(existingView, viewOptions)
+          }
+        }.onFailure { throwable ->
+          Log.w(TAG, "Failed to update navigation marker '${marker.id}'", throwable)
+        }
+      }
+    }
+  }
+
+  private fun clearNavigationMarkers(mapView: MapView) {
+    val annotationManager = mapView.viewAnnotationManager
+    navigationMarkerViews.values.forEach { markerView ->
+      runCatching { annotationManager.removeViewAnnotation(markerView) }
+    }
+    navigationMarkerViews.clear()
+  }
+
+  private fun parseNavigationMarker(value: Map<String, Any>): NavigationMarkerPayload? {
+    val id = (value["id"] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val latitude = (value["latitude"] as? Number)?.toDouble() ?: return null
+    val longitude = (value["longitude"] as? Number)?.toDouble() ?: return null
+    if (!latitude.isFinite() || !longitude.isFinite()) return null
+
+    val label = (value["label"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+    val glyph = (value["glyph"] as? String)?.trim()?.takeIf { it.isNotEmpty() }?.take(2) ?: "•"
+    val badge = (value["badge"] as? String)?.trim()?.takeIf { it.isNotEmpty() }?.take(3)
+    val variant = normalizeMarkerVariant(value["variant"] as? String)
+    val customColor = parseHexColor(value["color"] as? String)
+    val customBadgeColor = parseHexColor(value["badgeColor"] as? String)
+    val customOpacity = (value["opacity"] as? Number)?.toFloat()?.coerceIn(0f, 1f)
+    val size = normalizeMarkerSize(value["size"] as? String)
+    val markerStyle = normalizeMarkerStyle(value["markerStyle"] as? String)
+    val showTail = (value["showTail"] as? Boolean) ?: (markerStyle == "pin")
+    val selected = (value["selected"] as? Boolean) ?: (variant == "primary" || variant == "success")
+    val allowOverlap = (value["allowOverlap"] as? Boolean) ?: true
+    val anchorOffsetY = (value["anchorOffsetY"] as? Number)?.toInt()
+
+    return NavigationMarkerPayload(
+      id = id,
+      point = Point.fromLngLat(longitude, latitude),
+      label = label,
+      glyph = glyph,
+      badge = badge,
+      variant = variant,
+      customColor = customColor,
+      customBadgeColor = customBadgeColor,
+      customOpacity = customOpacity,
+      size = size,
+      markerStyle = markerStyle,
+      showTail = showTail,
+      selected = selected,
+      allowOverlap = allowOverlap,
+      anchorOffsetY = anchorOffsetY,
+    )
+  }
+
+  private fun createNavigationMarkerView(marker: NavigationMarkerPayload): View {
+    val markerRoot = LinearLayout(context).apply {
+      orientation = LinearLayout.VERTICAL
+      gravity = Gravity.CENTER_HORIZONTAL
+      clipChildren = false
+      clipToPadding = false
+      contentDescription = marker.label ?: marker.id
+      isClickable = false
+      isFocusable = false
+    }
+
+    val bubble = FrameLayout(context).apply {
+      id = View.generateViewId()
+      layoutParams = LinearLayout.LayoutParams(0, 0).apply { gravity = Gravity.CENTER_HORIZONTAL }
+      clipChildren = false
+      clipToPadding = false
+    }
+
+    val glyphView = TextView(context).apply {
+      id = View.generateViewId()
+      gravity = Gravity.CENTER
+      layoutParams = FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.MATCH_PARENT,
+        FrameLayout.LayoutParams.MATCH_PARENT
+      )
+      setTextColor(Color.WHITE)
+      setTypeface(typeface, Typeface.BOLD)
+    }
+
+    val badgeView = TextView(context).apply {
+      id = View.generateViewId()
+      gravity = Gravity.CENTER
+      layoutParams = FrameLayout.LayoutParams(0, 0, Gravity.TOP or Gravity.END)
+      setTextColor(Color.WHITE)
+      setTypeface(typeface, Typeface.BOLD)
+    }
+
+    val tail = View(context).apply {
+      id = View.generateViewId()
+      layoutParams = LinearLayout.LayoutParams(0, 0).apply { gravity = Gravity.CENTER_HORIZONTAL }
+      rotation = 45f
+    }
+
+    bubble.addView(glyphView)
+    bubble.addView(badgeView)
+    markerRoot.addView(bubble)
+    markerRoot.addView(tail)
+    return markerRoot
+  }
+
+  private fun bindNavigationMarkerView(markerView: View, marker: NavigationMarkerPayload) {
+    val root = markerView as? LinearLayout ?: return
+    val bubble = root.getChildAt(0) as? FrameLayout ?: return
+    val glyphView = bubble.getChildAt(0) as? TextView ?: return
+    val badgeView = bubble.getChildAt(1) as? TextView
+    val tail = root.getChildAt(1)
+    val metrics = resolveNavigationMarkerMetrics(marker.size)
+    val fillColor = marker.customColor ?: resolveMarkerFillColor(marker.variant)
+    val alpha = marker.customOpacity ?: resolveMarkerAlpha(marker.variant, marker.selected)
+
+    (bubble.layoutParams as? LinearLayout.LayoutParams)?.apply {
+      width = dp(metrics.bubbleSizeDp)
+      height = dp(metrics.bubbleSizeDp)
+      gravity = Gravity.CENTER_HORIZONTAL
+      bubble.layoutParams = this
+    }
+    bubble.elevation = dp(metrics.elevationDp).toFloat()
+    bubble.background = GradientDrawable().apply {
+      shape = GradientDrawable.OVAL
+      setColor(fillColor)
+      setStroke(dp(metrics.strokeWidthDp), Color.WHITE)
+    }
+
+    glyphView.text = marker.glyph
+    glyphView.setTextSize(TypedValue.COMPLEX_UNIT_SP, metrics.glyphTextSp)
+
+    // Tail: shown for "pin" style when showTail is true
+    val showTailView = marker.markerStyle == "pin" && marker.showTail
+    tail.visibility = if (showTailView) View.VISIBLE else View.GONE
+    if (showTailView) {
+      tail.background = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(2).toFloat()
+        setColor(fillColor)
+      }
+      (tail.layoutParams as? LinearLayout.LayoutParams)?.apply {
+        width = dp(metrics.tailSizeDp)
+        height = dp(metrics.tailSizeDp)
+        gravity = Gravity.CENTER_HORIZONTAL
+        topMargin = -dp(metrics.tailOverlapDp)
+        tail.layoutParams = this
+      }
+    }
+
+    badgeView?.let {
+      if (marker.badge != null) {
+        it.visibility = View.VISIBLE
+        it.text = marker.badge
+        it.setTextSize(TypedValue.COMPLEX_UNIT_SP, metrics.badgeTextSp)
+        val badgeColor = marker.customBadgeColor ?: resolveMarkerBadgeColor(marker.variant)
+        (it.layoutParams as? FrameLayout.LayoutParams)?.apply {
+          width = dp(metrics.badgeSizeDp)
+          height = dp(metrics.badgeSizeDp)
+          gravity = Gravity.TOP or Gravity.END
+          topMargin = -dp(metrics.badgeInsetDp)
+          marginEnd = -dp(metrics.badgeInsetDp)
+          it.layoutParams = this
+        }
+        it.background = GradientDrawable().apply {
+          shape = GradientDrawable.OVAL
+          setColor(badgeColor)
+          setStroke(dp(maxOf(metrics.strokeWidthDp - 1, 1)), Color.WHITE)
+        }
+      } else {
+        it.visibility = View.GONE
+      }
+    }
+
+    root.alpha = alpha
+    root.contentDescription = marker.label ?: marker.id
+  }
+
+  private fun normalizeMarkerVariant(raw: String?): String = when (raw?.trim()?.lowercase()) {
+    "primary" -> "primary"
+    "success" -> "success"
+    "warning" -> "warning"
+    "danger" -> "danger"
+    "muted" -> "muted"
+    else -> "default"
+  }
+
+  private fun normalizeMarkerSize(raw: String?): String = when (raw?.trim()?.lowercase()) {
+    "small" -> "small"
+    "large" -> "large"
+    else -> "medium"
+  }
+
+  private fun normalizeMarkerStyle(raw: String?): String = when (raw?.trim()?.lowercase()) {
+    "dot" -> "dot"
+    else -> "pin"
+  }
+
+  private fun parseHexColor(raw: String?): Int? {
+    val trimmed = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    return runCatching { Color.parseColor(trimmed) }.getOrNull()
+  }
+
+  private fun resolveNavigationMarkerMetrics(size: String): NavigationMarkerMetrics = when (size) {
+    "small" -> NavigationMarkerMetrics(
+      bubbleSizeDp = 32, badgeSizeDp = 18, strokeWidthDp = 2, tailSizeDp = 10,
+      glyphTextSp = 14f, badgeTextSp = 9f, tailOverlapDp = 3, badgeInsetDp = 3,
+      elevationDp = 4, offsetYDp = 20,
+    )
+    "large" -> NavigationMarkerMetrics(
+      bubbleSizeDp = 48, badgeSizeDp = 22, strokeWidthDp = 3, tailSizeDp = 14,
+      glyphTextSp = 18f, badgeTextSp = 10f, tailOverlapDp = 4, badgeInsetDp = 4,
+      elevationDp = 6, offsetYDp = 30,
+    )
+    else -> NavigationMarkerMetrics(
+      bubbleSizeDp = 40, badgeSizeDp = 20, strokeWidthDp = 3, tailSizeDp = 12,
+      glyphTextSp = 16f, badgeTextSp = 10f, tailOverlapDp = 4, badgeInsetDp = 4,
+      elevationDp = 6, offsetYDp = 26,
+    )
+  }
+
+  private fun resolveMarkerFillColor(variant: String): Int = when (variant) {
+    "primary" -> Color.parseColor("#2563EB")
+    "success" -> Color.parseColor("#15803D")
+    "warning" -> Color.parseColor("#C2410C")
+    "danger" -> Color.parseColor("#B91C1C")
+    "muted" -> Color.parseColor("#475569")
+    else -> Color.parseColor("#1F2937")
+  }
+
+  private fun resolveMarkerBadgeColor(variant: String): Int = when (variant) {
+    "primary" -> Color.parseColor("#1D4ED8")
+    "success" -> Color.parseColor("#166534")
+    "warning" -> Color.parseColor("#9A3412")
+    "danger" -> Color.parseColor("#991B1B")
+    "muted" -> Color.parseColor("#334155")
+    else -> Color.parseColor("#111827")
+  }
+
+  private fun resolveMarkerAlpha(variant: String, selected: Boolean): Float = when {
+    variant == "muted" -> 0.72f
+    !selected && variant == "default" -> 0.92f
+    !selected -> 0.96f
+    else -> 1f
+  }
+
+  private fun dp(value: Int): Int = TypedValue.applyDimension(
+    TypedValue.COMPLEX_UNIT_DIP,
+    value.toFloat(),
+    context.resources.displayMetrics
+  ).toInt()
+
+  // ── End Marker Rendering ──────────────────────────────────────────────────────
 
   private fun hideMapOrnaments(mapView: com.mapbox.maps.MapView) {
     runCatching {
@@ -1033,26 +1416,91 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     )
   }
 
+  private fun applyCameraMode(reason: String) {
+    if (cameraMode.trim().lowercase() == "overview") {
+      moveCameraToOverviewInternal(reason)
+    } else {
+      resumeCameraFollowingInternal(reason)
+    }
+  }
+
+  private fun moveCameraToOverviewInternal(reason: String) {
+    val view = navigationView
+    if (view == null) {
+      setCameraFollowingState(false, reason)
+      return
+    }
+
+    var didRequestOverview = requestDropInCameraMode(view, "Overview")
+
+    if (!didRequestOverview) {
+      runCatching {
+        val api = view.api
+        val methods = api.javaClass.methods
+        val candidateNames = listOf(
+          "moveCameraToOverview",
+          "requestNavigationCameraToOverview",
+          "requestNavigationCameraOverview",
+          "showRouteOverview",
+          "showOverview",
+          "overview"
+        )
+        for (name in candidateNames) {
+          val method = methods.firstOrNull { it.name == name && it.parameterTypes.isEmpty() }
+          if (method != null) {
+            method.invoke(api)
+            didRequestOverview = true
+            break
+          }
+        }
+      }.onFailure { throwable ->
+        Log.w(TAG, "Failed to request overview camera ($EMBEDDED_BUILD)", throwable)
+      }
+    }
+
+    if (didRequestOverview) setCameraFollowingState(false, reason)
+  }
+
   private fun resumeCameraFollowingInternal(reason: String) {
     val view = navigationView ?: return
-    setCameraFollowingState(true, reason)
-    // Best effort across Drop-In versions.
+    var didResume = false
+
     runCatching {
-      val api = view.api
-      val methods = api.javaClass.methods
-      val candidateNames = listOf(
-        "moveCameraToFollowing",
-        "requestNavigationCameraToFollowing",
-        "recenterCamera",
-        "recenter"
+      view.api.recenterCamera()
+      didResume = true
+    }.onFailure { throwable ->
+      Log.w(TAG, "Failed to recenter Drop-In camera ($EMBEDDED_BUILD)", throwable)
+    }
+
+    if (!didResume) {
+      didResume = requestDropInCameraMode(view, "Following")
+    }
+
+    if (didResume) setCameraFollowingState(true, reason)
+  }
+
+  private fun requestDropInCameraMode(view: NavigationView, targetModeName: String): Boolean {
+    return runCatching {
+      val navigationContext = view.javaClass
+        .getMethod("getNavigationContext\$libnavui_dropin_release")
+        .invoke(view)
+      val store = navigationContext.javaClass.getMethod("getStore").invoke(navigationContext)
+      val actionClass = Class.forName("com.mapbox.navigation.ui.app.internal.camera.CameraAction\$SetCameraMode")
+      val targetModeClass = Class.forName("com.mapbox.navigation.ui.app.internal.camera.TargetCameraMode")
+      val targetModeInstance = Class
+        .forName("com.mapbox.navigation.ui.app.internal.camera.TargetCameraMode\$$targetModeName")
+        .getField("INSTANCE")
+        .get(null)
+      val action = actionClass.getConstructor(targetModeClass).newInstance(targetModeInstance)
+      val dispatch = store.javaClass.getMethod(
+        "dispatch",
+        Class.forName("com.mapbox.navigation.ui.app.internal.Action")
       )
-      for (name in candidateNames) {
-        val m = methods.firstOrNull { it.name == name && it.parameterTypes.isEmpty() }
-        if (m != null) {
-          m.invoke(api)
-          return@runCatching
-        }
-      }
+      dispatch.invoke(store, action)
+      true
+    }.getOrElse { throwable ->
+      Log.w(TAG, "Failed to dispatch Drop-In camera mode '$targetModeName' ($EMBEDDED_BUILD)", throwable)
+      false
     }
   }
 
