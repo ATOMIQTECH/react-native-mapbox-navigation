@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Enable for everyone on the team with:  git config core.hooksPath .githooks
+exec "$(git rev-parse --show-toplevel)/scripts/security-scan.sh" staged

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Warn-only: a merge has already happened by the time this runs, but if someone
+# pulled a poisoned commit you want to know immediately rather than at build.
+ROOT="$(git rev-parse --show-toplevel)"
+SCAN="$ROOT/scripts/security-scan.sh"
+[ -x "$SCAN" ] || exit 0
+if ! "$SCAN" tree >/dev/null 2>&1; then
+  echo ""
+  echo "WARNING: the tree you just merged trips the security scan."
+  echo "Run for details:  ./scripts/security-scan.sh tree"
+fi
+exit 0
