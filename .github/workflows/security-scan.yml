@@ -1,0 +1,32 @@
+# The enforcing gate. Local hooks are bypassable with --no-verify; this is not.
+# Make it mandatory: Settings -> Branches -> protect `main` -> require the
+# "scan" status check to pass before merging.
+name: security-scan
+
+on:
+  pull_request:
+  push:
+    branches: [main, master, production]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # range scans need history
+
+      - name: Scan the changes in this PR
+        if: github.event_name == 'pull_request'
+        run: |
+          chmod +x scripts/security-scan.sh
+          ./scripts/security-scan.sh range \
+            "origin/${{ github.base_ref }}...${{ github.event.pull_request.head.sha }}"
+
+      - name: Scan the whole tree
+        run: |
+          chmod +x scripts/security-scan.sh
+          ./scripts/security-scan.sh tree
