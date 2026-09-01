@@ -23,10 +23,24 @@ while read -r local_ref local_sha remote_ref remote_sha; do
       ;;
   esac
 
+  # The remote tip may not exist locally at all (remote ahead of us, or a fresh
+  # clone). Using it as a range base fails outright, so fall back to a base we
+  # actually have.
+  if [ "$remote_sha" != "$ZERO" ] \
+     && ! git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
+    echo "pre-push: remote tip $remote_sha is not in this clone (run: git fetch);" \
+         "scanning against the upstream base instead"
+    remote_sha="$ZERO"
+  fi
+
   if [ "$remote_sha" = "$ZERO" ]; then
     base=$(git merge-base "$local_sha" origin/HEAD 2>/dev/null \
         || git merge-base "$local_sha" origin/main 2>/dev/null || true)
-    range="${base:+$base..}$local_sha"
+    if [ -z "$base" ]; then
+      echo "pre-push: no common base found; the full-tree scan above is the check"
+      continue
+    fi
+    range="$base..$local_sha"
   else
     range="$remote_sha..$local_sha"
   fi

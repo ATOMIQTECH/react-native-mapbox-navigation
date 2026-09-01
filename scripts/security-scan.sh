@@ -28,6 +28,13 @@
 # Exit 0 clean, 1 findings, 2 usage error.
 set -uo pipefail
 
+LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+if [ ! -f "$LIBDIR/inspect-file.pl" ]; then
+  # Installed copies live at <repo>/scripts/security-scan.sh with lib alongside.
+  LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/security-scan-lib"
+fi
+[ -f "$LIBDIR/inspect-file.pl" ] || { echo "missing $LIBDIR/inspect-file.pl" >&2; exit 2; }
+
 MODE="${1:-staged}"
 RANGE="${2:-}"
 FAIL=0
@@ -35,7 +42,7 @@ WARN=0
 ALLOWFILE=".security-scan-allow"
 
 MAX_LINE=1000        # far above hand-written source, far below a real bundle
-MAX_RUN_SPACES=400   # the off-screen padding trick
+MAX_RUN_SPACES=100   # the off-screen padding trick (real sample used 273)
 MAX_HEX_IDENTS=25    # _0xabcd1234 density => obfuscator output
 MAX_ESCAPES=50       # \x27\x20 density => obfuscator output
 MAX_B64_RUN=512      # inline base64 blob
@@ -103,63 +110,19 @@ is_allowed() {
   [ -n "$sum" ] && grep -qxF -- "sha256:$sum" "$ALLOWFILE"
 }
 
-# Icon and payment-logo components carry legitimate inline SVG and data: URIs,
-# which are long lines and long base64 runs by nature. Recognise them by
-# content rather than by path, so a payload cannot hide behind a filename.
-looks_like_inline_asset() {
-  printf '%s' "$1" | grep -qE 'data:(image|font)/|<svg|<path|\bd="[Mm][ 0-9.,-]'
-}
 
-normalize() {
-  perl -0777 -pe '
-    s/\\x([0-9a-fA-F]{2})/chr(hex($1))/ge;
-    s/\\u\{?([0-9a-fA-F]{4})\}?/chr(hex($1))/ge;
-    $_ = lc $_;
-    s/[\x27\x22\x60,+\s]//g;
-    s/\\//g;
-  ' 2>/dev/null
-}
-
-# Static-decoded from the 2026-08 sample's obfuscated string table; see IOCS.md.
-# Written as they appear AFTER normalization.
-HIGH_FILE="$(mktemp -t repoguard-high)"
-CTX_FILE="$(mktemp -t repoguard-ctx)"
-trap 'rm -f "$HIGH_FILE" "$CTX_FILE"' EXIT
-
-cat > "$HIGH_FILE" <<'IOCEOF'
-eth_blocknumber
-eth_gettransactioncount
-eth_getblockbynumber
-ethereum-rpc.publicnode.com
-eth.drpc.org
-public.blastapi.io
-eth.blockscout.com
-1rpc.io/eth
-0xa322e5f3d311d3080e6f0121063e9adc2490ef1a
-x-payload-b64
-missingx-payload-b6
-emptypayloadbody
-:443/0x/ls
-:443/0x/cl
-module=account&action=txlist
-q4fzkxx{!h
-y-p_>d$0b&
-@^1aqk
-global[_v]=
-global[_h]=
-global[_h2]=
-global[_t_s]=
-global[_t_u]=
-global[r]=require
-global[m]=module
-IOCEOF
-
-cat > "$CTX_FILE" <<'CTXEOF'
-node:child_process
-windowshide
-detached:!![]
-fromcharcode
-CTXEOF
+LIST_FILE="$(mktemp -t repoguard-list)"
+trap 'rm -f "$LIST_FILE" "$LIST_FILE.err"' EXIT
+if ! files_to_check > "$LIST_FILE" 2>"$LIST_FILE.err"; then
+  echo "Security scan (mode: $MODE)"
+  echo "  ${RED}✗${RESET} cannot enumerate files to scan:"
+  sed 's/^/      /' "$LIST_FILE.err" >&2
+  echo ""
+  echo "${RED}${BOLD}SCAN FAILED${RESET} — refusing to report clean on an error."
+  rm -f "$LIST_FILE.err"
+  exit 2
+fi
+rm -f "$LIST_FILE.err"
 
 echo "Security scan (mode: $MODE)"
 CHECKED=0
@@ -198,121 +161,20 @@ while IFS= read -r f; do
   fi
   CHECKED=$((CHECKED+1))
 
-  raw=$(content_of "$f")
-  [ -z "$raw" ] && continue
+  g=0; is_guard_file "$f" && g=1
+  c=0; is_config "$f"     && c=1
 
-  ASSET=0
-  looks_like_inline_asset "$raw" && ASSET=1
-  OBFUSCATED=0
+  # One perl process per file does every content check. Anything it prints is a
+  # finding, tagged BLOCK or WARN.
+  while IFS='|' read -r kind msg; do
+    [ -z "${kind:-}" ] && continue
+    case "$kind" in
+      BLOCK) report  "$msg" ;;
+      WARN)  warning "$msg" ;;
+    esac
+  done < <(content_of "$f" | perl "$LIBDIR/inspect-file.pl" "$f" "$g" "$c")
 
-  # -- shape checks (survive payload regeneration) ---------------------------
-
-  longest=$(printf '%s' "$raw" | awk '{ if (length($0) > m) m = length($0) } END { print m+0 }')
-  if [ "${longest:-0}" -gt "$MAX_LINE" ]; then
-    if [ "$ASSET" -eq 1 ]; then
-      warning "$f — line of $longest chars, but the file holds inline SVG/data URIs"
-    else
-      report "$f — line of $longest chars (limit $MAX_LINE); padded-payload shape"
-      OBFUSCATED=1
-    fi
-  fi
-
-  # The padding trick itself: catches a payload split under the length limit.
-  # perl, not grep: BSD grep rejects {n,} above 255 and errors out.
-  if printf '%s' "$raw" | perl -0777 -ne "exit(/[ \\t]{$MAX_RUN_SPACES,}/ ? 0 : 1)"; then
-    report "$f — run of ${MAX_RUN_SPACES}+ whitespace chars; off-screen padding shape"
-    OBFUSCATED=1
-  fi
-
-  hexidents=$(printf '%s' "$raw" | grep -oE '_0x[0-9a-fA-F]{4,}' | wc -l | tr -d ' ')
-  if [ "${hexidents:-0}" -ge "$MAX_HEX_IDENTS" ]; then
-    report "$f — $hexidents hex-mangled identifiers; obfuscator output"; OBFUSCATED=1
-  fi
-
-  escapes=$(printf '%s' "$raw" | grep -oE '\\x[0-9a-fA-F]{2}' | wc -l | tr -d ' ')
-  if [ "${escapes:-0}" -ge "$MAX_ESCAPES" ]; then
-    report "$f — $escapes \\xNN escapes; obfuscator output"; OBFUSCATED=1
-  fi
-
-  if [ "$ASSET" -eq 0 ]; then
-    b64run=$(printf '%s' "$raw" | perl -0777 -ne "
-        my \$m = 0;
-        while (/([A-Za-z0-9+\/]{$MAX_B64_RUN,}={0,2})/g) { \$m = length(\$1) if length(\$1) > \$m }
-        print \$m;" 2>/dev/null)
-    if [ "${b64run:-0}" -ge "$MAX_B64_RUN" ]; then
-      report "$f — inline base64 blob of ${b64run} chars"; OBFUSCATED=1
-    fi
-  fi
-
-  norm=$(printf '%s' "$raw" | normalize)
-
-  # The string-array-rotation preamble every one of these samples ships with.
-  if ! is_guard_file "$f" \
-     && printf '%s' "$norm" | grep -qF 'push](' \
-     && printf '%s' "$norm" | grep -qF 'shift]()'; then
-    report "$f — string-array rotation preamble (push/shift); obfuscator output"
-    OBFUSCATED=1
-  fi
-
-  # -- indicators (normalized, so split literals rejoin) --------------------
-
-  if ! is_guard_file "$f"; then
-    hits=$(printf '%s' "$norm" | grep -oF -f "$HIGH_FILE" 2>/dev/null | sort -u | tr '\n' ' ')
-    [ -n "$hits" ] && report "$f — known payload indicators: $hits"
-
-    ctx=$(printf '%s' "$norm" | grep -oF -f "$CTX_FILE" 2>/dev/null | sort -u | tr '\n' ' ')
-    if [ -n "$ctx" ]; then
-      if [ "$OBFUSCATED" -eq 1 ]; then
-        report "$f — obfuscated AND using loader APIs: $ctx"
-      else
-        warning "$f — uses loader-adjacent APIs (normal in tooling): $ctx"
-      fi
-    fi
-  fi
-
-  # -- config files execute at build time: nothing below belongs in one ------
-
-  if is_config "$f"; then
-    ex=$(printf '%s' "$norm" | grep -oE 'child_process|eval\(|newfunction\(|spawnsync|\bspawn\(|atob\(|frombase64' \
-         | sort -u | tr '\n' ' ')
-    [ -n "$ex" ] && report "$f — config file contains runtime/exec APIs: $ex"
-    # createRequire is legitimate in modern ESM configs, so warn, do not block.
-    printf '%s' "$norm" | grep -qF 'createrequire' \
-      && warning "$f — config file uses createRequire; confirm it is yours"
-    # `eval` reached indirectly (obj[key](eval, src)) has no "eval(" to match.
-    printf '%s' "$norm" | grep -qE '\(eval,|\[eval\]|=eval;' \
-      && report "$f — config file passes eval as a value (indirect eval)"
-  fi
-
-  # -- npm lifecycle scripts: how this class of worm actually propagates -----
-
-  if [ "$f" = "package.json" ]; then
-    life=$(printf '%s' "$raw" | perl -0777 -ne '
-      if (/"scripts"\s*:\s*\{(.*?)\}/s) { $s=$1;
-        while ($s =~ /"(preinstall|install|postinstall|prepare|prepublish|prepublishOnly)"\s*:\s*"((?:[^"\\]|\\.)*)"/g) {
-          print "$1=$2\n";
-        }
-      }' 2>/dev/null)
-    while IFS= read -r L; do
-      [ -z "$L" ] && continue
-      if printf '%s' "$L" | grep -qiE 'node[[:space:]]+-e|curl|wget|base64|eval|child_process|\|[[:space:]]*(sh|bash)|chmod'; then
-        report "package.json — lifecycle script runs fetched or evaluated code: ${L%%=*}"
-      else
-        warning "package.json — lifecycle script present, confirm you added it: ${L%%=*}"
-      fi
-    done <<< "$life"
-  fi
-
-  # -- CI workflows: a second execution surface, with secrets attached -------
-
-  case "$f" in
-    .github/workflows/*)
-      printf '%s' "$raw" | grep -qE '(curl|wget)[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(sh|bash)' \
-        && report "$f — workflow pipes a download straight into a shell"
-      ;;
-  esac
-
-done < <(files_to_check)
+done < "$LIST_FILE"
 
 echo ""
 if [ "$FAIL" -ne 0 ]; then
