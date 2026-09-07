@@ -1,8 +1,25 @@
 import ExpoModulesCore
 import Foundation
+import MapboxCoreNavigation
 import MapboxNavigation
 
 public class MapboxNavigationModule: Module {
+  /// Events forwarded to JS module listeners via `add*Listener`.
+  static let moduleEventNames = [
+    "onLocationChange",
+    "onRouteProgressChange",
+    "onJourneyDataChange",
+    "onRouteChange",
+    "onCameraFollowingStateChange",
+    "onBannerInstruction",
+    "onArrive",
+    "onWaypointArrive",
+    "onOffRoute",
+    "onCancelNavigation",
+    "onError",
+    "onBottomSheetActionPress"
+  ]
+
   private var mute = false
   private var voiceVolume: Double = 1
   private var distanceUnit = "metric"
@@ -11,38 +28,61 @@ public class MapboxNavigationModule: Module {
   public func definition() -> ModuleDefinition {
     Name("MapboxNavigationModule")
 
-    Events(
-      "onLocationChange",
-      "onRouteProgressChange",
-      "onJourneyDataChange",
-      "onRouteChange",
-      "onCameraFollowingStateChange",
-      "onBannerInstruction",
-      "onArrive",
-      "onCancelNavigation",
-      "onError",
-      "onBottomSheetActionPress"
-    )
+    Events(MapboxNavigationModule.moduleEventNames)
 
+    // Relay view events to module listeners so the exported `add*Listener`
+    // helpers actually receive data. iOS previously sent no module events at
+    // all, leaving every helper silently dead.
+    OnCreate {
+      MapboxNavigationEventBridge.shared.setEmitter { [weak self] eventName, payload in
+        self?.sendEvent(eventName, payload)
+      }
+    }
+
+    OnDestroy {
+      MapboxNavigationEventBridge.shared.clearEmitter()
+    }
+
+    // Track subscriptions per event so the bridge can skip emitting entirely
+    // when nothing is listening.
+    for eventName in MapboxNavigationModule.moduleEventNames {
+      OnStartObserving(eventName) {
+        MapboxNavigationEventBridge.shared.startObserving(eventName)
+      }
+      OnStopObserving(eventName) {
+        MapboxNavigationEventBridge.shared.stopObserving(eventName)
+      }
+    }
+
+    // These previously only wrote to a private field and never reached the
+    // SDK, so voice/unit changes from JS were silently dropped on iOS.
+    // `NavigationSettings.shared` properties are observed by the SDK, so
+    // assigning them takes effect on the running session immediately.
     AsyncFunction("setMuted") { (muted: Bool, promise: Promise) in
       self.mute = muted
-      promise.resolve(nil)
+      DispatchQueue.main.async {
+        NavigationSettings.shared.voiceMuted = muted
+        promise.resolve(nil)
+      }
     }
 
     AsyncFunction("setVoiceVolume") { (volume: Double, promise: Promise) in
       let clamped = max(0, min(volume, 1))
       self.voiceVolume = clamped
-      promise.resolve(nil)
+      DispatchQueue.main.async {
+        NavigationSettings.shared.voiceVolume = Float(clamped)
+        promise.resolve(nil)
+      }
     }
 
     AsyncFunction("setDistanceUnit") { (unit: String, promise: Promise) in
       let normalized = unit.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-      if normalized == "imperial" {
-        self.distanceUnit = "imperial"
-      } else {
-        self.distanceUnit = "metric"
+      let imperial = normalized == "imperial"
+      self.distanceUnit = imperial ? "imperial" : "metric"
+      DispatchQueue.main.async {
+        NavigationSettings.shared.distanceUnit = imperial ? .mile : .kilometer
+        promise.resolve(nil)
       }
-      promise.resolve(nil)
     }
 
     AsyncFunction("setLanguage") { (language: String, promise: Promise) in
@@ -50,18 +90,20 @@ public class MapboxNavigationModule: Module {
       if !trimmed.isEmpty {
         self.language = trimmed
       }
+      // Spoken instruction language is fixed per route request on iOS, so this
+      // only affects routes requested after the change.
       promise.resolve(nil)
     }
 
     AsyncFunction("getNavigationSettings") { (promise: Promise) in
       let isFollowing = NavigationSessionRegistry.shared.isCurrentCameraFollowing()
       promise.resolve([
-        "isNavigating": false,
+        "isNavigating": NavigationSessionRegistry.shared.isSessionActive(),
         "isCameraFollowing": isFollowing,
         "isCameraNotFollowing": !isFollowing,
-        "mute": self.mute,
-        "voiceVolume": self.voiceVolume,
-        "distanceUnit": self.distanceUnit,
+        "mute": NavigationSettings.shared.voiceMuted,
+        "voiceVolume": Double(NavigationSettings.shared.voiceVolume),
+        "distanceUnit": NavigationSettings.shared.distanceUnit == .mile ? "imperial" : "metric",
         "language": self.language
       ])
     }
@@ -78,6 +120,11 @@ public class MapboxNavigationModule: Module {
       promise.resolve(resumed)
     }
 
+    AsyncFunction("advanceToNextWaypoint") { (promise: Promise) in
+      let advanced = NavigationSessionRegistry.shared.requestAdvanceLegCurrent()
+      promise.resolve(advanced)
+    }
+
     View(MapboxNavigationView.self) {
       Events(
         "onLocationChange",
@@ -87,6 +134,8 @@ public class MapboxNavigationModule: Module {
         "onCameraFollowingStateChange",
         "onBannerInstruction",
         "onArrive",
+        "onWaypointArrive",
+        "onOffRoute",
         "onCancelNavigation",
         "onError",
         "onBottomSheetActionPress"
@@ -214,6 +263,14 @@ public class MapboxNavigationModule: Module {
 
       Prop("language") { (view: MapboxNavigationView, language: String) in
         view.language = language
+      }
+
+      Prop("locationPuck") { (view: MapboxNavigationView, value: [String: Any]?) in
+        view.locationPuck = value
+      }
+
+      Prop("eventThrottleMs") { (view: MapboxNavigationView, value: Double) in
+        view.eventThrottleMs = value
       }
     }
   }

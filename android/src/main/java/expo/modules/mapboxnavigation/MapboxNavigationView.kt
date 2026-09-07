@@ -43,14 +43,18 @@ import com.mapbox.navigation.core.arrival.ArrivalObserver
 import com.mapbox.navigation.core.directions.session.RoutesObserver
 import com.mapbox.navigation.core.lifecycle.MapboxNavigationApp
 import com.mapbox.navigation.core.trip.session.BannerInstructionsObserver
+import com.mapbox.navigation.core.trip.session.LegIndexUpdatedCallback
 import com.mapbox.navigation.core.trip.session.LocationMatcherResult
 import com.mapbox.navigation.core.trip.session.LocationObserver
+import com.mapbox.navigation.core.trip.session.OffRouteObserver
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
 import com.mapbox.navigation.dropin.NavigationView
 import com.mapbox.navigation.dropin.RouteOptionsInterceptor
 import com.mapbox.navigation.dropin.map.MapViewObserver
 import com.mapbox.navigation.dropin.map.MapViewBinder
 import com.mapbox.navigation.dropin.navigationview.NavigationViewListener
+import com.mapbox.navigation.ui.maps.puck.LocationPuckOptions
+import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.MapView
 import com.mapbox.maps.plugin.Plugin
 import com.mapbox.maps.plugin.compass.CompassPlugin
@@ -167,6 +171,11 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private var showNativeRecenterButton = true
   private var showNativeCompassButton = true
   private var cameraMode = "following"
+  private var cameraPitch: Double? = null
+  private var cameraZoom: Double? = null
+  private var warnedDropInCameraOverride = false
+  private var locationPuckStates: Map<String, Map<String, Any>> = emptyMap()
+  private var appliedLocationPuckStates: Map<String, Map<String, Any>>? = null
 
   private var navigationView: NavigationView? = null
   private var placeholderView: TextView? = null
@@ -181,6 +190,19 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private var touchStartX = 0f
   private var touchStartY = 0f
   private val touchSlopPx = 8f * context.resources.displayMetrics.density
+  /**
+   * Minimum gap between the continuous, high-frequency events
+   * (`onLocationChange`, `onRouteProgressChange`, `onJourneyDataChange`).
+   *
+   * Mapbox emits these on every location fix, and each one crosses the bridge
+   * with a payload. On a long drive that is a meaningful amount of avoidable
+   * CPU, garbage and battery. Discrete events (arrival, banner, errors) are
+   * never throttled.
+   */
+  private var eventThrottleMs = 0L
+  private var lastLocationEmitAtMs = 0L
+  private var lastProgressEmitAtMs = 0L
+  private var lastJourneyEmitAtMs = 0L
   private var lastJourneyLocation: android.location.Location? = null
   private var lastJourneyProgress: RouteProgress? = null
   private var lastJourneyBanner: BannerInstructions? = null
@@ -192,6 +214,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   val onCameraFollowingStateChange by EventDispatcher()
   val onBannerInstruction by EventDispatcher()
   val onArrive by EventDispatcher()
+  val onWaypointArrive by EventDispatcher()
+  val onOffRoute by EventDispatcher()
   val onDestinationPreview by EventDispatcher()
   val onDestinationChanged by EventDispatcher()
   val onCancelNavigation by EventDispatcher()
@@ -239,6 +263,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       }
       hideMapOrnaments(mapView)
       renderNavigationMarkersIfPossible()
+      applyLocationPuck()
+      applyCameraPitchZoom("map-attached")
     }
 
     override fun onDetached(mapView: MapView) {
@@ -250,13 +276,13 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   }
 
   private val navigationViewListener = object : NavigationViewListener() {
-    override fun onDestinationChanged(destination: Point?) {
+    override fun dispatchDestinationChanged(destination: Point?) {
       val point = destination ?: return
-      onDestinationChanged(mapOf("latitude" to point.latitude(), "longitude" to point.longitude()))
+      dispatchDestinationChanged(mapOf("latitude" to point.latitude(), "longitude" to point.longitude()))
     }
 
-    override fun onDestinationPreview() {
-      onDestinationPreview(mapOf("active" to true))
+    override fun dispatchDestinationPreview() {
+      dispatchDestinationPreview(mapOf("active" to true))
       hideNativeBottomPanelIfRequested(navigationView)
       scheduleBottomPanelHidePasses()
     }
@@ -294,14 +320,14 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
     override fun onRouteFetchFailed(reasons: List<RouterFailure>, routeOptions: RouteOptions) {
       val message = reasons.joinToString(", ") { it.message ?: it.toString() }
-      onError(mapOf("code" to "ROUTE_ERROR", "message" to "Route fetch failed: $message"))
+      dispatchError(mapOf("code" to "ROUTE_ERROR", "message" to "Route fetch failed: $message"))
       showPlaceholder("Route fetch failed.\n$message")
       hasRequestedRoute = false
     }
 
     override fun onRouteFetchCanceled(routeOptions: RouteOptions, routerOrigin: RouterOrigin) {
       hasRequestedRoute = false
-      onError(
+      dispatchError(
         mapOf(
           "code" to "ROUTE_FETCH_CANCELED",
           "message" to "Route fetch canceled (origin: $routerOrigin)."
@@ -312,7 +338,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     override fun onRouteFetchSuccessful(routes: List<NavigationRoute>) {
       // If Drop-In decides to fetch routes internally (e.g. user interaction), that's fine.
       if (routes.isEmpty()) return
-      emitRouteChange(routes.first())
+      emitRouteChangeFrom(routes.first())
     }
   }
 
@@ -321,8 +347,12 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
     override fun onNewLocationMatcherResult(locationMatcherResult: LocationMatcherResult) {
       val location = locationMatcherResult.enhancedLocation
+      // Always keep the latest fix for the journey snapshot, even when the
+      // outgoing event itself is throttled.
       lastJourneyLocation = location
-      onLocationChange(
+      if (!shouldEmitThrottled(lastLocationEmitAtMs)) return
+      lastLocationEmitAtMs = nowMs()
+      dispatchLocationChange(
         mapOf(
           "latitude" to location.latitude,
           "longitude" to location.longitude,
@@ -338,47 +368,102 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private val bannerInstructionsObserver = BannerInstructionsObserver { banner ->
     lastJourneyBanner = banner
-    emitBannerInstruction(banner)
+    emitBannerInstructionFrom(banner)
     emitJourneySnapshot()
   }
 
-  private fun emitArrivalIfNeeded() {
+  private fun emitArrivalIfNeeded(routeProgress: RouteProgress? = null) {
     if (hasEmittedArrival) return
     hasEmittedArrival = true
     val name = (destination?.get("name") as? String)?.trim()?.takeIf { it.isNotEmpty() }
-    onArrive(mapOf("name" to (name ?: "Destination")))
+    dispatchArrive(
+      mapOf(
+        "index" to routeProgress?.currentLegProgress?.legIndex,
+        "name" to (name ?: "Destination"),
+        "isFinalDestination" to true,
+        "remainingWaypoints" to (routeProgress?.remainingWaypoints ?: 0)
+      )
+    )
   }
 
   private val routeProgressObserver = RouteProgressObserver { progress: RouteProgress ->
     lastJourneyProgress = progress
     lastJourneyBanner = progress.bannerInstructions ?: lastJourneyBanner
-    onRouteProgressChange(
-      mapOf(
-        "distanceTraveled" to progress.distanceTraveled.toDouble(),
-        "distanceRemaining" to progress.distanceRemaining.toDouble(),
-        "durationRemaining" to progress.durationRemaining,
-        "fractionTraveled" to progress.fractionTraveled.toDouble()
+
+    if (shouldEmitThrottled(lastProgressEmitAtMs)) {
+      lastProgressEmitAtMs = nowMs()
+      dispatchRouteProgressChange(
+        mapOf(
+          "distanceTraveled" to progress.distanceTraveled.toDouble(),
+          "distanceRemaining" to progress.distanceRemaining.toDouble(),
+          "durationRemaining" to progress.durationRemaining,
+          "fractionTraveled" to progress.fractionTraveled.toDouble(),
+          "legIndex" to (progress.currentLegProgress?.legIndex ?: 0)
+        )
       )
-    )
-    if (!hasEmittedArrival && progress.distanceRemaining <= 5.0) {
-      emitArrivalIfNeeded()
     }
-    emitBannerInstruction(progress.bannerInstructions)
+
+    // Arrival and banner changes are discrete and must never be throttled.
+    if (!hasEmittedArrival && progress.distanceRemaining <= 5.0) {
+      emitArrivalIfNeeded(progress)
+    }
+    emitBannerInstructionFrom(progress.bannerInstructions)
     emitJourneySnapshot()
+  }
+
+  /**
+   * Emits when the user leaves (or rejoins) the active route.
+   *
+   * Mapbox detects this and reroutes internally, but the app had no way to
+   * observe it — useful for showing a "rerouting" indicator.
+   */
+  private val offRouteObserver = OffRouteObserver { offRoute ->
+    dispatchOffRoute(mapOf("offRoute" to offRoute))
   }
 
   private val arrivalObserver = object : ArrivalObserver {
     override fun onFinalDestinationArrival(routeProgress: RouteProgress) {
-      emitArrivalIfNeeded()
+      emitArrivalIfNeeded(routeProgress)
     }
 
-    override fun onNextRouteLegStart(routeLegProgress: com.mapbox.navigation.base.trip.model.RouteLegProgress) = Unit
-    override fun onWaypointArrival(routeProgress: RouteProgress) = Unit
+    /**
+     * Intermediate stop reached. Previously a no-op, so multi-stop routes had no
+     * way to observe waypoint arrivals at all.
+     */
+    override fun onWaypointArrival(routeProgress: RouteProgress) {
+      dispatchWaypointArrive(
+        mapOf(
+          "index" to routeProgress.currentLegProgress?.legIndex,
+          "name" to (currentLegDestinationName(routeProgress) ?: ""),
+          "isFinalDestination" to false,
+          "remainingWaypoints" to routeProgress.remainingWaypoints
+        )
+      )
+    }
+
+    /**
+     * Intentionally not surfaced as an event.
+     *
+     * This fires right after `onWaypointArrival` (and after a programmatic
+     * `advanceToNextWaypoint()`), so emitting here would double-report a single
+     * stop. Leg transitions are observable via `RouteProgress.legIndex`.
+     */
+    override fun onNextRouteLegStart(
+      routeLegProgress: com.mapbox.navigation.base.trip.model.RouteLegProgress
+    ) = Unit
+  }
+
+  /** Best-effort name for the stop that was just reached. */
+  private fun currentLegDestinationName(routeProgress: RouteProgress): String? {
+    val legIndex = routeProgress.currentLegProgress?.legIndex ?: return null
+    val wps = waypoints
+    // `waypoints` holds the intermediate stops, so leg N ends at index N.
+    return (wps?.getOrNull(legIndex)?.get("name") as? String)?.trim()?.takeIf { it.isNotEmpty() }
   }
 
   private val routesObserver = RoutesObserver { routeUpdateResult ->
     routeUpdateResult.navigationRoutes.firstOrNull()?.let { route ->
-      emitRouteChange(route)
+      emitRouteChangeFrom(route)
     }
   }
 
@@ -409,7 +494,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     hasEmittedArrival = false
     hasRequestedRoute = false
     if (enabled) {
-      onDestinationChanged(dest.toAnyPointOrNull()?.let { mapOf("latitude" to it.latitude(), "longitude" to it.longitude()) } ?: emptyMap())
+      dispatchDestinationChanged(dest.toAnyPointOrNull()?.let { mapOf("latitude" to it.latitude(), "longitude" to it.longitude()) } ?: emptyMap())
       startIfReady()
     }
   }
@@ -418,6 +503,44 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     waypoints = wps
     hasRequestedRoute = false
     if (enabled) startIfReady()
+  }
+
+  /**
+   * Advance the active route to the next leg on a multi-waypoint route without
+   * restarting the session. Driven by a business event (e.g. a passenger is
+   * picked up/dropped off) rather than physical arrival. Runs the SDK call on
+   * the main thread; returns whether a session was present to accept it.
+   *
+   * `navigateNextRouteLeg` advances relative to the SDK's own current leg and
+   * reports success via the callback (false when already on the final leg), so
+   * sequential calls advance correctly and no manual leg-count guard is needed.
+   */
+  private fun advanceToNextLeg(): Boolean {
+    if (mapboxNavigation == null) return false
+    mainHandler.post {
+      val nav = mapboxNavigation ?: return@post
+      runCatching {
+        nav.navigateNextRouteLeg(object : LegIndexUpdatedCallback {
+          override fun onLegIndexUpdatedCallback(success: Boolean) {
+            if (!success) {
+              Log.w(TAG, "navigateNextRouteLeg did not advance (already on final leg?)")
+            }
+          }
+        })
+      }.onFailure { Log.w(TAG, "navigateNextRouteLeg failed: ${it.message}") }
+    }
+    return true
+  }
+
+  fun setEventThrottleMs(value: Double) {
+    eventThrottleMs = if (value.isFinite()) value.coerceIn(0.0, 10_000.0).toLong() else 0L
+  }
+
+  fun setLocationPuck(puck: Map<String, Any>?) {
+    val nextStates = LocationPuckFactory.parseStates(puck)
+    if (nextStates == locationPuckStates) return
+    locationPuckStates = nextStates
+    applyLocationPuck()
   }
 
   fun setNavigationMarkers(markers: List<Map<String, Any>>?) {
@@ -460,8 +583,17 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     cameraMode = if (normalized == "overview") "overview" else "following"
     applyCameraMode("prop")
   }
-  fun setCameraPitch(pitch: Double) = Unit
-  fun setCameraZoom(zoom: Double) = Unit
+  fun setCameraPitch(pitch: Double) {
+    cameraPitch = pitch.takeIf { it.isFinite() }?.coerceIn(0.0, 85.0)
+    // Only nudge the camera itself — going through applyCameraMode() would also
+    // recenter, overriding a manual pan the user is in the middle of.
+    applyCameraPitchZoom("pitch")
+  }
+
+  fun setCameraZoom(zoom: Double) {
+    cameraZoom = zoom.takeIf { it.isFinite() }?.coerceIn(1.0, 22.0)
+    applyCameraPitchZoom("zoom")
+  }
 
   fun setMapStyleUri(styleUri: String) {
     mapStyleUri = styleUri
@@ -557,6 +689,101 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     applyDropInOptions()
   }
 
+  // ---------------------------------------------------------------------------
+  // Event dispatch
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Send an event to both the view prop callback and the module-level listeners
+   * that back the exported `add*Listener` helpers.
+   *
+   * The view previously dispatched only view events, so every `add*Listener`
+   * helper silently received nothing. The bridge drops the payload when JS has
+   * no subscription for that event.
+   */
+
+  private fun dispatchLocationChange(payload: Map<String, Any?> = emptyMap()) {
+    onLocationChange(payload)
+    MapboxNavigationEventBridge.emit("onLocationChange", payload)
+  }
+
+  private fun dispatchRouteProgressChange(payload: Map<String, Any?> = emptyMap()) {
+    onRouteProgressChange(payload)
+    MapboxNavigationEventBridge.emit("onRouteProgressChange", payload)
+  }
+
+  private fun dispatchJourneyDataChange(payload: Map<String, Any?> = emptyMap()) {
+    onJourneyDataChange(payload)
+    MapboxNavigationEventBridge.emit("onJourneyDataChange", payload)
+  }
+
+  private fun dispatchRouteChange(payload: Map<String, Any?> = emptyMap()) {
+    onRouteChange(payload)
+    MapboxNavigationEventBridge.emit("onRouteChange", payload)
+  }
+
+  private fun dispatchCameraFollowingStateChange(payload: Map<String, Any?> = emptyMap()) {
+    onCameraFollowingStateChange(payload)
+    MapboxNavigationEventBridge.emit("onCameraFollowingStateChange", payload)
+  }
+
+  private fun dispatchBannerInstruction(payload: Map<String, Any?> = emptyMap()) {
+    onBannerInstruction(payload)
+    MapboxNavigationEventBridge.emit("onBannerInstruction", payload)
+  }
+
+  private fun dispatchArrive(payload: Map<String, Any?> = emptyMap()) {
+    onArrive(payload)
+    MapboxNavigationEventBridge.emit("onArrive", payload)
+  }
+
+  private fun dispatchWaypointArrive(payload: Map<String, Any?> = emptyMap()) {
+    onWaypointArrive(payload)
+    MapboxNavigationEventBridge.emit("onWaypointArrive", payload)
+  }
+
+  private fun dispatchOffRoute(payload: Map<String, Any?> = emptyMap()) {
+    onOffRoute(payload)
+    MapboxNavigationEventBridge.emit("onOffRoute", payload)
+  }
+
+  private fun dispatchDestinationPreview(payload: Map<String, Any?> = emptyMap()) {
+    onDestinationPreview(payload)
+    MapboxNavigationEventBridge.emit("onDestinationPreview", payload)
+  }
+
+  private fun dispatchDestinationChanged(payload: Map<String, Any?> = emptyMap()) {
+    onDestinationChanged(payload)
+    MapboxNavigationEventBridge.emit("onDestinationChanged", payload)
+  }
+
+  private fun dispatchCancelNavigation(payload: Map<String, Any?> = emptyMap()) {
+    onCancelNavigation(payload)
+    MapboxNavigationEventBridge.emit("onCancelNavigation", payload)
+  }
+
+  private fun dispatchError(payload: Map<String, Any?> = emptyMap()) {
+    onError(payload)
+    MapboxNavigationEventBridge.emit("onError", payload)
+  }
+
+  private fun dispatchBottomSheetActionPress(payload: Map<String, Any?> = emptyMap()) {
+    onBottomSheetActionPress(payload)
+    MapboxNavigationEventBridge.emit("onBottomSheetActionPress", payload)
+  }
+  /**
+   * Whether enough time has passed to emit a throttled event.
+   *
+   * `lastAtMs` is read and written by the caller so each stream throttles
+   * independently.
+   */
+  private fun shouldEmitThrottled(lastAtMs: Long): Boolean {
+    if (eventThrottleMs <= 0L) return true
+    return android.os.SystemClock.elapsedRealtime() - lastAtMs >= eventThrottleMs
+  }
+
+  private fun nowMs(): Long = android.os.SystemClock.elapsedRealtime()
+
   private fun hasLocationPermission(): Boolean {
     val fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
     val coarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -566,7 +793,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private fun ensureSession(): Boolean {
     if (ownsNavigationSession) return true
     if (!NavigationSessionRegistry.acquire(sessionOwner)) {
-      onError(
+      dispatchError(
         mapOf(
           "code" to "NAVIGATION_SESSION_CONFLICT",
           "message" to "Another embedded navigation session is already active. Stop other embedded navigation before mounting this view."
@@ -587,6 +814,9 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
     NavigationSessionRegistry.registerCameraFollowingProvider(sessionOwner) {
       isCameraFollowing
+    }
+    NavigationSessionRegistry.registerAdvanceLegHandler(sessionOwner) {
+      advanceToNextLeg()
     }
     return true
   }
@@ -611,14 +841,14 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private fun ensureNavigationView() {
     if (navigationView != null) return
     val token = runCatching { getMapboxAccessToken() }.getOrElse { throwable ->
-      onError(mapOf("code" to "MISSING_ACCESS_TOKEN", "message" to (throwable.message ?: "Missing mapbox_access_token")))
+      dispatchError(mapOf("code" to "MISSING_ACCESS_TOKEN", "message" to (throwable.message ?: "Missing mapbox_access_token")))
       showPlaceholder("Missing Mapbox access token.\nCheck EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN + prebuild.")
       return
     }
 
     val activity = expoAppContext.currentActivity as? AppCompatActivity
     if (activity == null) {
-      onError(
+      dispatchError(
         mapOf(
           "code" to "NO_ACTIVITY",
           "message" to "Embedded navigation requires an active AppCompatActivity host."
@@ -633,7 +863,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     val view = try {
       NavigationView(activity, null, token, vmo)
     } catch (e: Throwable) {
-      onError(mapOf("code" to "NAVIGATION_INIT_FAILED", "message" to (e.message ?: "Failed to create Drop-In NavigationView")))
+      dispatchError(mapOf("code" to "NAVIGATION_INIT_FAILED", "message" to (e.message ?: "Failed to create Drop-In NavigationView")))
       showPlaceholder("Failed to create Mapbox NavigationView.\n${e.message ?: ""}".trim())
       return
     }
@@ -665,6 +895,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     scheduleBottomPanelHidePasses()
     hidePlaceholder()
     applyDropInOptions()
+    applyLocationPuck()
   }
 
   private fun scheduleLayoutNudges() {
@@ -706,12 +937,12 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     if (mapboxNavigation != null) return
 
     val nav = runCatching { MapboxNavigationApp.current() }.getOrElse { throwable ->
-      onError(mapOf("code" to "NAVIGATION_INIT_FAILED", "message" to (throwable.message ?: "Failed to init MapboxNavigation")))
+      dispatchError(mapOf("code" to "NAVIGATION_INIT_FAILED", "message" to (throwable.message ?: "Failed to init MapboxNavigation")))
       showPlaceholder("Failed to init navigation.\n${throwable.message ?: ""}".trim())
       return
     } ?: run {
       val message = "MapboxNavigationApp is not attached yet."
-      onError(mapOf("code" to "NAVIGATION_INIT_FAILED", "message" to message))
+      dispatchError(mapOf("code" to "NAVIGATION_INIT_FAILED", "message" to message))
       showPlaceholder("Failed to init navigation.\n$message")
       return
     }
@@ -722,6 +953,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     nav.registerBannerInstructionsObserver(bannerInstructionsObserver)
     nav.registerArrivalObserver(arrivalObserver)
     nav.registerRoutesObserver(routesObserver)
+    nav.registerOffRouteObserver(offRouteObserver)
 
     MapboxAudioGuidanceController.setMuted(mute)
     MapboxAudioGuidanceController.setVoiceVolume(voiceVolume)
@@ -733,7 +965,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     Log.i(TAG, "startIfReady ($EMBEDDED_BUILD): enabled=true hasPerm=${hasLocationPermission()} ownsSession=$ownsNavigationSession")
     if (!hasLocationPermission()) {
       showPlaceholder("Location permission required.\nGrant ACCESS_FINE_LOCATION to start embedded navigation.")
-      onError(mapOf("code" to "LOCATION_PERMISSION_REQUIRED", "message" to "Embedded navigation requires location permission."))
+      dispatchError(mapOf("code" to "LOCATION_PERMISSION_REQUIRED", "message" to "Embedded navigation requires location permission."))
       return
     }
     if (!ensureSession()) {
@@ -807,7 +1039,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         requestAndStartPreviewFromCoordinates(view, nav, coordinates)
       } else {
         hasRequestedRoute = false
-        onError(
+        dispatchError(
           mapOf(
             "code" to "ROUTE_ERROR",
             "message" to "Failed to start route preview: $message"
@@ -830,7 +1062,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   ) {
     if (coordinates.size < 2) {
       hasRequestedRoute = false
-      onError(mapOf("code" to "ROUTE_ERROR", "message" to "At least origin and destination are required."))
+      dispatchError(mapOf("code" to "ROUTE_ERROR", "message" to "At least origin and destination are required."))
       showPlaceholder("Missing origin/destination for route preview.")
       return
     }
@@ -852,15 +1084,15 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         override fun onRoutesReady(routes: List<NavigationRoute>, routerOrigin: RouterOrigin) {
           if (routes.isEmpty()) {
             hasRequestedRoute = false
-            onError(mapOf("code" to "NO_ROUTE", "message" to "No route found"))
+            dispatchError(mapOf("code" to "NO_ROUTE", "message" to "No route found"))
             showPlaceholder("No route found.")
             return
           }
-          emitRouteChange(routes.first())
+          emitRouteChangeFrom(routes.first())
           val expected = view.api.startRoutePreview(routes)
           if (expected.isError) {
             hasRequestedRoute = false
-            onError(
+            dispatchError(
               mapOf(
                 "code" to "ROUTE_ERROR",
                 "message" to "Failed to start route preview: ${expected.error?.message}"
@@ -877,13 +1109,13 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         override fun onFailure(reasons: List<RouterFailure>, routeOptions: RouteOptions) {
           hasRequestedRoute = false
           val message = reasons.joinToString(", ") { it.message ?: it.toString() }
-          onError(mapOf("code" to "ROUTE_ERROR", "message" to "Route fetch failed: $message"))
+          dispatchError(mapOf("code" to "ROUTE_ERROR", "message" to "Route fetch failed: $message"))
           showPlaceholder("Route fetch failed.\n$message")
         }
 
         override fun onCanceled(routeOptions: RouteOptions, routerOrigin: RouterOrigin) {
           hasRequestedRoute = false
-          onError(mapOf("code" to "ROUTE_FETCH_CANCELED", "message" to "Route fetch canceled (origin: $routerOrigin)."))
+          dispatchError(mapOf("code" to "ROUTE_FETCH_CANCELED", "message" to "Route fetch canceled (origin: $routerOrigin)."))
         }
       }
     )
@@ -911,6 +1143,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       runCatching { nav.unregisterBannerInstructionsObserver(bannerInstructionsObserver) }
       runCatching { nav.unregisterArrivalObserver(arrivalObserver) }
       runCatching { nav.unregisterRoutesObserver(routesObserver) }
+      runCatching { nav.unregisterOffRouteObserver(offRouteObserver) }
       runCatching { nav.setNavigationRoutes(emptyList()) }
       // Clearing routes alone leaves the shared MapboxNavigation instance in
       // Free Drive mode, so its foreground-service notification ("Free Drive
@@ -927,7 +1160,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     lastJourneyProgress = null
     lastJourneyBanner = null
     setCameraFollowingState(true, "stop")
-    if (emitCancel) onCancelNavigation(emptyMap())
+    if (emitCancel) dispatchCancelNavigation(emptyMap())
     releaseSession()
   }
 
@@ -1412,7 +1645,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private fun setCameraFollowingState(next: Boolean, reason: String) {
     if (isCameraFollowing == next) return
     isCameraFollowing = next
-    onCameraFollowingStateChange(
+    dispatchCameraFollowingStateChange(
       mapOf(
         "isCameraFollowing" to next,
         "isCameraNotFollowing" to !next,
@@ -1421,12 +1654,81 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     )
   }
 
+  /**
+   * Apply `cameraPitch` / `cameraZoom` directly to the map camera.
+   *
+   * The Drop-In UI owns its own NavigationCamera and recomputes the viewport on
+   * every location update while following, so these values reliably stick only
+   * while the camera is idle or in overview. That is still a real improvement
+   * over the previous behaviour, where both setters were no-ops.
+   */
+  private fun applyCameraPitchZoom(reason: String) {
+    if (cameraPitch == null && cameraZoom == null) return
+    val mapView = attachedMapView ?: return
+
+    runCatching {
+      val options = CameraOptions.Builder().apply {
+        cameraPitch?.let { pitch(it) }
+        cameraZoom?.let { zoom(it) }
+      }.build()
+      mapView.mapboxMap.setCamera(options)
+    }.onFailure { throwable ->
+      Log.w(TAG, "Failed to apply camera pitch/zoom ($reason)", throwable)
+    }
+
+    if (!warnedDropInCameraOverride && cameraMode.trim().lowercase() != "overview") {
+      warnedDropInCameraOverride = true
+      Log.i(
+        TAG,
+        "cameraPitch/cameraZoom applied, but the Drop-In navigation camera may " +
+          "override them while actively following the user."
+      )
+    }
+  }
+
+  /** Push the configured pucks into the Drop-In style customization. */
+  private fun applyLocationPuck() {
+    val view = navigationView ?: return
+    // Asset loading is async; avoid rebuilding for an unchanged configuration.
+    if (appliedLocationPuckStates == locationPuckStates) return
+    val requested = locationPuckStates
+
+    if (requested.isEmpty()) {
+      // The prop was cleared — restore the SDK defaults rather than leaving the
+      // previously applied custom puck in place.
+      if (appliedLocationPuckStates != null) {
+        runCatching {
+          view.customizeViewStyles {
+            locationPuckOptions =
+              LocationPuckOptions.Builder(context).build()
+          }
+          appliedLocationPuckStates = null
+        }.onFailure { throwable ->
+          Log.w(TAG, "Failed to restore the default location puck", throwable)
+        }
+      }
+      return
+    }
+
+    LocationPuckFactory.buildOptions(context, requested) { options ->
+      // A newer configuration may have arrived while assets were loading.
+      if (locationPuckStates !== requested) return@buildOptions
+      runCatching {
+        view.customizeViewStyles { locationPuckOptions = options }
+        appliedLocationPuckStates = requested
+      }.onFailure { throwable ->
+        Log.w(TAG, "Failed to apply custom location puck", throwable)
+      }
+    }
+  }
+
   private fun applyCameraMode(reason: String) {
     if (cameraMode.trim().lowercase() == "overview") {
       moveCameraToOverviewInternal(reason)
     } else {
       resumeCameraFollowingInternal(reason)
     }
+    applyCameraPitchZoom(reason)
   }
 
   private fun moveCameraToOverviewInternal(reason: String) {
@@ -1573,6 +1875,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   }
 
   private fun emitJourneySnapshot() {
+    if (!shouldEmitThrottled(lastJourneyEmitAtMs)) return
+    lastJourneyEmitAtMs = nowMs()
     val location = lastJourneyLocation
     emitJourneyData(
       banner = lastJourneyBanner,
@@ -1586,7 +1890,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     )
   }
 
-  private fun emitBannerInstruction(instruction: BannerInstructions?) {
+  private fun emitBannerInstructionFrom(instruction: BannerInstructions?) {
     val primary = instruction?.primary()?.text()?.trim().orEmpty()
     if (primary.isEmpty()) return
     val payload = mutableMapOf<String, Any>("primaryText" to primary)
@@ -1595,7 +1899,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       payload["secondaryText"] = secondary
     }
     payload["stepDistanceRemaining"] = instruction?.distanceAlongGeometry() ?: 0.0
-    onBannerInstruction(payload)
+    dispatchBannerInstruction(payload)
   }
 
   private fun emitJourneyData(
@@ -1631,10 +1935,10 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       payload["fractionTraveled"] = progress.fractionTraveled.toDouble().coerceIn(0.0, 1.0)
       payload["completionPercent"] = Math.round(progress.fractionTraveled.toDouble().coerceIn(0.0, 1.0) * 100.0).toInt()
     }
-    onJourneyDataChange(payload)
+    dispatchJourneyDataChange(payload)
   }
 
-  private fun emitRouteChange(route: NavigationRoute) {
+  private fun emitRouteChangeFrom(route: NavigationRoute) {
     val geometry = route.directionsRoute.geometry() ?: return
     val points = runCatching { PolylineUtils.decode(geometry, 6) }.getOrElse { return }
     if (points.isEmpty()) return
@@ -1644,7 +1948,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         "longitude" to p.longitude()
       )
     }
-    onRouteChange(mapOf("coordinates" to coords))
+    dispatchRouteChange(mapOf("coordinates" to coords))
   }
 
   private fun parseWaypoints(value: List<Map<String, Any>>?): List<Point> {

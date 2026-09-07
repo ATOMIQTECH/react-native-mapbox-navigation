@@ -1,5 +1,13 @@
 import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core'
-import { Fragment, isValidElement, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type ComponentType,
+  Fragment,
+  isValidElement,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import {
   PanResponder,
   Platform,
@@ -29,18 +37,55 @@ import type {
   MapboxNavigationViewProps,
   NavigationError,
   NavigationSettings,
+  OffRouteEvent,
   RouteChangeEvent,
   RouteProgress,
   Subscription,
 } from './MapboxNavigation.types'
+import { type NativeLocationPuckOptions, resolveLocationPuck } from './resolveLocationPuck'
 
-const MapboxNavigationModule =
-  requireNativeModule<MapboxNavigationModuleType>('MapboxNavigationModule')
+/**
+ * Resolve the native module lazily.
+ *
+ * `requireNativeModule` throws when the native module is not linked, and
+ * calling it at import time meant that merely importing this package crashed on
+ * web, in Jest, and in Expo Go. Deferring the lookup keeps imports safe and
+ * surfaces a clear error only when an API is actually used.
+ */
+let cachedNativeModule: MapboxNavigationModuleType | undefined
 
-const MapboxNavigationNativeView = requireNativeViewManager('MapboxNavigationModule')
+function getNativeModule(): MapboxNavigationModuleType {
+  if (cachedNativeModule === undefined) {
+    try {
+      cachedNativeModule = requireNativeModule<MapboxNavigationModuleType>('MapboxNavigationModule')
+    } catch (error) {
+      throw new Error(
+        '[react-native-mapbox-navigation] The native module is not available. ' +
+          'This package requires a custom native build (expo prebuild / EAS Build) ' +
+          'and does not work in Expo Go or on web. ' +
+          `Original error: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+  }
+  return cachedNativeModule
+}
 
-const emitter = MapboxNavigationModule as unknown as {
-  addListener: (eventName: string, listener: (...args: any[]) => void) => Subscription
+let cachedNativeView: ComponentType<NativeViewProps> | undefined
+
+function getNativeView(): ComponentType<NativeViewProps> {
+  if (cachedNativeView === undefined) {
+    cachedNativeView = requireNativeViewManager<NativeViewProps>('MapboxNavigationModule')
+  }
+  return cachedNativeView
+}
+
+const emitter = {
+  addListener: (eventName: string, listener: (...args: any[]) => void): Subscription =>
+    (
+      getNativeModule() as unknown as {
+        addListener: (name: string, cb: (...args: any[]) => void) => Subscription
+      }
+    ).addListener(eventName, listener),
 }
 
 function unwrapNativeEventPayload<T>(payload: unknown): T | undefined {
@@ -89,6 +134,33 @@ function formatDuration(seconds: number): string {
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
 }
 
+/**
+ * Format a distance in metres for the overlay sheet.
+ *
+ * The overlay previously always rendered raw metres, ignoring `distanceUnit`
+ * and showing values like `12480 m`.
+ */
+function formatDistance(meters: number, unit?: 'metric' | 'imperial'): string {
+  if (!Number.isFinite(meters) || meters < 0) {
+    return '--'
+  }
+
+  if (unit === 'imperial') {
+    const feet = meters * 3.28084
+    if (feet < 1000) {
+      return `${Math.round(feet / 10) * 10} ft`
+    }
+    const miles = meters / 1609.344
+    return `${miles < 10 ? miles.toFixed(1) : Math.round(miles)} mi`
+  }
+
+  if (meters < 1000) {
+    return `${Math.round(meters / 10) * 10} m`
+  }
+  const km = meters / 1000
+  return `${km < 10 ? km.toFixed(1) : Math.round(km)} km`
+}
+
 function formatEta(durationRemainingSeconds?: number): string | undefined {
   if (!Number.isFinite(durationRemainingSeconds ?? Number.NaN)) {
     return undefined
@@ -101,9 +173,20 @@ function formatEta(durationRemainingSeconds?: number): string | undefined {
   return `Arrive ${time}`
 }
 
+/**
+ * The prop shape handed to the native view.
+ *
+ * Diverges from the public props: overlay-only props are stripped and
+ * `locationPuck` is flattened into its per-state native form.
+ */
+type NativeViewProps = Omit<MapboxNavigationViewProps, 'locationPuck'> &
+  ViewProps & {
+    locationPuck?: NativeLocationPuckOptions
+  }
+
 function normalizeViewProps(
   props: MapboxNavigationViewProps & ViewProps
-): MapboxNavigationViewProps & ViewProps {
+): NativeViewProps {
   const overlayModeActive =
     props.bottomSheet?.enabled !== false && props.bottomSheet?.mode === 'overlay'
   let showsTripProgress = props.showsTripProgress
@@ -194,6 +277,22 @@ function normalizeViewProps(
         }
       }
     : undefined
+  const wrappedOnWaypointArrive = props.onWaypointArrive
+    ? (event: unknown) => {
+        const payload = unwrapNativeEventPayload<ArrivalEvent>(event)
+        if (payload) {
+          props.onWaypointArrive?.(payload)
+        }
+      }
+    : undefined
+  const wrappedOnOffRoute = props.onOffRoute
+    ? (event: unknown) => {
+        const payload = unwrapNativeEventPayload<OffRouteEvent>(event)
+        if (payload) {
+          props.onOffRoute?.(payload)
+        }
+      }
+    : undefined
   const wrappedOnDestinationPreview = props.onDestinationPreview
     ? (event: unknown) => {
         const payload = unwrapNativeEventPayload<DestinationPreviewEvent>(event)
@@ -271,6 +370,7 @@ function normalizeViewProps(
     enabled: props.enabled === true,
     startOrigin: sanitizedStartOrigin,
     navigationMarkers: sanitizedNavigationMarkers,
+    locationPuck: resolveLocationPuck(props.locationPuck),
     routeAlternatives: props.routeAlternatives ?? props.showsContinuousAlternatives,
     showsTripProgress,
     showsManeuverView,
@@ -299,6 +399,8 @@ function normalizeViewProps(
     onRouteChange: wrappedOnRouteChange,
     onBannerInstruction: wrappedOnBannerInstruction,
     onArrive: wrappedOnArrive,
+    onWaypointArrive: wrappedOnWaypointArrive,
+    onOffRoute: wrappedOnOffRoute,
     onDestinationPreview: wrappedOnDestinationPreview,
     onDestinationChanged: wrappedOnDestinationChanged,
     onCancelNavigation: wrappedOnCancelNavigation,
@@ -313,7 +415,7 @@ function normalizeViewProps(
  */
 export async function setMuted(muted: boolean): Promise<void> {
   try {
-    await MapboxNavigationModule.setMuted(muted)
+    await getNativeModule().setMuted(muted)
   } catch (error) {
     throw normalizeNativeError(error, 'SET_MUTED_FAILED')
   }
@@ -324,7 +426,7 @@ export async function setMuted(muted: boolean): Promise<void> {
  */
 export async function setVoiceVolume(volume: number): Promise<void> {
   try {
-    await MapboxNavigationModule.setVoiceVolume(volume)
+    await getNativeModule().setVoiceVolume(volume)
   } catch (error) {
     throw normalizeNativeError(error, 'SET_VOICE_VOLUME_FAILED')
   }
@@ -335,7 +437,7 @@ export async function setVoiceVolume(volume: number): Promise<void> {
  */
 export async function setDistanceUnit(unit: 'metric' | 'imperial'): Promise<void> {
   try {
-    await MapboxNavigationModule.setDistanceUnit(unit)
+    await getNativeModule().setDistanceUnit(unit)
   } catch (error) {
     throw normalizeNativeError(error, 'SET_DISTANCE_UNIT_FAILED')
   }
@@ -346,7 +448,7 @@ export async function setDistanceUnit(unit: 'metric' | 'imperial'): Promise<void
  */
 export async function setLanguage(language: string): Promise<void> {
   try {
-    await MapboxNavigationModule.setLanguage(language)
+    await getNativeModule().setLanguage(language)
   } catch (error) {
     throw normalizeNativeError(error, 'SET_LANGUAGE_FAILED')
   }
@@ -357,7 +459,7 @@ export async function setLanguage(language: string): Promise<void> {
  */
 export async function getNavigationSettings(): Promise<NavigationSettings> {
   try {
-    return await MapboxNavigationModule.getNavigationSettings()
+    return await getNativeModule().getNavigationSettings()
   } catch (error) {
     throw normalizeNativeError(error, 'GET_NAVIGATION_SETTINGS_FAILED')
   }
@@ -365,7 +467,7 @@ export async function getNavigationSettings(): Promise<NavigationSettings> {
 
 export async function stopNavigation(): Promise<boolean> {
   try {
-    return await MapboxNavigationModule.stopNavigation()
+    return await getNativeModule().stopNavigation()
   } catch (error) {
     throw normalizeNativeError(error, 'STOP_NAVIGATION_FAILED')
   }
@@ -373,9 +475,29 @@ export async function stopNavigation(): Promise<boolean> {
 
 export async function resumeCameraFollowing(): Promise<boolean> {
   try {
-    return await MapboxNavigationModule.resumeCameraFollowing()
+    return await getNativeModule().resumeCameraFollowing()
   } catch (error) {
     throw normalizeNativeError(error, 'RESUME_CAMERA_FOLLOWING_FAILED')
+  }
+}
+
+/**
+ * Advance the active navigation session to the next route leg on a
+ * multi-waypoint route, without tearing down and restarting the session.
+ *
+ * Use this when a waypoint is completed by a business event (e.g. a driver
+ * marks a passenger as picked up/dropped off) rather than by physically
+ * arriving at it. The native SDK removes the completed leg from the map,
+ * recomputes the ETA, and re-focuses the camera/route on the next waypoint.
+ *
+ * Resolves `true` if an active session accepted the advance, `false` if there
+ * is no active session or the route is already on its final leg.
+ */
+export async function advanceToNextWaypoint(): Promise<boolean> {
+  try {
+    return await getNativeModule().advanceToNextWaypoint()
+  } catch (error) {
+    throw normalizeNativeError(error, 'ADVANCE_TO_NEXT_WAYPOINT_FAILED')
   }
 }
 
@@ -445,6 +567,32 @@ export function addRouteChangeListener(listener: (event: RouteChangeEvent) => vo
 export function addArriveListener(listener: (point: ArrivalEvent) => void): Subscription {
   return emitter.addListener('onArrive', (event: unknown) => {
     const payload = unwrapNativeEventPayload<ArrivalEvent>(event)
+    if (payload) {
+      listener(payload)
+    }
+  })
+}
+
+/**
+ * Subscribe to intermediate waypoint arrivals on multi-stop routes.
+ */
+export function addWaypointArriveListener(
+  listener: (point: ArrivalEvent) => void
+): Subscription {
+  return emitter.addListener('onWaypointArrive', (event: unknown) => {
+    const payload = unwrapNativeEventPayload<ArrivalEvent>(event)
+    if (payload) {
+      listener(payload)
+    }
+  })
+}
+
+/**
+ * Subscribe to off-route / rerouting events.
+ */
+export function addOffRouteListener(listener: (event: OffRouteEvent) => void): Subscription {
+  return emitter.addListener('onOffRoute', (event: unknown) => {
+    const payload = unwrapNativeEventPayload<OffRouteEvent>(event)
     if (payload) {
       listener(payload)
     }
@@ -648,6 +796,51 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     progressAtMs: 0,
     bannerKey: '',
   })
+  // Sheet gesture handlers are created once. They dispatch through this ref so
+  // that the (re-created each render) sheet actions stay reachable without
+  // rebuilding the responders — PanResponder.create() used to run on every
+  // render, allocating two fresh gesture recognizers each time.
+  const sheetActionsRef = useRef({
+    expand: () => {},
+    collapse: () => {},
+  })
+  const respondersRef = useRef<{
+    hiddenGrabber: ReturnType<typeof PanResponder.create>
+    sheet: ReturnType<typeof PanResponder.create>
+  } | null>(null)
+  if (respondersRef.current === null) {
+    respondersRef.current = {
+      hiddenGrabber: PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onStartShouldSetPanResponderCapture: () => false,
+        onMoveShouldSetPanResponder: (_evt, gesture) =>
+          Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 6,
+        onMoveShouldSetPanResponderCapture: (_evt, gesture) =>
+          Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 6,
+        onPanResponderTerminationRequest: () => false,
+        onPanResponderRelease: (_evt, gesture) => {
+          if (gesture.dy < -8 || gesture.vy < -0.3) {
+            sheetActionsRef.current.expand()
+          }
+        },
+      }),
+      sheet: PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: (_evt, gesture) =>
+          Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 4,
+        onPanResponderRelease: (_evt, gesture) => {
+          if (gesture.dy < -10 || gesture.vy < -0.35) {
+            sheetActionsRef.current.expand()
+            return
+          }
+          if (gesture.dy > 10 || gesture.vy > 0.35) {
+            sheetActionsRef.current.collapse()
+          }
+        },
+      }),
+    }
+  }
+  const responders = respondersRef.current
   const navigationResetKey = [
     props.enabled === true ? 'enabled' : 'disabled',
     props.destination.latitude,
@@ -686,9 +879,14 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     const onArrive = (event: unknown) => {
       const payload = unwrapNativeEventPayload<ArrivalEvent>(event)
       if (payload) {
-        setOverlayArrival(payload)
-        if (useEndOfRouteFeedback) {
-          setEndOfRouteFeedbackVisible(true)
+        // Native now only sends onArrive for the final destination, but guard
+        // anyway so an intermediate stop can never open the rating modal.
+        const isFinal = payload.isFinalDestination !== false
+        if (isFinal) {
+          setOverlayArrival(payload)
+          if (useEndOfRouteFeedback) {
+            setEndOfRouteFeedbackVisible(true)
+          }
         }
       }
       nativeProps.onArrive?.(event as any)
@@ -800,6 +998,9 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     }
     setSheetState((value) => (value === 'expanded' ? 'collapsed' : 'expanded'))
   }
+
+  sheetActionsRef.current.expand = expandOverlayBottomSheet
+  sheetActionsRef.current.collapse = collapseOverlayBottomSheet
 
   const floatingButtonsContext: FloatingButtonsRenderContext = {
     show: showOverlayBottomSheet,
@@ -1077,7 +1278,7 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     const showCompletionPercent = bottomSheet?.showCompletionPercent !== false
     const tripPrimaryParts: string[] = []
     if (overlayProgress && showRemainingDistance) {
-      tripPrimaryParts.push(`${Math.round(overlayProgress.distanceRemaining)} m`)
+      tripPrimaryParts.push(formatDistance(overlayProgress.distanceRemaining, props.distanceUnit))
     }
     if (overlayProgress && showRemainingDuration && durationText) {
       tripPrimaryParts.push(durationText)
@@ -1294,34 +1495,6 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     }
 
     const backdropVisible = sheetState === 'expanded'
-    const hiddenGrabberResponder = PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onStartShouldSetPanResponderCapture: () => false,
-      onMoveShouldSetPanResponder: (_evt, gesture) =>
-        Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 6,
-      onMoveShouldSetPanResponderCapture: (_evt, gesture) =>
-        Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 6,
-      onPanResponderTerminationRequest: () => false,
-      onPanResponderRelease: (_evt, gesture) => {
-        if (gesture.dy < -8 || gesture.vy < -0.3) {
-          expandOverlayBottomSheet()
-        }
-      },
-    })
-    const sheetPanResponder = PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_evt, gesture) =>
-        Math.abs(gesture.dy) > Math.abs(gesture.dx) && Math.abs(gesture.dy) > 4,
-      onPanResponderRelease: (_evt, gesture) => {
-        if (gesture.dy < -10 || gesture.vy < -0.35) {
-          expandOverlayBottomSheet()
-          return
-        }
-        if (gesture.dy > 10 || gesture.vy > 0.35) {
-          collapseOverlayBottomSheet()
-        }
-      },
-    })
 
     return (
       <View pointerEvents='box-none' style={styles.overlayRoot}>
@@ -1336,7 +1509,7 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
                 right: iosHiddenRightExclusionWidth,
               },
             ]}
-            {...hiddenGrabberResponder.panHandlers}
+            {...responders.hiddenGrabber.panHandlers}
           />
         ) : null}
         {sheetState === 'hidden' ? (
@@ -1344,7 +1517,7 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
             <View
               pointerEvents='auto'
               style={styles.hiddenGrabberTouchArea}
-              {...hiddenGrabberResponder.panHandlers}
+              {...responders.hiddenGrabber.panHandlers}
             >
               <Pressable
                 accessibilityRole='button'
@@ -1373,7 +1546,7 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
               borderTopRightRadius: sheetCornerRadius,
             },
           ]}
-          {...sheetPanResponder.panHandlers}
+          {...responders.sheet.panHandlers}
           pointerEvents='auto'
         >
           {showHandle ? (
@@ -1400,6 +1573,8 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     )
   }
 
+  const NativeView = getNativeView()
+
   if (
     !props.children &&
     !useOverlayBottomSheet &&
@@ -1408,12 +1583,12 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     !props.floatingButtonsComponent &&
     !useEndOfRouteFeedback
   ) {
-    return <MapboxNavigationNativeView {...nativePropsWithOverlay} />
+    return <NativeView {...nativePropsWithOverlay} />
   }
 
   return (
     <View style={props.style}>
-      <MapboxNavigationNativeView {...nativePropsWithOverlay} style={StyleSheet.absoluteFill} />
+      <NativeView {...nativePropsWithOverlay} style={StyleSheet.absoluteFill} />
       {props.children ? (
         <View pointerEvents='box-none' style={StyleSheet.absoluteFill}>
           {props.children}
@@ -1652,12 +1827,15 @@ export default {
   getNavigationSettings,
   stopNavigation,
   resumeCameraFollowing,
+  advanceToNextWaypoint,
   addLocationChangeListener,
   addRouteProgressChangeListener,
   addCameraFollowingStateChangeListener,
   addJourneyDataChangeListener,
   addRouteChangeListener,
   addArriveListener,
+  addWaypointArriveListener,
+  addOffRouteListener,
   addDestinationPreviewListener,
   addDestinationChangedListener,
   addCancelNavigationListener,

@@ -5,6 +5,7 @@ import AppearanceScenarioScreen from './screens/AppearanceScenarioScreen'
 import CoreScenarioScreen from './screens/CoreScenarioScreen'
 import EventsScenarioScreen from './screens/EventsScenarioScreen'
 import HomeScreen from './screens/HomeScreen'
+import LocationPuckScenarioScreen from './screens/LocationPuckScenarioScreen'
 import OverlayScenarioScreen from './screens/OverlayScenarioScreen'
 import RuntimeScenarioScreen from './screens/RuntimeScenarioScreen'
 
@@ -57,6 +58,12 @@ const RootStack = createNativeStackNavigator({
       screen: AppearanceScenarioScreen,
       options: {
         title: 'Appearance + Route',
+      },
+    },
+    LocationPuckScenario: {
+      screen: LocationPuckScenarioScreen,
+      options: {
+        title: 'Location Puck',
       },
     },
   },

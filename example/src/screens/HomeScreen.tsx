@@ -8,6 +8,7 @@ type ScenarioRoute =
   | 'RuntimeScenario'
   | 'EventsScenario'
   | 'AppearanceScenario'
+  | 'LocationPuckScenario'
 
 const SCENARIOS: { route: ScenarioRoute; title: string; description: string }[] = [
   {
@@ -36,6 +37,12 @@ const SCENARIOS: { route: ScenarioRoute; title: string; description: string }[] 
     title: 'Appearance + Route',
     description:
       'Toggle trip banner/progress UI, alternatives, theme, waypoints and style presets.',
+  },
+  {
+    route: 'LocationPuckScenario',
+    title: 'Location Puck',
+    description:
+      'Swap the navigation pointer between a 3D model, custom 2D images, a tinted puck, hidden, and per-state pucks.',
   },
 ]
 

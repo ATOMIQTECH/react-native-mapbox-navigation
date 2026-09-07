@@ -5,6 +5,26 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
 class MapboxNavigationModule : Module() {
+  companion object {
+    /** Events forwarded to JS module listeners via `add*Listener`. */
+    val MODULE_EVENT_NAMES = listOf(
+      "onLocationChange",
+      "onRouteProgressChange",
+      "onJourneyDataChange",
+      "onRouteChange",
+      "onCameraFollowingStateChange",
+      "onBannerInstruction",
+      "onArrive",
+      "onWaypointArrive",
+      "onOffRoute",
+      "onDestinationPreview",
+      "onDestinationChanged",
+      "onCancelNavigation",
+      "onError",
+      "onBottomSheetActionPress"
+    )
+  }
+
   private var mute = false
   private var voiceVolume = 1.0
   private var distanceUnit = "metric"
@@ -13,20 +33,7 @@ class MapboxNavigationModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("MapboxNavigationModule")
 
-    Events(
-      "onLocationChange",
-      "onRouteProgressChange",
-      "onJourneyDataChange",
-      "onRouteChange",
-      "onCameraFollowingStateChange",
-      "onBannerInstruction",
-      "onArrive",
-      "onDestinationPreview",
-      "onDestinationChanged",
-      "onCancelNavigation",
-      "onError",
-      "onBottomSheetActionPress"
-    )
+    Events(MODULE_EVENT_NAMES)
 
     OnCreate {
       MapboxNavigationEventBridge.setEmitter { eventName, payload ->
@@ -36,6 +43,17 @@ class MapboxNavigationModule : Module() {
 
     OnDestroy {
       MapboxNavigationEventBridge.clearEmitter()
+    }
+
+    // Track subscriptions per event so the bridge can skip emitting entirely
+    // when nothing is listening.
+    MODULE_EVENT_NAMES.forEach { eventName ->
+      OnStartObserving(eventName) {
+        MapboxNavigationEventBridge.startObserving(eventName)
+      }
+      OnStopObserving(eventName) {
+        MapboxNavigationEventBridge.stopObserving(eventName)
+      }
     }
 
     AsyncFunction("setMuted") { muted: Boolean, promise: Promise ->
@@ -71,7 +89,7 @@ class MapboxNavigationModule : Module() {
       val isFollowing = NavigationSessionRegistry.isCurrentCameraFollowing()
       promise.resolve(
         mapOf(
-          "isNavigating" to false,
+          "isNavigating" to NavigationSessionRegistry.isSessionActive(),
           "isCameraFollowing" to isFollowing,
           "isCameraNotFollowing" to !isFollowing,
           "mute" to mute,
@@ -94,6 +112,11 @@ class MapboxNavigationModule : Module() {
       promise.resolve(resumed)
     }
 
+    AsyncFunction("advanceToNextWaypoint") { promise: Promise ->
+      val advanced = NavigationSessionRegistry.requestAdvanceLegCurrent()
+      promise.resolve(advanced)
+    }
+
     View(MapboxNavigationView::class) {
       Events(
         "onLocationChange",
@@ -103,6 +126,8 @@ class MapboxNavigationModule : Module() {
         "onCameraFollowingStateChange",
         "onBannerInstruction",
         "onArrive",
+        "onWaypointArrive",
+        "onOffRoute",
         "onDestinationPreview",
         "onDestinationChanged",
         "onCancelNavigation",
@@ -236,6 +261,14 @@ class MapboxNavigationModule : Module() {
 
       Prop("language") { view: MapboxNavigationView, value: String ->
         view.setLanguage(value)
+      }
+
+      Prop("locationPuck") { view: MapboxNavigationView, value: Map<String, Any>? ->
+        view.setLocationPuck(value)
+      }
+
+      Prop("eventThrottleMs") { view: MapboxNavigationView, value: Double ->
+        view.setEventThrottleMs(value)
       }
     }
   }
