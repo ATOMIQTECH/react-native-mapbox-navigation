@@ -8,6 +8,7 @@ final class NavigationSessionRegistry {
   private var stopHandlers: [String: () -> Void] = [:]
   private var resumeCameraHandlers: [String: () -> Void] = [:]
   private var cameraFollowingProviders: [String: () -> Bool] = [:]
+  private var advanceLegHandlers: [String: () -> Bool] = [:]
 
   private init() {}
 
@@ -29,6 +30,7 @@ final class NavigationSessionRegistry {
     stopHandlers.removeValue(forKey: releasingOwner)
     resumeCameraHandlers.removeValue(forKey: releasingOwner)
     cameraFollowingProviders.removeValue(forKey: releasingOwner)
+    advanceLegHandlers.removeValue(forKey: releasingOwner)
     guard owner == releasingOwner else {
       return
     }
@@ -53,6 +55,12 @@ final class NavigationSessionRegistry {
     cameraFollowingProviders[owner] = provider
   }
 
+  func registerAdvanceLegHandler(owner: String, handler: @escaping () -> Bool) {
+    lock.lock()
+    defer { lock.unlock() }
+    advanceLegHandlers[owner] = handler
+  }
+
   func requestStopCurrent() -> Bool {
     lock.lock()
     let current = owner
@@ -75,6 +83,27 @@ final class NavigationSessionRegistry {
     }
     handler()
     return true
+  }
+
+  func requestAdvanceLegCurrent() -> Bool {
+    lock.lock()
+    let current = owner
+    let handler = current.flatMap { advanceLegHandlers[$0] }
+    lock.unlock()
+    guard let handler else {
+      return false
+    }
+    return handler()
+  }
+
+  /// Whether an embedded navigation session currently holds the registry.
+  ///
+  /// Backs `getNavigationSettings().isNavigating`, which previously reported a
+  /// hardcoded `false`.
+  func isSessionActive() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return owner != nil
   }
 
   func isCurrentCameraFollowing() -> Bool {

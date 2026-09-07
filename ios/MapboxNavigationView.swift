@@ -5,6 +5,7 @@ import MapboxCoreNavigation
 import CoreLocation
 import UIKit
 import MapboxMaps
+import QuartzCore
 import Turf
 
 private struct NavigationMarkerPayload {
@@ -40,6 +41,10 @@ private struct NavigationMarkerMetrics {
   let offsetY: CGFloat
 }
 
+/// Shared formatter — constructing an ISO8601DateFormatter is relatively
+/// expensive and the journey payload is emitted on every location update.
+private let journeyEtaFormatter = ISO8601DateFormatter()
+
 private enum NavigationMarkerViewTag {
   static let bubble = 9101
   static let glyph = 9102
@@ -66,7 +71,7 @@ class MapboxNavigationView: ExpoView {
     DispatchQueue.main.async {
       instance.enabled = false
       instance.cleanupNavigation()
-      instance.onCancelNavigation([:])
+      instance.dispatchCancelNavigation([:])
     }
     return true
   }
@@ -142,16 +147,47 @@ class MapboxNavigationView: ExpoView {
   }
   var distanceUnit: String = "metric"
   var language: String = "en"
+  var locationPuck: [String: Any]? {
+    didSet {
+      puckStates = LocationPuckFactory.parseStates(locationPuck)
+      applyLocationPuck(for: currentPuckState, force: true)
+    }
+  }
   
   private var navigationViewController: NavigationViewController?
   private var navigationMarkerViews = [String: UIView]()
   private var hostViewController: UIViewController?
   private var isRouteCalculationInProgress = false
   private var hasPendingSessionConflict = false
-  private var warnedUnsupportedOptions = Set<String>()
   private var routeRequestToken = UUID()
   private var isCameraFollowing = true
   private var hasCameraPanGesture = false
+  private var puckStates = [LocationPuckState: [String: Any]]()
+  private var currentPuckState: LocationPuckState = .idle
+  /// Guards against a slow asset load applying a puck for a state the session
+  /// has already moved on from.
+  private var puckApplyToken = UUID()
+  /// Minimum gap between the continuous, high-frequency events
+  /// (`onLocationChange`, `onRouteProgressChange`, `onJourneyDataChange`).
+  ///
+  /// The SDK reports progress on every location fix and each event crosses the
+  /// bridge with a payload; on a long drive that is a meaningful amount of
+  /// avoidable CPU, garbage and battery. Discrete events (arrival, banner
+  /// changes, errors) are never throttled.
+  var eventThrottleMs: Double = 0
+  private var lastContinuousEmitAt: CFTimeInterval = 0
+  private var lastDynamicUIRefreshAt: CFTimeInterval = 0
+  private static let dynamicUIRefreshInterval: CFTimeInterval = 2.0
+  /// Used only to resolve a starting coordinate when `startOrigin` is omitted.
+  /// Android already falls back to the device location, so iOS previously just
+  /// never started navigation in that case.
+  private lazy var originLocationManager: CLLocationManager = {
+    let manager = CLLocationManager()
+    manager.delegate = self
+    manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+    return manager
+  }()
+  private var isWaitingForOriginFix = false
   
   let onLocationChange = EventDispatcher()
   let onRouteProgressChange = EventDispatcher()
@@ -160,6 +196,8 @@ class MapboxNavigationView: ExpoView {
   let onCameraFollowingStateChange = EventDispatcher()
   let onBannerInstruction = EventDispatcher()
   let onArrive = EventDispatcher()
+  let onWaypointArrive = EventDispatcher()
+  let onOffRoute = EventDispatcher()
   let onCancelNavigation = EventDispatcher()
   let onError = EventDispatcher()
   let onBottomSheetActionPress = EventDispatcher()
@@ -203,19 +241,25 @@ class MapboxNavigationView: ExpoView {
     guard !isRouteCalculationInProgress else {
       return
     }
-    guard let origin = startOrigin,
-          let dest = destination,
-          let originLat = (origin["latitude"] as? NSNumber)?.doubleValue,
-          let originLng = (origin["longitude"] as? NSNumber)?.doubleValue,
+    guard let dest = destination,
           let destLat = (dest["latitude"] as? NSNumber)?.doubleValue,
           let destLng = (dest["longitude"] as? NSNumber)?.doubleValue else {
       return
     }
 
+    // `startOrigin` is documented as optional. Fall back to the device's last
+    // known fix, and wait for one if it isn't available yet.
+    guard let resolvedOrigin = resolveStartOrigin() else {
+      requestOriginFix()
+      return
+    }
+    let originLat = resolvedOrigin.latitude
+    let originLng = resolvedOrigin.longitude
+
     guard NavigationSessionRegistry.shared.acquire(owner: sessionOwner) else {
       if !hasPendingSessionConflict {
         hasPendingSessionConflict = true
-        onError([
+        dispatchError([
           "code": "NAVIGATION_SESSION_CONFLICT",
           "message": "Another embedded navigation session is already active. Stop other embedded navigation before mounting this view."
         ])
@@ -229,7 +273,7 @@ class MapboxNavigationView: ExpoView {
         guard let self = self else { return }
         self.enabled = false
         self.cleanupNavigation()
-        self.onCancelNavigation([:])
+        self.dispatchCancelNavigation([:])
       }
     }
     NavigationSessionRegistry.shared.registerResumeCameraFollowingHandler(owner: sessionOwner) { [weak self] in
@@ -239,6 +283,13 @@ class MapboxNavigationView: ExpoView {
     }
     NavigationSessionRegistry.shared.registerCameraFollowingProvider(owner: sessionOwner) { [weak self] in
       return self?.isCameraFollowing ?? true
+    }
+    NavigationSessionRegistry.shared.registerAdvanceLegHandler(owner: sessionOwner) { [weak self] in
+      guard let self = self else { return false }
+      DispatchQueue.main.async {
+        self.advanceToNextLeg()
+      }
+      return true
     }
     
     let originCoord = CLLocationCoordinate2D(latitude: originLat, longitude: originLng)
@@ -290,7 +341,7 @@ class MapboxNavigationView: ExpoView {
       case .success(let response):
         guard response.routes?.first != nil else {
           NavigationSessionRegistry.shared.release(owner: self.sessionOwner)
-          self.onError([
+          self.dispatchError([
             "code": "NO_ROUTE",
             "message": "No route found"
           ])
@@ -304,7 +355,7 @@ class MapboxNavigationView: ExpoView {
         
       case .failure(let error):
         NavigationSessionRegistry.shared.release(owner: self.sessionOwner)
-        self.onError([
+        self.dispatchError([
           "code": "ROUTE_ERROR",
           "message": error.localizedDescription
         ])
@@ -337,36 +388,13 @@ class MapboxNavigationView: ExpoView {
     applySpeedLimitVisibility(to: viewController)
     applyNativeFloatingButtonsConfiguration(to: viewController)
     applyEmbeddedBannerVisibility(to: viewController)
-    if !showsReportFeedback {
-      warnUnsupportedOptionOnce(
-        key: "showsReportFeedback",
-        message: "showsReportFeedback is currently not supported on embedded iOS navigation and will be ignored."
-      )
-    }
-    if !showsContinuousAlternatives {
-      warnUnsupportedOptionOnce(
-        key: "showsContinuousAlternatives",
-        message: "showsContinuousAlternatives is currently not supported on embedded iOS navigation and will be ignored."
-      )
-    }
-    if !usesNightStyleWhileInTunnel {
-      warnUnsupportedOptionOnce(
-        key: "usesNightStyleWhileInTunnel",
-        message: "usesNightStyleWhileInTunnel is currently not supported on embedded iOS navigation and will be ignored."
-      )
-    }
-    if routeLineTracksTraversal {
-      warnUnsupportedOptionOnce(
-        key: "routeLineTracksTraversal",
-        message: "routeLineTracksTraversal is currently not supported on embedded iOS navigation and will be ignored."
-      )
-    }
-    if annotatesIntersectionsAlongRoute {
-      warnUnsupportedOptionOnce(
-        key: "annotatesIntersectionsAlongRoute",
-        message: "annotatesIntersectionsAlongRoute is currently not supported on embedded iOS navigation and will be ignored."
-      )
-    }
+    // These are all first-class NavigationViewController properties in the
+    // Mapbox Navigation iOS v2 SDK; earlier versions of this package warned
+    // that they were unsupported and silently dropped them.
+    viewController.showsContinuousAlternatives = showsContinuousAlternatives
+    viewController.usesNightStyleWhileInTunnel = usesNightStyleWhileInTunnel
+    viewController.routeLineTracksTraversal = routeLineTracksTraversal
+    viewController.annotatesIntersectionsAlongRoute = annotatesIntersectionsAlongRoute
     applyInterfaceStyle(to: viewController)
     applyCameraConfiguration(to: viewController)
     
@@ -379,12 +407,17 @@ class MapboxNavigationView: ExpoView {
       viewController.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
       viewController.didMove(toParent: parent)
       
+      // The view has now loaded, so `styleManager` exists — force the map's
+      // day/night tiles to match `uiTheme` (see applyMapStyle).
+      applyMapStyle(to: viewController)
+
       navigationViewController = viewController
       renderNavigationMarkersIfPossible()
+      applyLocationPuck(for: .activeNavigation, force: true)
       hostViewController = parent
     } else {
       NavigationSessionRegistry.shared.release(owner: sessionOwner)
-      onError([
+      dispatchError([
         "code": "NO_HOST_VIEW_CONTROLLER",
         "message": "Unable to attach embedded navigation to a host view controller."
       ])
@@ -410,6 +443,10 @@ class MapboxNavigationView: ExpoView {
     navigationViewController?.removeFromParent()
     navigationViewController = nil
     hasCameraPanGesture = false
+    if isWaitingForOriginFix {
+      isWaitingForOriginFix = false
+      originLocationManager.stopUpdatingLocation()
+    }
     setCameraFollowingState(true, reason: "cleanup")
     NavigationSessionRegistry.shared.release(owner: sessionOwner)
     if MapboxNavigationView.activeInstance === self {
@@ -750,6 +787,188 @@ class MapboxNavigationView: ExpoView {
     )
   }
 
+  // MARK: - Event dispatch
+
+  /// Send an event to both the view prop callback and the module-level
+  /// listeners that back the exported `add*Listener` helpers. The bridge
+  /// drops the payload when nothing is subscribed.
+
+  private func dispatchLocationChange(_ payload: [String: Any]) {
+    onLocationChange(payload)
+    MapboxNavigationEventBridge.shared.emit("onLocationChange", payload)
+  }
+
+  private func dispatchRouteProgressChange(_ payload: [String: Any]) {
+    onRouteProgressChange(payload)
+    MapboxNavigationEventBridge.shared.emit("onRouteProgressChange", payload)
+  }
+
+  private func dispatchJourneyDataChange(_ payload: [String: Any]) {
+    onJourneyDataChange(payload)
+    MapboxNavigationEventBridge.shared.emit("onJourneyDataChange", payload)
+  }
+
+  private func dispatchRouteChange(_ payload: [String: Any]) {
+    onRouteChange(payload)
+    MapboxNavigationEventBridge.shared.emit("onRouteChange", payload)
+  }
+
+  private func dispatchCameraFollowingStateChange(_ payload: [String: Any]) {
+    onCameraFollowingStateChange(payload)
+    MapboxNavigationEventBridge.shared.emit("onCameraFollowingStateChange", payload)
+  }
+
+  private func dispatchBannerInstruction(_ payload: [String: Any]) {
+    onBannerInstruction(payload)
+    MapboxNavigationEventBridge.shared.emit("onBannerInstruction", payload)
+  }
+
+  private func dispatchArrive(_ payload: [String: Any]) {
+    onArrive(payload)
+    MapboxNavigationEventBridge.shared.emit("onArrive", payload)
+  }
+
+  private func dispatchWaypointArrive(_ payload: [String: Any]) {
+    onWaypointArrive(payload)
+    MapboxNavigationEventBridge.shared.emit("onWaypointArrive", payload)
+  }
+
+  private func dispatchOffRoute(_ payload: [String: Any]) {
+    onOffRoute(payload)
+    MapboxNavigationEventBridge.shared.emit("onOffRoute", payload)
+  }
+
+  private func dispatchCancelNavigation(_ payload: [String: Any]) {
+    onCancelNavigation(payload)
+    MapboxNavigationEventBridge.shared.emit("onCancelNavigation", payload)
+  }
+
+  private func dispatchError(_ payload: [String: Any]) {
+    onError(payload)
+    MapboxNavigationEventBridge.shared.emit("onError", payload)
+  }
+
+  private func dispatchBottomSheetActionPress(_ payload: [String: Any]) {
+    onBottomSheetActionPress(payload)
+    MapboxNavigationEventBridge.shared.emit("onBottomSheetActionPress", payload)
+  }
+  /// Advance the active route to the next leg on a multi-waypoint route without
+  /// restarting the session. Driven by a business event (e.g. a passenger is
+  /// picked up/dropped off) rather than physical arrival at the waypoint. The
+  /// SDK removes the completed leg, recomputes the ETA, and re-focuses the next
+  /// waypoint. Must be called on the main thread.
+  private func advanceToNextLeg() {
+    guard let router = navigationViewController?.navigationService.router else { return }
+    let progress = router.routeProgress
+    let legCount = progress.route.legs.count
+    // Already on the final leg (destination) — nothing to advance to.
+    guard progress.legIndex < legCount - 1 else { return }
+    router.advanceLegIndex(completionHandler: nil)
+  }
+
+  /// Force the *map* style (day/night tiles) to follow `uiTheme`.
+  ///
+  /// Setting `overrideUserInterfaceStyle` only themes the UIKit chrome; the map
+  /// itself is driven by `StyleManager`, which otherwise auto-switches day/night
+  /// by time of day — so during daylight the map stayed light even when the app
+  /// was dark. Must be called after the controller's view has loaded (its
+  /// `styleManager` is set up in `viewDidLoad`).
+  private func applyMapStyle(to viewController: NavigationViewController) {
+    guard let styleManager = viewController.styleManager else { return }
+    switch uiTheme.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "light", "day":
+      styleManager.automaticallyAdjustsStyleForTimeOfDay = false
+      styleManager.applyStyle(type: .day)
+    case "dark", "night":
+      styleManager.automaticallyAdjustsStyleForTimeOfDay = false
+      styleManager.applyStyle(type: .night)
+    default:
+      styleManager.automaticallyAdjustsStyleForTimeOfDay = true
+    }
+  }
+
+  // MARK: - Start origin resolution
+
+  /// Prefer an explicit `startOrigin`, otherwise the device's last known fix.
+  private func resolveStartOrigin() -> CLLocationCoordinate2D? {
+    if let origin = startOrigin,
+       let latitude = (origin["latitude"] as? NSNumber)?.doubleValue,
+       let longitude = (origin["longitude"] as? NSNumber)?.doubleValue,
+       CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: latitude, longitude: longitude)) {
+      return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    guard let coordinate = originLocationManager.location?.coordinate,
+          CLLocationCoordinate2DIsValid(coordinate) else {
+      return nil
+    }
+    return coordinate
+  }
+
+  /// Begin listening for a single location fix so navigation can start without
+  /// an explicit `startOrigin`.
+  private func requestOriginFix() {
+    guard !isWaitingForOriginFix else { return }
+
+    let status: CLAuthorizationStatus
+    if #available(iOS 14.0, *) {
+      status = originLocationManager.authorizationStatus
+    } else {
+      status = CLLocationManager.authorizationStatus()
+    }
+
+    switch status {
+    case .notDetermined:
+      isWaitingForOriginFix = true
+      originLocationManager.requestWhenInUseAuthorization()
+    case .authorizedWhenInUse, .authorizedAlways:
+      isWaitingForOriginFix = true
+      originLocationManager.requestLocation()
+    default:
+      dispatchError([
+        "code": "LOCATION_PERMISSION_REQUIRED",
+        "message": "Embedded navigation needs location permission, or an explicit startOrigin."
+      ])
+    }
+  }
+
+  private func stopWaitingForOriginFix() {
+    isWaitingForOriginFix = false
+  }
+
+  // MARK: - Custom location puck
+
+  /// Resolve and apply the puck configured for `state`.
+  ///
+  /// Falls back to the `default` appearance when the state has no override, and
+  /// leaves the SDK puck untouched when neither is configured. Asset loading is
+  /// asynchronous, so a token guards against a late load overwriting a puck for
+  /// a state the session has since left.
+  private func applyLocationPuck(for state: LocationPuckState, force: Bool = false) {
+    guard force || state != currentPuckState else { return }
+    currentPuckState = state
+
+    guard navigationViewController?.navigationMapView != nil else { return }
+    guard let appearance = puckStates[state] ?? puckStates[.default] else { return }
+
+    let token = UUID()
+    puckApplyToken = token
+
+    LocationPuckFactory.shared.resolve(appearance: appearance) { [weak self] resolution in
+      guard let self, self.puckApplyToken == token else { return }
+      guard let mapView = self.navigationViewController?.navigationMapView else { return }
+
+      switch resolution {
+      case .style(let style):
+        mapView.userLocationStyle = style
+      case .hidden:
+        mapView.userLocationStyle = nil
+      case .sdkDefault:
+        mapView.userLocationStyle = .puck2D()
+      }
+    }
+  }
+
   private func applyDynamicUIOptionsIfPossible() {
     guard let viewController = navigationViewController else { return }
     viewController.showsSpeedLimits = showsSpeedLimits
@@ -778,7 +997,7 @@ class MapboxNavigationView: ExpoView {
   private func setCameraFollowingState(_ next: Bool, reason: String) {
     if isCameraFollowing == next { return }
     isCameraFollowing = next
-    onCameraFollowingStateChange([
+    dispatchCameraFollowingStateChange([
       "isCameraFollowing": next,
       "isCameraNotFollowing": !next,
       "reason": reason
@@ -995,7 +1214,8 @@ class MapboxNavigationView: ExpoView {
     let showAudio = (options["showAudioGuidanceButton"] as? Bool) ?? true
     let showFeedback = (options["showFeedbackButton"] as? Bool) ?? true
 
-    viewController.showsReportFeedback = showFeedback
+    // Honour both switches: the dedicated prop and the floating-button toggle.
+    viewController.showsReportFeedback = showsReportFeedback && showFeedback
     viewController.loadViewIfNeeded()
 
     let existingButtons = viewController.floatingButtons ?? []
@@ -1050,28 +1270,39 @@ class MapboxNavigationView: ExpoView {
     let normalizedMode = cameraMode.lowercased()
 
     if normalizedMode == "overview" {
-      viewportDataSource.options.followingCameraOptions.zoomUpdatesAllowed = false
-      viewportDataSource.followingMobileCamera.zoom = CGFloat(cameraZoom ?? 10)
-      viewportDataSource.options.followingCameraOptions.pitchUpdatesAllowed = false
-      viewportDataSource.followingMobileCamera.pitch = 0
-    } else {
-      // Keep dynamic camera updates in following mode so turn-by-turn camera behavior
-      // (zoom/pitch/bearing adaptation) remains managed by the SDK.
-      viewportDataSource.options.followingCameraOptions.pitchUpdatesAllowed = true
-      viewportDataSource.options.followingCameraOptions.zoomUpdatesAllowed = true
-      viewportDataSource.options.followingCameraOptions.bearingUpdatesAllowed = true
-
-      if let pitch = cameraPitch {
-        viewportDataSource.followingMobileCamera.pitch = CGFloat(max(0, min(pitch, 85)))
-      }
+      // Overview is a distinct NavigationCamera state. This branch previously
+      // mutated the *following* viewport and then called follow(), so overview
+      // never actually engaged.
+      viewportDataSource.options.overviewCameraOptions.pitchUpdatesAllowed = false
+      viewportDataSource.overviewMobileCamera.pitch = 0
 
       if let zoom = cameraZoom {
-        viewportDataSource.followingMobileCamera.zoom = CGFloat(max(1, min(zoom, 22)))
+        // Pin the caller's zoom, otherwise let the SDK frame the whole route.
+        viewportDataSource.options.overviewCameraOptions.zoomUpdatesAllowed = false
+        viewportDataSource.overviewMobileCamera.zoom = CGFloat(zoom.clamped(to: 1...22))
       }
+
+      navigationMapView.navigationCamera.moveToOverview()
+      setCameraFollowingState(false, reason: "config")
+      return
+    }
+
+    // Keep dynamic camera updates in following mode so turn-by-turn camera
+    // behavior (zoom/pitch/bearing adaptation) stays managed by the SDK.
+    viewportDataSource.options.followingCameraOptions.pitchUpdatesAllowed = true
+    viewportDataSource.options.followingCameraOptions.zoomUpdatesAllowed = true
+    viewportDataSource.options.followingCameraOptions.bearingUpdatesAllowed = true
+
+    if let pitch = cameraPitch {
+      viewportDataSource.followingMobileCamera.pitch = CGFloat(pitch.clamped(to: 0...85))
+    }
+
+    if let zoom = cameraZoom {
+      viewportDataSource.followingMobileCamera.zoom = CGFloat(zoom.clamped(to: 1...22))
     }
 
     navigationMapView.navigationCamera.follow()
-    setCameraFollowingState(normalizedMode != "overview", reason: "config")
+    setCameraFollowingState(true, reason: "config")
   }
 
   private func buildNavigationOptions(navigationService: NavigationService) -> NavigationOptions {
@@ -1126,14 +1357,6 @@ class MapboxNavigationView: ExpoView {
     }
   }
 
-  private func warnUnsupportedOptionOnce(key: String, message: String) {
-    guard !warnedUnsupportedOptions.contains(key) else {
-      return
-    }
-    warnedUnsupportedOptions.insert(key)
-    NSLog("[MapboxNavigationView] \(message)")
-  }
-
   private func emitRouteChange(from response: RouteResponse) {
     guard let route = response.routes?.first else { return }
     emitRouteChange(route: route)
@@ -1152,7 +1375,7 @@ class MapboxNavigationView: ExpoView {
         "longitude": coordinate.longitude
       ]
     }
-    onRouteChange(["coordinates": coords])
+    dispatchRouteChange(["coordinates": coords])
   }
 
   private func nearestViewController() -> UIViewController? {
@@ -1184,15 +1407,40 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
     with location: CLLocation,
     rawLocation: CLLocation
   ) {
+    // Mapbox rebuilds parts of its banner hierarchy as guidance proceeds, so
+    // the visibility pass has to run more than once — but it walks the entire
+    // view tree, so throttle it instead of running it on every update.
     if !showsManeuverView || !showsTripProgress || !showsActionButtons || !showsSpeedLimits || !showsWayNameLabel {
-      applyDynamicUIOptionsIfPossible()
+      let now = CACurrentMediaTime()
+      if now - lastDynamicUIRefreshAt >= Self.dynamicUIRefreshInterval {
+        lastDynamicUIRefreshAt = now
+        applyDynamicUIOptionsIfPossible()
+      }
     }
 
     if cameraMode.lowercased() == "following" && isCameraFollowing {
       navigationViewController.navigationMapView?.navigationCamera.follow()
     }
 
-    onLocationChange([
+    // Throttle the continuous stream; banner/arrival below are unaffected.
+    let nowTime = CACurrentMediaTime()
+    let throttleSeconds = max(0, min(eventThrottleMs, 10_000)) / 1000
+    let shouldEmitContinuous =
+      throttleSeconds <= 0 || (nowTime - lastContinuousEmitAt) >= throttleSeconds
+
+    if shouldEmitContinuous {
+      lastContinuousEmitAt = nowTime
+    }
+
+    guard shouldEmitContinuous else {
+      dispatchBannerInstruction([
+        "primaryText": progress.currentLegProgress.currentStep.instructions,
+        "stepDistanceRemaining": progress.currentLegProgress.currentStepProgress.distanceRemaining
+      ])
+      return
+    }
+
+    dispatchLocationChange([
       "latitude": location.coordinate.latitude,
       "longitude": location.coordinate.longitude,
       "bearing": location.course,
@@ -1201,14 +1449,15 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
       "accuracy": location.horizontalAccuracy
     ])
     
-    onRouteProgressChange([
+    dispatchRouteProgressChange([
       "distanceTraveled": progress.distanceTraveled,
       "distanceRemaining": progress.distanceRemaining,
       "durationRemaining": progress.durationRemaining,
-      "fractionTraveled": progress.fractionTraveled
+      "fractionTraveled": progress.fractionTraveled,
+      "legIndex": progress.legIndex
     ])
 
-    onBannerInstruction([
+    dispatchBannerInstruction([
       "primaryText": progress.currentLegProgress.currentStep.instructions,
       "stepDistanceRemaining": progress.currentLegProgress.currentStepProgress.distanceRemaining
     ])
@@ -1216,7 +1465,7 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
     let secondaryInstruction = progress.currentLegProgress.currentStep.names?.first
       ?? progress.currentLegProgress.currentStep.description
     let durationRemaining = progress.durationRemaining
-    onJourneyDataChange([
+    dispatchJourneyDataChange([
       "latitude": location.coordinate.latitude,
       "longitude": location.coordinate.longitude,
       "bearing": location.course,
@@ -1231,7 +1480,7 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
       "durationRemaining": durationRemaining,
       "fractionTraveled": progress.fractionTraveled,
       "completionPercent": Int((max(0, min(progress.fractionTraveled, 1)) * 100).rounded()),
-      "etaIso8601": ISO8601DateFormatter().string(from: Date().addingTimeInterval(durationRemaining))
+      "etaIso8601": journeyEtaFormatter.string(from: Date().addingTimeInterval(durationRemaining))
     ])
   }
   
@@ -1239,10 +1488,49 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
     _ navigationViewController: NavigationViewController,
     didArriveAt waypoint: Waypoint
   ) -> Bool {
-    onArrive([
-      "name": waypoint.name ?? ""
-    ])
+    // This fires for EVERY leg destination, not just the final one. Previously
+    // an intermediate stop emitted a plain `onArrive`, so on a multi-stop route
+    // the JS end-of-route flow triggered at the first waypoint.
+    let progress = navigationViewController.navigationService.routeProgress
+    let isFinal = progress.isFinalLeg
+    let payload: [String: Any] = [
+      "index": progress.legIndex,
+      "name": waypoint.name ?? "",
+      "isFinalDestination": isFinal,
+      "remainingWaypoints": progress.remainingWaypoints.count
+    ]
+
+    if isFinal {
+      applyLocationPuck(for: .arrival)
+      dispatchArrive(payload)
+    } else {
+      dispatchWaypointArrive(payload)
+    }
+
+    // Keep auto-advancing to the next leg, which is the SDK default.
     return true
+  }
+
+  func navigationViewController(
+    _ navigationViewController: NavigationViewController,
+    willRerouteFrom location: CLLocation?
+  ) {
+    var payload: [String: Any] = [:]
+    if let location {
+      payload["latitude"] = location.coordinate.latitude
+      payload["longitude"] = location.coordinate.longitude
+    }
+    dispatchOffRoute(payload)
+  }
+
+  func navigationViewController(
+    _ navigationViewController: NavigationViewController,
+    didFailToRerouteWith error: Error
+  ) {
+    dispatchError([
+      "code": "REROUTE_FAILED",
+      "message": error.localizedDescription
+    ])
   }
   
   func navigationViewControllerDidDismiss(
@@ -1250,9 +1538,47 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
     byCanceling canceled: Bool
   ) {
     if canceled {
-      onCancelNavigation([:])
+      dispatchCancelNavigation([:])
     }
     cleanupNavigation()
+  }
+}
+
+// MARK: - CLLocationManagerDelegate
+extension MapboxNavigationView: CLLocationManagerDelegate {
+  func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    guard isWaitingForOriginFix, locations.last != nil else { return }
+    stopWaitingForOriginFix()
+    startNavigationIfReady()
+  }
+
+  func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+    guard isWaitingForOriginFix else { return }
+    stopWaitingForOriginFix()
+    dispatchError([
+      "code": "START_ORIGIN_UNAVAILABLE",
+      "message": "Could not determine a starting location: \(error.localizedDescription). Pass startOrigin explicitly."
+    ])
+  }
+
+  func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    guard isWaitingForOriginFix else { return }
+    let status: CLAuthorizationStatus
+    if #available(iOS 14.0, *) {
+      status = manager.authorizationStatus
+    } else {
+      status = CLLocationManager.authorizationStatus()
+    }
+
+    if status == .authorizedWhenInUse || status == .authorizedAlways {
+      manager.requestLocation()
+    } else if status != .notDetermined {
+      stopWaitingForOriginFix()
+      dispatchError([
+        "code": "LOCATION_PERMISSION_REQUIRED",
+        "message": "Embedded navigation needs location permission, or an explicit startOrigin."
+      ])
+    }
   }
 }
 

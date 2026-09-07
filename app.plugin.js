@@ -35,11 +35,19 @@ const MAPBOX_SETTINGS_REPO_BLOCK = `        maven {
 const REQUIRED_ANDROID_PERMISSIONS = [
   'android.permission.ACCESS_COARSE_LOCATION',
   'android.permission.ACCESS_FINE_LOCATION',
-  'android.permission.ACCESS_BACKGROUND_LOCATION',
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_LOCATION',
   'android.permission.POST_NOTIFICATIONS',
 ]
+
+/**
+ * Requesting ACCESS_BACKGROUND_LOCATION triggers a Google Play policy review
+ * and a prominent-disclosure requirement, so it is opt-in rather than added to
+ * every app that installs this package.
+ *
+ * Enable with `["@atomiqlab/react-native-mapbox-navigation", { backgroundLocation: true }]`.
+ */
+const BACKGROUND_LOCATION_PERMISSION = 'android.permission.ACCESS_BACKGROUND_LOCATION'
 
 const DEFAULT_IOS_LOCATION_USAGE =
   'Allow $(PRODUCT_NAME) to access your location for turn-by-turn navigation.'
@@ -113,7 +121,7 @@ function validateTokensIfPresent(config) {
   }
 }
 
-function ensureAndroidPermissions(androidManifest) {
+function ensureAndroidPermissions(androidManifest, options = {}) {
   const manifest = androidManifest.manifest
   if (!manifest['uses-permission']) {
     manifest['uses-permission'] = []
@@ -123,7 +131,11 @@ function ensureAndroidPermissions(androidManifest) {
     manifest['uses-permission'].map((entry) => entry?.$?.['android:name']).filter(Boolean)
   )
 
-  REQUIRED_ANDROID_PERMISSIONS.forEach((permission) => {
+  const permissions = options.backgroundLocation
+    ? [...REQUIRED_ANDROID_PERMISSIONS, BACKGROUND_LOCATION_PERMISSION]
+    : REQUIRED_ANDROID_PERMISSIONS
+
+  permissions.forEach((permission) => {
     if (!existingPermissions.has(permission)) {
       manifest['uses-permission'].push({
         $: {
@@ -168,10 +180,21 @@ function ensureProjectBuildGradle(src) {
   }
 
   if (!out.includes('https://api.mapbox.com/downloads/v2/releases/maven')) {
+    const before = out
+    // Match `allprojects { repositories {` without depending on which
+    // repositories the template happens to list first.
     out = out.replace(
-      /allprojects\s*\{\s*repositories\s*\{\s*google\(\)\s*mavenCentral\(\)/m,
+      /allprojects\s*\{\s*repositories\s*\{/m,
       (match) => `${match}\n${MAPBOX_REPO_BLOCK}`
     )
+
+    if (out === before) {
+      console.warn(
+        '[@atomiqlab/react-native-mapbox-navigation] Could not add the Mapbox Maven repository to ' +
+          'android/build.gradle (no `allprojects { repositories {` block found). Add it manually, ' +
+          'or the Mapbox SDK will fail to resolve at build time.'
+      )
+    }
   }
 
   return out
@@ -182,10 +205,20 @@ function ensureAppBuildGradle(src) {
     return src
   }
 
-  return src.replace(/(versionName\s+"[^"]+"\s*\n)/m, `$1${MAPBOX_TOKEN_LINES}\n`)
+  const out = src.replace(/(versionName\s+"[^"]+"\s*\n)/m, `$1${MAPBOX_TOKEN_LINES}\n`)
+
+  if (out === src) {
+    console.warn(
+      '[@atomiqlab/react-native-mapbox-navigation] Could not inject the Mapbox access token resource ' +
+        'into android/app/build.gradle (no `versionName "..."` line found). Add ' +
+        '`resValue "string", "mapbox_access_token", "<your pk. token>"` to defaultConfig manually.'
+    )
+  }
+
+  return out
 }
 
-function withMapboxNavigationAndroid(config) {
+function withMapboxNavigationAndroid(config, options) {
   config = withSettingsGradle(config, (config) => {
     config.modResults.contents = ensureSettingsGradle(config.modResults.contents)
     return config
@@ -202,14 +235,14 @@ function withMapboxNavigationAndroid(config) {
   })
 
   config = withAndroidManifest(config, (config) => {
-    config.modResults = ensureAndroidPermissions(config.modResults)
+    config.modResults = ensureAndroidPermissions(config.modResults, options)
     return config
   })
 
   return config
 }
 
-function withMapboxNavigationIos(config) {
+function withMapboxNavigationIos(config, options) {
   return withInfoPlist(config, (config) => {
     const infoPlist = config.modResults
     const mapboxPublicToken = resolveToken(
@@ -230,25 +263,50 @@ function withMapboxNavigationIos(config) {
       infoPlist.NSLocationAlwaysAndWhenInUseUsageDescription = DEFAULT_IOS_LOCATION_USAGE
     }
 
+    if (options.locationWhenInUsePermission) {
+      infoPlist.NSLocationWhenInUseUsageDescription = options.locationWhenInUsePermission
+      infoPlist.NSLocationAlwaysAndWhenInUseUsageDescription = options.locationWhenInUsePermission
+    }
+
     const existingModes = Array.isArray(infoPlist.UIBackgroundModes)
       ? infoPlist.UIBackgroundModes
       : []
-    const mergedModes = new Set([...existingModes, 'location', 'audio'])
-    infoPlist.UIBackgroundModes = Array.from(mergedModes)
+    const modes = new Set(existingModes)
+    modes.add('location')
+    // Background audio keeps spoken instructions playing when the app is
+    // backgrounded. It is opt-out because it must be justified at review.
+    if (options.backgroundAudio !== false) {
+      modes.add('audio')
+    }
+    infoPlist.UIBackgroundModes = Array.from(modes)
 
     return config
   })
 }
 
-const withMapboxNavigation = (config) => {
+/**
+ * @typedef {object} MapboxNavigationPluginOptions
+ * @property {boolean} [backgroundLocation=false]
+ *   Add `ACCESS_BACKGROUND_LOCATION` on Android. Requires a Google Play policy
+ *   declaration and prominent in-app disclosure, so it is off by default.
+ * @property {boolean} [backgroundAudio=true]
+ *   Keep the iOS `audio` background mode so spoken guidance continues while
+ *   backgrounded. Set to `false` if your app does not need it at review time.
+ * @property {string} [locationWhenInUsePermission]
+ *   Override the iOS location usage description shown in the permission prompt.
+ */
+
+/** @param {MapboxNavigationPluginOptions} [options] */
+const withMapboxNavigation = (config, options = {}) => {
+  const resolvedOptions = options ?? {}
   validateTokensIfPresent(config)
-  config = withMapboxNavigationAndroid(config)
-  config = withMapboxNavigationIos(config)
+  config = withMapboxNavigationAndroid(config, resolvedOptions)
+  config = withMapboxNavigationIos(config, resolvedOptions)
   return config
 }
 
 module.exports = createRunOncePlugin(
   withMapboxNavigation,
   'react-native-mapbox-navigation-plugin',
-  '1.1.26'
+  require('./package.json').version
 )
