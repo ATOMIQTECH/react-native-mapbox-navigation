@@ -912,6 +912,11 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       runCatching { nav.unregisterArrivalObserver(arrivalObserver) }
       runCatching { nav.unregisterRoutesObserver(routesObserver) }
       runCatching { nav.setNavigationRoutes(emptyList()) }
+      // Clearing routes alone leaves the shared MapboxNavigation instance in
+      // Free Drive mode, so its foreground-service notification ("Free Drive
+      // session") lingers indefinitely after a trip ends. Stop the trip
+      // session outright so the notification/service actually tears down.
+      runCatching { nav.stopTripSession() }
     }
     mapboxNavigation = null
 
