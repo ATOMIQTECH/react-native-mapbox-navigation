@@ -386,13 +386,16 @@ final class LocationPuckFactory {
   }
 
   /// Decode a JSON Mapbox style expression supplied from JS.
-  private static func expression(_ raw: Any?) -> Expression? {
+  ///
+  /// Qualified because the iOS 26 SDK introduced `Foundation.Expression`, which
+  /// makes a bare `Expression` ambiguous here.
+  private static func expression(_ raw: Any?) -> MapboxMaps.Expression? {
     guard let json = (raw as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
           !json.isEmpty,
           let data = json.data(using: .utf8) else {
       return nil
     }
-    return try? JSONDecoder().decode(Expression.self, from: data)
+    return try? JSONDecoder().decode(MapboxMaps.Expression.self, from: data)
   }
 
   /// Prefer an expression when present, otherwise a constant scale.
