@@ -45,6 +45,11 @@ env:
 jobs:
   configure:
     name: configure (${{ matrix.label }})
+    # agp9 cannot pass on this stack yet (see the matrix comment), and a job
+    # that is permanently red just teaches people to ignore red. Run it only on
+    # a manual dispatch, so push and pull_request give a truthful green board
+    # while the AGP 9 probe stays one click away.
+    if: ${{ matrix.label != 'agp9' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     continue-on-error: ${{ matrix.advisory }}
     env:
