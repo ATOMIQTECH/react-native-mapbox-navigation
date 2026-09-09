@@ -51,6 +51,11 @@ jobs:
       # `secrets` cannot be referenced from a step-level `if`, but it can be
       # from a job-level `env`. Map it here so the compile step can be gated.
       HAS_MAPBOX_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN != '' }}
+      # Needed at prebuild time as well as build time: the example's
+      # expo-build-properties config bakes this value into the generated Gradle
+      # files, so a token supplied only at compile time would arrive too late
+      # for that repository block.
+      MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -147,8 +152,6 @@ jobs:
       - name: Compile the module
         if: env.HAS_MAPBOX_TOKEN == 'true'
         working-directory: example/android
-        env:
-          MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
         run: ./gradlew "${MODULE_PROJECT}:assembleDebug" --stacktrace
 
       - name: Upload Gradle reports on failure
