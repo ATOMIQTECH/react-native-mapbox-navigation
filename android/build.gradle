@@ -8,7 +8,7 @@ if (project.extensions.findByName('kotlin') == null) {
 }
 
 group = 'expo.modules.mapboxnavigation'
-version = '2.1.0'
+version = '2.1.1'
 
 def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
 apply from: expoModulesCorePlugin
@@ -39,9 +39,17 @@ android {
       minifyEnabled false
     }
   }
+}
 
-  kotlinOptions {
-    jvmTarget = '17'
+// AGP 9's built-in Kotlin does not provide the `kotlinOptions` block on the
+// `android` extension, so configuring the Kotlin target there fails once the
+// guard above stops applying `kotlin-android`. The Kotlin extension's
+// `compilerOptions` is the documented replacement and works on both paths: it
+// is KGP's extension on AGP 8 (applied by the guard) and AGP's built-in one on
+// AGP 9.
+kotlin {
+  compilerOptions {
+    jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
   }
 }
 

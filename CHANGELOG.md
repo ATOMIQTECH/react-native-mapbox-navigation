@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.1.1
+
+### Fixed
+
+- **Android Gradle Plugin 9 compatibility.** AGP 9 ships built-in Kotlin support
+  and registers the `kotlin` extension itself, so the unconditional
+  `apply plugin: 'kotlin-android'` failed configuration with "Cannot add
+  extension with name 'kotlin'" and the library could not be built at all on an
+  AGP 9 project. The plugin is now applied only when nothing has already
+  registered that extension, which also covers AGP 10 where the
+  `android.builtInKotlin` opt-out is removed.
+
+  Thanks to [@gabrieldonadel](https://github.com/gabrieldonadel) for the fix
+  ([#21](https://github.com/ATOMIQTECH/react-native-mapbox-navigation/pull/21)).
+
+- Followed that with the second AGP 9 blocker in the same file: AGP 9's built-in
+  Kotlin does not provide `android { kotlinOptions { } }`, so the Kotlin target
+  configuration failed once the plugin was no longer applied. Replaced with the
+  Kotlin extension's `compilerOptions`, which resolves on both paths — KGP's
+  extension on AGP 8 and AGP's built-in one on AGP 9.
+
 ## 2.1.0
 
 ### Added
