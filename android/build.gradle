@@ -8,7 +8,7 @@ if (project.extensions.findByName('kotlin') == null) {
 }
 
 group = 'expo.modules.mapboxnavigation'
-version = '2.1.1'
+version = '2.2.0'
 
 def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
 apply from: expoModulesCorePlugin
