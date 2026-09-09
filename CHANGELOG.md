@@ -15,6 +15,20 @@
   Thanks to [@gabrieldonadel](https://github.com/gabrieldonadel) for the fix
   ([#21](https://github.com/ATOMIQTECH/react-native-mapbox-navigation/pull/21)).
 
+- **Android did not compile in 2.1.0.** Four regressions introduced by that
+  release, all caught by the new Android CI job on its first real compile:
+  - A mechanical rename turned the `NavigationViewListener` overrides
+    `onDestinationChanged` / `onDestinationPreview` into non-overrides, so those
+    events could never fire.
+  - `Events()` takes a vararg, not a `List`.
+  - The event wrappers accepted `Map<String, Any?>` while `EventDispatcher`
+    requires `Map<String, Any>`; null entries are now dropped, so an optional
+    field arrives as a missing key rather than an explicit null.
+  - `MapView.getMapboxMap()` is a Kotlin function, so it cannot be reached as a
+    synthesized `.mapboxMap` property.
+
+  Anyone who installed 2.1.0 could not build for Android. Upgrade to 2.1.1.
+
 - Followed that with the second AGP 9 blocker in the same file: AGP 9's built-in
   Kotlin does not provide `android { kotlinOptions { } }`, so the Kotlin target
   configuration failed once the plugin was no longer applied. Replaced with the

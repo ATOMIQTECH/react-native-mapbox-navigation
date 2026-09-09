@@ -33,7 +33,7 @@ class MapboxNavigationModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("MapboxNavigationModule")
 
-    Events(MODULE_EVENT_NAMES)
+    Events(*MODULE_EVENT_NAMES.toTypedArray())
 
     OnCreate {
       MapboxNavigationEventBridge.setEmitter { eventName, payload ->
