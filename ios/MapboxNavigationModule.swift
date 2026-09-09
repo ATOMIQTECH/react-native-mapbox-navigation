@@ -44,14 +44,79 @@ public class MapboxNavigationModule: Module {
     }
 
     // Track subscriptions per event so the bridge can skip emitting entirely
-    // when nothing is listening.
-    for eventName in MapboxNavigationModule.moduleEventNames {
-      OnStartObserving(eventName) {
-        MapboxNavigationEventBridge.shared.startObserving(eventName)
-      }
-      OnStopObserving(eventName) {
-        MapboxNavigationEventBridge.shared.stopObserving(eventName)
-      }
+    // when nothing is listening. Listed explicitly rather than looped:
+    // ModuleDefinitionBuilder is a result builder and rejects control flow.
+    OnStartObserving("onLocationChange") {
+      MapboxNavigationEventBridge.shared.startObserving("onLocationChange")
+    }
+    OnStopObserving("onLocationChange") {
+      MapboxNavigationEventBridge.shared.stopObserving("onLocationChange")
+    }
+    OnStartObserving("onRouteProgressChange") {
+      MapboxNavigationEventBridge.shared.startObserving("onRouteProgressChange")
+    }
+    OnStopObserving("onRouteProgressChange") {
+      MapboxNavigationEventBridge.shared.stopObserving("onRouteProgressChange")
+    }
+    OnStartObserving("onJourneyDataChange") {
+      MapboxNavigationEventBridge.shared.startObserving("onJourneyDataChange")
+    }
+    OnStopObserving("onJourneyDataChange") {
+      MapboxNavigationEventBridge.shared.stopObserving("onJourneyDataChange")
+    }
+    OnStartObserving("onRouteChange") {
+      MapboxNavigationEventBridge.shared.startObserving("onRouteChange")
+    }
+    OnStopObserving("onRouteChange") {
+      MapboxNavigationEventBridge.shared.stopObserving("onRouteChange")
+    }
+    OnStartObserving("onCameraFollowingStateChange") {
+      MapboxNavigationEventBridge.shared.startObserving("onCameraFollowingStateChange")
+    }
+    OnStopObserving("onCameraFollowingStateChange") {
+      MapboxNavigationEventBridge.shared.stopObserving("onCameraFollowingStateChange")
+    }
+    OnStartObserving("onBannerInstruction") {
+      MapboxNavigationEventBridge.shared.startObserving("onBannerInstruction")
+    }
+    OnStopObserving("onBannerInstruction") {
+      MapboxNavigationEventBridge.shared.stopObserving("onBannerInstruction")
+    }
+    OnStartObserving("onArrive") {
+      MapboxNavigationEventBridge.shared.startObserving("onArrive")
+    }
+    OnStopObserving("onArrive") {
+      MapboxNavigationEventBridge.shared.stopObserving("onArrive")
+    }
+    OnStartObserving("onWaypointArrive") {
+      MapboxNavigationEventBridge.shared.startObserving("onWaypointArrive")
+    }
+    OnStopObserving("onWaypointArrive") {
+      MapboxNavigationEventBridge.shared.stopObserving("onWaypointArrive")
+    }
+    OnStartObserving("onOffRoute") {
+      MapboxNavigationEventBridge.shared.startObserving("onOffRoute")
+    }
+    OnStopObserving("onOffRoute") {
+      MapboxNavigationEventBridge.shared.stopObserving("onOffRoute")
+    }
+    OnStartObserving("onCancelNavigation") {
+      MapboxNavigationEventBridge.shared.startObserving("onCancelNavigation")
+    }
+    OnStopObserving("onCancelNavigation") {
+      MapboxNavigationEventBridge.shared.stopObserving("onCancelNavigation")
+    }
+    OnStartObserving("onError") {
+      MapboxNavigationEventBridge.shared.startObserving("onError")
+    }
+    OnStopObserving("onError") {
+      MapboxNavigationEventBridge.shared.stopObserving("onError")
+    }
+    OnStartObserving("onBottomSheetActionPress") {
+      MapboxNavigationEventBridge.shared.startObserving("onBottomSheetActionPress")
+    }
+    OnStopObserving("onBottomSheetActionPress") {
+      MapboxNavigationEventBridge.shared.stopObserving("onBottomSheetActionPress")
     }
 
     // These previously only wrote to a private field and never reached the
