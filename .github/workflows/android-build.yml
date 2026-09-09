@@ -47,6 +47,10 @@ jobs:
     name: configure (${{ matrix.label }})
     runs-on: ubuntu-latest
     continue-on-error: ${{ matrix.advisory }}
+    env:
+      # `secrets` cannot be referenced from a step-level `if`, but it can be
+      # from a job-level `env`. Map it here so the compile step can be gated.
+      HAS_MAPBOX_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -129,7 +133,7 @@ jobs:
       # Optional and only when the token is available, since resolving the
       # Mapbox SDK needs credentials. This is what actually compiles the Kotlin.
       - name: Compile the module
-        if: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN != '' }}
+        if: env.HAS_MAPBOX_TOKEN == 'true'
         working-directory: example/android
         env:
           MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
