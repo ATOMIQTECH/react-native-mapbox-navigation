@@ -1,0 +1,143 @@
+name: ios-build
+
+# Compiles the Swift in this library.
+#
+# Same reasoning as android-build.yml: the module cannot be built standalone, so
+# CI builds it the way consumers do, by prebuilding the example app and letting
+# Expo autolinking pull the pod in. Building the app scheme compiles
+# ExpoMapboxNavigationNative as a dependency.
+#
+# `swiftc -parse` only checks syntax, so nothing before this job had ever
+# type-checked this code against the real Mapbox frameworks.
+#
+# Runs on macOS, which is billed at a premium, so the triggers are narrow.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ios/**'
+      - 'app.plugin.js'
+      - 'expo-module.config.json'
+      - 'example/**'
+      - '.github/workflows/ios-build.yml'
+  pull_request:
+    paths:
+      - 'ios/**'
+      - 'app.plugin.js'
+      - 'expo-module.config.json'
+      - 'example/**'
+      - '.github/workflows/ios-build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (iOS simulator)
+    runs-on: macos-latest
+    timeout-minutes: 75
+    env:
+      # Mapbox ships its iOS SDK as credentialed binaries, so `pod install`
+      # cannot resolve them without a downloads token. Forks do not receive
+      # secrets, so the build steps are skipped rather than failed there.
+      HAS_MAPBOX_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN != '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Report toolchain
+        run: |
+          xcodebuild -version
+          pod --version
+          sw_vers
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install library dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install example dependencies
+        working-directory: example
+        run: npm install --no-audit --no-fund
+
+      # Must precede `pod install`: CocoaPods reads ~/.netrc when fetching the
+      # Mapbox binary frameworks.
+      - name: Configure Mapbox credentials
+        if: env.HAS_MAPBOX_TOKEN == 'true'
+        env:
+          MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf 'machine api.mapbox.com\n  login mapbox\n  password %s\n' \
+            "$MAPBOX_DOWNLOADS_TOKEN" > "$HOME/.netrc"
+          chmod 600 "$HOME/.netrc"
+          echo "wrote ~/.netrc for api.mapbox.com"
+
+      - name: Prebuild example app
+        if: env.HAS_MAPBOX_TOKEN == 'true'
+        working-directory: example
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: Install pods
+        if: env.HAS_MAPBOX_TOKEN == 'true'
+        working-directory: example/ios
+        run: pod install --repo-update
+
+      # Building the app scheme compiles the library's pod as a dependency.
+      # The scheme name is derived from the app name, so discover it rather than
+      # hardcoding it.
+      - name: Build for simulator
+        if: env.HAS_MAPBOX_TOKEN == 'true'
+        working-directory: example/ios
+        run: |
+          set -euo pipefail
+          WORKSPACE="$(ls -d *.xcworkspace | head -1)"
+          SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
+          echo "workspace=$WORKSPACE scheme=$SCHEME"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -quiet \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=YES \
+            build
+
+      - name: Confirm the library's pod actually compiled
+        if: env.HAS_MAPBOX_TOKEN == 'true'
+        working-directory: example/ios
+        run: |
+          set -euo pipefail
+          # Guards against the app building while the pod is silently skipped.
+          if find ~/Library/Developer/Xcode/DerivedData -type d \
+               -name 'ExpoMapboxNavigationNative*' -print -quit | grep -q .; then
+            echo "ExpoMapboxNavigationNative build products found"
+          else
+            echo "::error::ExpoMapboxNavigationNative produced no build products; the pod was not compiled"
+            exit 1
+          fi
+
+      - name: Explain skip
+        if: env.HAS_MAPBOX_TOKEN != 'true'
+        run: |
+          echo "::notice::Skipped: MAPBOX_DOWNLOADS_TOKEN is unavailable (expected on forks)."
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-logs
+          path: |
+            example/ios/build/**/*.log
+            ~/Library/Logs/gym/**
+          retention-days: 7
+          if-no-files-found: ignore
