@@ -65,17 +65,28 @@ jobs:
             agp: ''
             gradle: ''
             built_in_kotlin: 'false'
-          # Re-enabled now the example app is on Expo 57 / RN 0.86, whose
-          # Gradle plugins are built with a newer Kotlin. It previously could
-          # not pass: AGP 9.2.1 requires Gradle >= 9.4.1, and Gradle 9.4.1
-          # ships kotlin-stdlib 2.3.0 which Expo 54 / RN 0.81's plugins (built
-          # with Kotlin 2.1.0, reading metadata only to 2.2.0) could not
-          # consume. Kept advisory until it has proven stable.
-          - label: agp9
-            advisory: true
-            agp: '9.2.1'
-            gradle: '9.4.1'
-            built_in_kotlin: 'true'
+          # An agp9 entry belongs here but still cannot pass, so it is left off
+          # rather than sitting permanently red.
+          #
+          # AGP 9.2.1 requires Gradle >= 9.4.1, and Gradle 9.4.1 puts
+          # kotlin-stdlib/kotlin-reflect 2.3.0 on the buildscript classpath.
+          # @react-native/gradle-plugin's settings-plugin is compiled with
+          # Kotlin 2.1.0, which reads metadata only up to 2.2.0, and it is
+          # includeBuild-ed from settings.gradle, so it fails to compile before
+          # this module is ever configured.
+          #
+          # Tested against CI on both Expo 54 / RN 0.81 and Expo 57 / RN 0.86:
+          # RN 0.86 does NOT fix it, the plugin is still built with Kotlin
+          # 2.1.0. Gradle 9.1.0 instead trips AGP's own minimum-version check.
+          # The upstream PR author verified AGP 9 on RN 0.87, so that is the
+          # version to retry from; re-enable by uncommenting once the example
+          # app is there. The AGP-pinning steps below already handle it.
+          #
+          # - label: agp9
+          #   advisory: true
+          #   agp: '9.2.1'
+          #   gradle: '9.4.1'
+          #   built_in_kotlin: 'true'
 
     steps:
       - name: Checkout
