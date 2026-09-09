@@ -60,16 +60,22 @@ jobs:
             agp: ''
             gradle: ''
             built_in_kotlin: 'false'
-          # Gradle is pinned low within the 9.x line on purpose. Gradle 9.4
-          # ships kotlin-stdlib 2.3.0 on its classpath, while RN's and Expo's
-          # Gradle plugins compile with Kotlin 2.1.0, which reads metadata only
-          # up to 2.2.0. Those plugins are includeBuild-ed, so they fail during
-          # settings evaluation and this module is never reached. A Gradle whose
-          # embedded Kotlin is <= 2.2 gets far enough to actually configure it.
+          # Expected to fail on the example app today, which is why it is
+          # advisory. The two constraints are mutually exclusive on this stack:
+          #   - AGP 9.2.1 requires Gradle >= 9.4.1 (com.android.internal.version-check).
+          #   - Gradle 9.4.1 ships kotlin-stdlib 2.3.0, but RN 0.81's and Expo
+          #     54's Gradle plugins compile with Kotlin 2.1.0, which reads
+          #     metadata only up to 2.2.0. Both are includeBuild-ed, so they
+          #     fail during settings evaluation.
+          # Verified both ends: Gradle 9.1.0 fails AGP's version check, 9.4.1
+          # fails the plugin compile. Nothing in this repo can bridge that.
+          # Upgrading the example app to Expo 58 / RN 0.87, where those plugins
+          # are built with a newer Kotlin, is what unblocks this job. Until then
+          # it usefully reports when the ecosystem becomes ready.
           - label: agp9
             advisory: true
             agp: '9.2.1'
-            gradle: '9.1.0'
+            gradle: '9.4.1'
             built_in_kotlin: 'true'
 
     steps:
