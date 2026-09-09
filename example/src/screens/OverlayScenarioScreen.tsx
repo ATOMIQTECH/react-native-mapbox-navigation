@@ -221,11 +221,11 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   supportOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: 'flex-end',
   },
   supportBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(2,6,23,0.45)',
   },
   supportSheet: {

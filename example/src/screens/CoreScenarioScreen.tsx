@@ -170,7 +170,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#020617',
   },
   overlayRoot: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: 'flex-start',
     paddingHorizontal: 12,
     paddingTop: 10,
