@@ -111,7 +111,10 @@ is_allowed() {
 }
 
 
-LIST_FILE="$(mktemp -t repoguard-list)"
+# BSD mktemp appends the random suffix to a bare -t prefix; GNU mktemp requires
+# at least three literal X's and errors with "too few X's in template". Use an
+# explicit template so this works on macOS and on Linux CI alike.
+LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/repoguard-list.XXXXXX")"
 trap 'rm -f "$LIST_FILE" "$LIST_FILE.err"' EXIT
 if ! files_to_check > "$LIST_FILE" 2>"$LIST_FILE.err"; then
   echo "Security scan (mode: $MODE)"
