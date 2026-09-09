@@ -60,10 +60,16 @@ jobs:
             agp: ''
             gradle: ''
             built_in_kotlin: 'false'
+          # Gradle is pinned low within the 9.x line on purpose. Gradle 9.4
+          # ships kotlin-stdlib 2.3.0 on its classpath, while RN's and Expo's
+          # Gradle plugins compile with Kotlin 2.1.0, which reads metadata only
+          # up to 2.2.0. Those plugins are includeBuild-ed, so they fail during
+          # settings evaluation and this module is never reached. A Gradle whose
+          # embedded Kotlin is <= 2.2 gets far enough to actually configure it.
           - label: agp9
             advisory: true
             agp: '9.2.1'
-            gradle: '9.4.1'
+            gradle: '9.1.0'
             built_in_kotlin: 'true'
 
     steps:
