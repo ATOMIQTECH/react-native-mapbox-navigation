@@ -45,11 +45,6 @@ env:
 jobs:
   configure:
     name: configure (${{ matrix.label }})
-    # agp9 cannot pass on this stack yet (see the matrix comment), and a job
-    # that is permanently red just teaches people to ignore red. Run it only on
-    # a manual dispatch, so push and pull_request give a truthful green board
-    # while the AGP 9 probe stays one click away.
-    if: ${{ matrix.label != 'agp9' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     continue-on-error: ${{ matrix.advisory }}
     env:
@@ -70,23 +65,26 @@ jobs:
             agp: ''
             gradle: ''
             built_in_kotlin: 'false'
-          # Expected to fail on the example app today, which is why it is
-          # advisory. The two constraints are mutually exclusive on this stack:
+          # An agp9 entry belongs here, but it cannot pass on this stack and a
+          # permanently red job only teaches people to ignore red. The two
+          # constraints are mutually exclusive today:
           #   - AGP 9.2.1 requires Gradle >= 9.4.1 (com.android.internal.version-check).
           #   - Gradle 9.4.1 ships kotlin-stdlib 2.3.0, but RN 0.81's and Expo
           #     54's Gradle plugins compile with Kotlin 2.1.0, which reads
           #     metadata only up to 2.2.0. Both are includeBuild-ed, so they
           #     fail during settings evaluation.
-          # Verified both ends: Gradle 9.1.0 fails AGP's version check, 9.4.1
-          # fails the plugin compile. Nothing in this repo can bridge that.
-          # Upgrading the example app to Expo 58 / RN 0.87, where those plugins
-          # are built with a newer Kotlin, is what unblocks this job. Until then
-          # it usefully reports when the ecosystem becomes ready.
-          - label: agp9
-            advisory: true
-            agp: '9.2.1'
-            gradle: '9.4.1'
-            built_in_kotlin: 'true'
+          # Verified both ends against CI: Gradle 9.1.0 trips AGP's version
+          # check, 9.4.1 trips the plugin compile.
+          #
+          # Once the example app moves to Expo 58 / RN 0.87, where those plugins
+          # are built with a newer Kotlin, re-enable by uncommenting. The
+          # AGP-pinning steps below already handle it.
+          #
+          # - label: agp9
+          #   advisory: true
+          #   agp: '9.2.1'
+          #   gradle: '9.4.1'
+          #   built_in_kotlin: 'true'
 
     steps:
       - name: Checkout
