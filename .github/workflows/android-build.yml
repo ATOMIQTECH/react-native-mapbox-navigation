@@ -1,0 +1,146 @@
+name: android-build
+
+# Guards the Android build of this library.
+#
+# The module cannot be configured standalone: its build.gradle references
+# `project(':expo-modules-core')`, and there is no wrapper or settings.gradle
+# under android/. So CI builds it the way consumers do, by prebuilding the
+# example app and letting Expo autolinking pull the module in.
+#
+# Two AGP generations are exercised:
+#   - agp8 is the version Expo 54 pins today. Blocking: it proves a build-config
+#     change does not regress current consumers.
+#   - agp9 enables built-in Kotlin, which is the default from AGP 9 on. Advisory,
+#     because it can fail on Expo's own AGP 9 readiness rather than on anything
+#     in this repo. Treat a failure as a signal to investigate, not a release
+#     blocker.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'app.plugin.js'
+      - 'expo-module.config.json'
+      - 'example/**'
+      - '.github/workflows/android-build.yml'
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'app.plugin.js'
+      - 'expo-module.config.json'
+      - 'example/**'
+      - '.github/workflows/android-build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx4g
+  # The Gradle project name Expo autolinking assigns to this module.
+  MODULE_PROJECT: ':atomiqlab-react-native-mapbox-navigation'
+
+jobs:
+  configure:
+    name: configure (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.advisory }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: agp8
+            advisory: false
+            agp: ''
+            gradle: ''
+            built_in_kotlin: 'false'
+          - label: agp9
+            advisory: true
+            agp: '9.2.1'
+            gradle: '9.4.1'
+            built_in_kotlin: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0'
+
+      - name: Install library dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install example dependencies
+        working-directory: example
+        run: npm install --no-audit --no-fund
+
+      # Generates example/android with the module autolinked. No Mapbox tokens
+      # are needed here: the config plugin warns and continues when they are
+      # absent, and configuration does not resolve the Mapbox artifacts.
+      - name: Prebuild example app
+        working-directory: example
+        run: npx expo prebuild --platform android --no-install
+
+      # Force the AGP generation under test. Expo supplies AGP through its
+      # version catalog, so pin the classpath explicitly and move the wrapper to
+      # a matching Gradle.
+      - name: Pin AGP ${{ matrix.agp }}
+        if: matrix.agp != ''
+        working-directory: example/android
+        run: |
+          set -euo pipefail
+          sed -i "s|classpath('com.android.tools.build:gradle')|classpath('com.android.tools.build:gradle:${{ matrix.agp }}')|" build.gradle
+          sed -i "s|distributionUrl=.*|distributionUrl=https\\\\://services.gradle.org/distributions/gradle-${{ matrix.gradle }}-bin.zip|" gradle/wrapper/gradle-wrapper.properties
+          echo "android.builtInKotlin=${{ matrix.built_in_kotlin }}" >> gradle.properties
+          echo "--- classpath ---"; grep 'com.android.tools.build:gradle' build.gradle
+          echo "--- wrapper ---"; grep distributionUrl gradle/wrapper/gradle-wrapper.properties
+
+      - name: Record AGP 8 baseline
+        if: matrix.agp == ''
+        working-directory: example/android
+        run: |
+          echo "--- classpath (from Expo version catalog) ---"
+          grep 'com.android.tools.build:gradle' build.gradle || true
+          grep distributionUrl gradle/wrapper/gradle-wrapper.properties
+
+      # The actual gate. Evaluating this module's build.gradle catches the whole
+      # class of failure that has bitten us: a plugin that cannot be applied, or
+      # a DSL block that no longer exists on the extension. No artifact
+      # resolution, so no secrets required.
+      - name: Configure the module
+        working-directory: example/android
+        run: ./gradlew "${MODULE_PROJECT}:tasks" --stacktrace
+
+      # Optional and only when the token is available, since resolving the
+      # Mapbox SDK needs credentials. This is what actually compiles the Kotlin.
+      - name: Compile the module
+        if: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN != '' }}
+        working-directory: example/android
+        env:
+          MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
+        run: ./gradlew "${MODULE_PROJECT}:assembleDebug" --stacktrace
+
+      - name: Upload Gradle reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-reports-${{ matrix.label }}
+          path: |
+            example/android/**/build/reports/**
+          retention-days: 7
+          if-no-files-found: ignore
