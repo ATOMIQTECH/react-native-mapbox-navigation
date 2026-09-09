@@ -276,12 +276,12 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   }
 
   private val navigationViewListener = object : NavigationViewListener() {
-    override fun dispatchDestinationChanged(destination: Point?) {
+    override fun onDestinationChanged(destination: Point?) {
       val point = destination ?: return
       dispatchDestinationChanged(mapOf("latitude" to point.latitude(), "longitude" to point.longitude()))
     }
 
-    override fun dispatchDestinationPreview() {
+    override fun onDestinationPreview() {
       dispatchDestinationPreview(mapOf("active" to true))
       hideNativeBottomPanelIfRequested(navigationView)
       scheduleBottomPanelHidePasses()
@@ -702,73 +702,81 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
    * no subscription for that event.
    */
 
+  /**
+   * Drop null entries so the payload satisfies `EventDispatcher`, which requires
+   * `Map<String, Any>`. JS receives a missing key instead of an explicit null,
+   * matching the optional fields in the TypeScript types.
+   */
+  private fun sanitizeEventPayload(payload: Map<String, Any?>): Map<String, Any> =
+    payload.filterValues { it != null }.mapValues { (_, value) -> value as Any }
+
   private fun dispatchLocationChange(payload: Map<String, Any?> = emptyMap()) {
-    onLocationChange(payload)
+    onLocationChange(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onLocationChange", payload)
   }
 
   private fun dispatchRouteProgressChange(payload: Map<String, Any?> = emptyMap()) {
-    onRouteProgressChange(payload)
+    onRouteProgressChange(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onRouteProgressChange", payload)
   }
 
   private fun dispatchJourneyDataChange(payload: Map<String, Any?> = emptyMap()) {
-    onJourneyDataChange(payload)
+    onJourneyDataChange(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onJourneyDataChange", payload)
   }
 
   private fun dispatchRouteChange(payload: Map<String, Any?> = emptyMap()) {
-    onRouteChange(payload)
+    onRouteChange(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onRouteChange", payload)
   }
 
   private fun dispatchCameraFollowingStateChange(payload: Map<String, Any?> = emptyMap()) {
-    onCameraFollowingStateChange(payload)
+    onCameraFollowingStateChange(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onCameraFollowingStateChange", payload)
   }
 
   private fun dispatchBannerInstruction(payload: Map<String, Any?> = emptyMap()) {
-    onBannerInstruction(payload)
+    onBannerInstruction(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onBannerInstruction", payload)
   }
 
   private fun dispatchArrive(payload: Map<String, Any?> = emptyMap()) {
-    onArrive(payload)
+    onArrive(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onArrive", payload)
   }
 
   private fun dispatchWaypointArrive(payload: Map<String, Any?> = emptyMap()) {
-    onWaypointArrive(payload)
+    onWaypointArrive(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onWaypointArrive", payload)
   }
 
   private fun dispatchOffRoute(payload: Map<String, Any?> = emptyMap()) {
-    onOffRoute(payload)
+    onOffRoute(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onOffRoute", payload)
   }
 
   private fun dispatchDestinationPreview(payload: Map<String, Any?> = emptyMap()) {
-    onDestinationPreview(payload)
+    onDestinationPreview(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onDestinationPreview", payload)
   }
 
   private fun dispatchDestinationChanged(payload: Map<String, Any?> = emptyMap()) {
-    onDestinationChanged(payload)
+    onDestinationChanged(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onDestinationChanged", payload)
   }
 
   private fun dispatchCancelNavigation(payload: Map<String, Any?> = emptyMap()) {
-    onCancelNavigation(payload)
+    onCancelNavigation(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onCancelNavigation", payload)
   }
 
   private fun dispatchError(payload: Map<String, Any?> = emptyMap()) {
-    onError(payload)
+    onError(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onError", payload)
   }
 
   private fun dispatchBottomSheetActionPress(payload: Map<String, Any?> = emptyMap()) {
-    onBottomSheetActionPress(payload)
+    onBottomSheetActionPress(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onBottomSheetActionPress", payload)
   }
   /**
@@ -1671,7 +1679,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         cameraPitch?.let { pitch(it) }
         cameraZoom?.let { zoom(it) }
       }.build()
-      mapView.mapboxMap.setCamera(options)
+      mapView.getMapboxMap().setCamera(options)
     }.onFailure { throwable ->
       Log.w(TAG, "Failed to apply camera pitch/zoom ($reason)", throwable)
     }
