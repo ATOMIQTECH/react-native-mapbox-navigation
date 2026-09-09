@@ -65,26 +65,17 @@ jobs:
             agp: ''
             gradle: ''
             built_in_kotlin: 'false'
-          # An agp9 entry belongs here, but it cannot pass on this stack and a
-          # permanently red job only teaches people to ignore red. The two
-          # constraints are mutually exclusive today:
-          #   - AGP 9.2.1 requires Gradle >= 9.4.1 (com.android.internal.version-check).
-          #   - Gradle 9.4.1 ships kotlin-stdlib 2.3.0, but RN 0.81's and Expo
-          #     54's Gradle plugins compile with Kotlin 2.1.0, which reads
-          #     metadata only up to 2.2.0. Both are includeBuild-ed, so they
-          #     fail during settings evaluation.
-          # Verified both ends against CI: Gradle 9.1.0 trips AGP's version
-          # check, 9.4.1 trips the plugin compile.
-          #
-          # Once the example app moves to Expo 58 / RN 0.87, where those plugins
-          # are built with a newer Kotlin, re-enable by uncommenting. The
-          # AGP-pinning steps below already handle it.
-          #
-          # - label: agp9
-          #   advisory: true
-          #   agp: '9.2.1'
-          #   gradle: '9.4.1'
-          #   built_in_kotlin: 'true'
+          # Re-enabled now the example app is on Expo 57 / RN 0.86, whose
+          # Gradle plugins are built with a newer Kotlin. It previously could
+          # not pass: AGP 9.2.1 requires Gradle >= 9.4.1, and Gradle 9.4.1
+          # ships kotlin-stdlib 2.3.0 which Expo 54 / RN 0.81's plugins (built
+          # with Kotlin 2.1.0, reading metadata only to 2.2.0) could not
+          # consume. Kept advisory until it has proven stable.
+          - label: agp9
+            advisory: true
+            agp: '9.2.1'
+            gradle: '9.4.1'
+            built_in_kotlin: 'true'
 
     steps:
       - name: Checkout

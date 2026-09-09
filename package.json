@@ -27,8 +27,7 @@
     "QUICKSTART.md",
     "CHANGELOG.md",
     "SECURITY.md",
-    "docs",
-    "scripts"
+    "docs"
   ],
   "scripts": {
     "build": "expo-module build",
@@ -73,7 +72,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.5",
-    "expo-module-scripts": "^3.0.0",
+    "expo-module-scripts": "^56.0.3",
     "typescript": "^5.9.3"
   }
 }

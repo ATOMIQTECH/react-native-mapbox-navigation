@@ -88,6 +88,22 @@ const emitter = {
     ).addListener(eventName, listener),
 }
 
+/**
+ * Absolute-fill style declared locally.
+ *
+ * React Native 0.86 removed the `absoluteFillObject` export from StyleSheet's
+ * types. This module is published as raw TSX under a `react-native: *` peer
+ * range, so consumers typecheck it against their own RN version; declaring the
+ * object here keeps it valid on all of them.
+ */
+const absoluteFill = {
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  top: 0,
+  bottom: 0,
+} as const
+
 function unwrapNativeEventPayload<T>(payload: unknown): T | undefined {
   if (payload == null) {
     return undefined
@@ -1603,7 +1619,7 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
 
 const styles = StyleSheet.create({
   floatingButtonsRoot: {
-    ...StyleSheet.absoluteFillObject,
+    ...absoluteFill,
   },
   floatingButtonsContainer: {
     position: 'absolute',
@@ -1645,13 +1661,13 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   endOfRouteFeedbackRoot: {
-    ...StyleSheet.absoluteFillObject,
+    ...absoluteFill,
     justifyContent: 'center',
     paddingHorizontal: 20,
     zIndex: 3,
   },
   endOfRouteFeedbackBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...absoluteFill,
     backgroundColor: 'rgba(2,6,23,0.62)',
   },
   endOfRouteFeedbackWrap: {
@@ -1710,11 +1726,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   overlayRoot: {
-    ...StyleSheet.absoluteFillObject,
+    ...absoluteFill,
     justifyContent: 'flex-end',
   },
   overlayBackdrop: {
-    ...StyleSheet.absoluteFillObject,
+    ...absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.35)',
   },
   iosHiddenHotzone: {

@@ -47,7 +47,7 @@ export function LocationPermissionOverlay({
 
 const styles = StyleSheet.create({
   permissionOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 24,
