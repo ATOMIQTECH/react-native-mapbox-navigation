@@ -1,6 +1,9 @@
 # Changelog
 
-## 2.1.1
+## 2.2.0
+
+Supersedes the unpublished 2.1.1. **2.1.0 does not build for Android** and
+should not be used.
 
 ### Fixed
 
@@ -28,6 +31,25 @@
     synthesized `.mapboxMap` property.
 
   Anyone who installed 2.1.0 could not build for Android. Upgrade to 2.1.1.
+
+- **React Native 0.86 compatibility.** RN 0.86 removed the `absoluteFillObject`
+  export from StyleSheet's types, and `src/index.tsx` used it five times. Since
+  `main`/`types` point at raw TSX, consumers compile this source, so on RN 0.86
+  that surfaced as an error in *their* build. Replaced with a locally declared
+  constant rather than RN's `absoluteFill`, because the peer range is
+  `react-native: *` and a local object is correct on every version. Verified the
+  library typechecks against RN 0.84 and RN 0.86 with `skipLibCheck` off.
+
+- **iOS: two Swift type errors**, found by the first build that ever
+  type-checked against the Mapbox frameworks:
+  - `Expression` was ambiguous once the iOS 26 SDK added
+    `Foundation.Expression`; qualified to `MapboxMaps.Expression`.
+  - The per-event observer registrations used a `for` loop, which
+    `ModuleDefinitionBuilder` rejects as a result builder. Unrolled, keeping
+    the per-event gating that Android has.
+
+- The security scanner's temp-file template was BSD-only, so the scan job
+  failed on Linux while passing on macOS.
 
 - Followed that with the second AGP 9 blocker in the same file: AGP 9's built-in
   Kotlin does not provide `android { kotlinOptions { } }`, so the Kotlin target
@@ -118,6 +140,21 @@
   Swift files were silently omitted. It now globs `ios/*.swift`.
 
 ### Changed
+
+- **`scripts/` is no longer published.** It holds only maintainer tooling (the
+  release verifier and the security scanner); no lifecycle script runs it and
+  nothing in the published surface references it.
+
+- Android and iOS builds are now gated in CI. Both platforms are compiled on
+  every change that can affect them, which is what caught the faults above.
+
+- Dependency upgrades to clear security advisories: `expo-module-scripts`
+  3.5.4 → 56.0.3, and in the example app `expo` 54 → 57, `react-native`
+  0.81 → 0.86. Root advisories 45 → 15 and example 37 → 17, with no critical
+  or high-critical findings left. None of these ever reached consumers: the
+  package declares no runtime dependencies and neither lockfiles nor the
+  example app are published.
+
 
 - **`ACCESS_BACKGROUND_LOCATION` is no longer added automatically** on Android.
   It triggers a Google Play policy review and prominent-disclosure requirement.
