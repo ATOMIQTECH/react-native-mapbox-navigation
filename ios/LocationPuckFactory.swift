@@ -1,7 +1,8 @@
 import CoreGraphics
 import Foundation
+// v3 drops `UserLocationStyle`; the puck is described with `PuckType` straight
+// from MapboxMaps, so the Navigation SDK import is no longer needed here.
 import MapboxMaps
-import MapboxNavigation
 import UIKit
 
 /// Navigation states a custom puck can be bound to.
@@ -21,10 +22,17 @@ enum LocationPuckState: String, CaseIterable {
 
 /// The outcome of resolving one puck appearance.
 enum LocationPuckResolution {
-  /// Apply this style to `NavigationMapView.userLocationStyle`.
-  case style(UserLocationStyle)
-  /// Hide the puck. `userLocationStyle = nil` draws a transparent puck while
-  /// keeping location updates flowing.
+  /// Apply this puck to `NavigationMapView.puckType`.
+  ///
+  /// v2 assigned a `UserLocationStyle`; v3 removed that type and takes the Maps
+  /// `PuckType` directly.
+  case style(PuckType)
+  /// Hide the puck while keeping location updates flowing.
+  ///
+  /// v3 keeps this behaviour: `NavigationMapView` maps a nil `puckType` to an
+  /// all-transparent 2D puck rather than switching location off. Mapbox does
+  /// this deliberately, because Maps stops delivering location data entirely if
+  /// the underlying `LocationOptions.puckType` is nil.
   case hidden
   /// Leave the Mapbox SDK default in place.
   case sdkDefault
@@ -107,30 +115,109 @@ final class LocationPuckFactory {
 
   // MARK: - Tinted
 
-  /// Recolor Mapbox's built-in course puck.
+  /// Base edge length, in points, that the tint images are rasterised at.
   ///
-  /// `UserPuckCourseView` draws the standard navigation puck and exposes its
-  /// three colors, so tinting needs no image or model assets.
-  private func makeTintedStyle(_ appearance: [String: Any]) -> UserLocationStyle {
-    let scale = (appearance["scale"] as? NSNumber)?.doubleValue ?? 1
-    let side = CGFloat((scale.isFinite ? scale : 1).clamped(to: 0.2...4)) * 75.0
-    let courseView = UserPuckCourseView(frame: CGRect(origin: .zero, size: CGSize(width: side, height: side)))
+  /// v2 sized the course view directly (`scale * 75pt`). The v3 puck is
+  /// image-based and scales through `Puck2DConfiguration.scale`, so the images
+  /// are drawn once at this size and scaled by the SDK. Drawing larger than the
+  /// 75pt v2 default keeps them crisp when scaled up.
+  private static let tintedPuckBaseSide: CGFloat = 96
+
+  /// Recolour the navigation puck.
+  ///
+  /// v2 did this with `UserPuckCourseView`, a `UIView` exposing `puckColor`,
+  /// `fillColor` and `shadowColor`. v3 removed both `UserLocationStyle` and
+  /// `UserPuckCourseView`, and its 2D puck is described entirely by three
+  /// images — so the tint is now rasterised here instead of configured on a
+  /// view. The JS-facing keys (`color`, `bearingColor`, `haloColor`, `opacity`,
+  /// `scale`) are unchanged.
+  ///
+  /// The three images map onto v2's colours as follows:
+  ///   - `shadowImage`  — the outer halo circle, v2's `fillColor`
+  ///   - `topImage`     — the inner body dot, v2's `puckColor`
+  ///   - `bearingImage` — the heading arrow, also v2's `puckColor`
+  ///
+  /// `bearingImage` is the layer the SDK rotates to the course, matching how
+  /// the course view's arrow tracked heading in v2.
+  private func makeTintedStyle(_ appearance: [String: Any]) -> PuckType {
+    let rawScale = (appearance["scale"] as? NSNumber)?.doubleValue ?? 1
+    let scale = (rawScale.isFinite ? rawScale : 1).clamped(to: 0.2...4)
 
     // `color` paints the puck body/arrow; `haloColor` paints the surrounding
     // circle. Fall back to `bearingColor` so a caller supplying only that key
     // still gets a visibly tinted puck.
-    if let body = Self.color(appearance["color"]) ?? Self.color(appearance["bearingColor"]) {
-      courseView.puckColor = body
-      courseView.shadowColor = body.withAlphaComponent(0.16)
-    }
-    if let halo = Self.color(appearance["haloColor"]) {
-      courseView.fillColor = halo
-    }
-    if let opacity = (appearance["opacity"] as? NSNumber)?.doubleValue, opacity.isFinite {
-      courseView.alpha = CGFloat(opacity.clamped(to: 0...1))
-    }
+    let body = Self.color(appearance["color"])
+      ?? Self.color(appearance["bearingColor"])
+      ?? UIColor(red: 0.22, green: 0.49, blue: 0.96, alpha: 1)
+    let halo = Self.color(appearance["haloColor"]) ?? UIColor.white
 
-    return .courseView(courseView)
+    let rawOpacity = (appearance["opacity"] as? NSNumber)?.doubleValue
+    let opacity = (rawOpacity?.isFinite == true) ? rawOpacity!.clamped(to: 0...1) : 1
+
+    let side = Self.tintedPuckBaseSide
+
+    return .puck2D(
+      Puck2DConfiguration(
+        topImage: Self.circleImage(diameter: side * 0.42, fill: body, border: halo, borderWidth: side * 0.055),
+        bearingImage: Self.bearingArrowImage(side: side, fill: body),
+        shadowImage: Self.circleImage(diameter: side, fill: halo, border: nil, borderWidth: 0),
+        scale: .constant(scale),
+        // Disambiguates the two Puck2DConfiguration overloads that would
+        // otherwise both match these argument labels.
+        pulsing: nil,
+        showsAccuracyRing: false,
+        opacity: opacity
+      )
+    )
+  }
+
+  /// Rasterise a filled circle, optionally with a border ring.
+  private static func circleImage(
+    diameter: CGFloat,
+    fill: UIColor,
+    border: UIColor?,
+    borderWidth: CGFloat
+  ) -> UIImage {
+    let size = CGSize(width: diameter, height: diameter)
+    return UIGraphicsImageRenderer(size: size).image { context in
+      let cgContext = context.cgContext
+      let inset = borderWidth / 2
+      let rect = CGRect(origin: .zero, size: size).insetBy(dx: inset, dy: inset)
+
+      cgContext.setFillColor(fill.cgColor)
+      cgContext.fillEllipse(in: rect)
+
+      if let border, borderWidth > 0 {
+        cgContext.setStrokeColor(border.cgColor)
+        cgContext.setLineWidth(borderWidth)
+        cgContext.strokeEllipse(in: rect)
+      }
+    }
+  }
+
+  /// Rasterise the heading arrow.
+  ///
+  /// Drawn on a square canvas with the arrow pointing up and centred, so the
+  /// SDK's rotation about the image centre produces the right heading.
+  private static func bearingArrowImage(side: CGFloat, fill: UIColor) -> UIImage {
+    let size = CGSize(width: side, height: side)
+    return UIGraphicsImageRenderer(size: size).image { context in
+      let cgContext = context.cgContext
+      let midX = side / 2
+      let halfWidth = side * 0.19
+      let top = side * 0.06
+      let bottom = side * 0.40
+
+      let path = UIBezierPath()
+      path.move(to: CGPoint(x: midX, y: top))
+      path.addLine(to: CGPoint(x: midX + halfWidth, y: bottom))
+      path.addLine(to: CGPoint(x: midX - halfWidth, y: bottom))
+      path.close()
+
+      cgContext.setFillColor(fill.cgColor)
+      cgContext.addPath(path.cgPath)
+      cgContext.fillPath()
+    }
   }
 
   // MARK: - 2D
@@ -175,7 +262,7 @@ final class LocationPuckFactory {
         opacity: opacity.isFinite ? opacity.clamped(to: 0...1) : 1
       )
 
-      completion(.style(.puck2D(configuration: configuration)))
+      completion(.style(.puck2D(configuration)))
     }
   }
 
@@ -214,7 +301,7 @@ final class LocationPuckFactory {
         configuration.modelOpacity = .constant(opacity.clamped(to: 0...1))
       }
 
-      completion(.style(.puck3D(configuration: configuration)))
+      completion(.style(.puck3D(configuration)))
     }
   }
 

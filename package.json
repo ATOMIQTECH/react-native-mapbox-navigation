@@ -20,6 +20,7 @@
     "android/src/main/AndroidManifest.xml",
     "ios/*.podspec",
     "ios/*.swift",
+    "ios/*.rb",
     "src",
     "app.plugin.js",
     "expo-module.config.json",
@@ -36,7 +37,8 @@
     "biome:check": "biome check",
     "lint": "expo-module lint -- --ext .ts,.tsx",
     "test": "expo-module test --passWithNoTests",
-    "verify": "node ./scripts/verify-release.mjs"
+    "verify": "node ./scripts/verify-release.mjs",
+    "verify:parity": "node ./scripts/verify-parity.mjs"
   },
   "keywords": [
     "react-native",
