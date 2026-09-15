@@ -1,5 +1,214 @@
 # Changelog
 
+## 3.0.0
+
+Migrates both platforms to **Mapbox Navigation SDK v3** (iOS 3.30.1, Android
+3.30.1) and Maps SDK 10.19.0 → 11.30.1.
+
+The headline reason is not the new features: pinning Maps 10.x forced every app
+that also uses `@rnmapbox/maps` onto a deprecated map stack, because that package
+needs Maps v11. Sharing a major with it removes the conflict.
+
+### Breaking
+
+- **Maps SDK 11 is now required** (was 10.19.0). If you pinned Mapbox Maps
+  versions to work around the old conflict, remove those pins.
+- **iOS is now integrated via Swift Package Manager.** Mapbox publishes no
+  CocoaPods artifacts for Navigation v3, so the config plugin injects the SDK as
+  Swift packages from a `post_install` hook. Run `pod install` after upgrading.
+  Nothing changes in your Podfile — the plugin edits it.
+- **`onDestinationPreview` no longer fires on either platform.** It mirrored a
+  route-preview phase that only ever existed inside Android's Drop-In UI, which
+  v3 removed; it never fired on iOS at all. `addDestinationPreviewListener` is
+  kept and marked `@deprecated`, so existing subscriptions keep compiling and
+  simply never fire. `onDestinationChanged` is **unaffected** — it comes from the
+  `setDestination` prop setter, not from Drop-In.
+- **`showsTripProgress` and `showsSpeedLimits` have no effect on Android.** v3
+  deleted the Drop-In UI, and the standalone `MapboxTripProgressView` /
+  `MapboxSpeedInfoView` widgets that replace it render as an unstyled light bar
+  pinned to the screen edge, with no theming hooks to blend into a host app.
+  Trip progress remains available — and themeable — through this package's own
+  `bottomSheet` overlay. Both props are logged once at runtime rather than
+  silently ignored. Unchanged on iOS.
+- **`showsWayNameLabel`, `showsReportFeedback` and `showsEndOfRouteFeedback`
+  have no effect on Android.** v3 ships no widget to host them. Unchanged on
+  iOS.
+- **Per-state location pucks collapse to one on Android.** `locationPuck` still
+  accepts all five states and the prop shape is unchanged, but v3's `locationPuck`
+  component takes a single puck, so only the `activeNavigation` / `default` entry
+  has a visible effect. Unchanged on iOS.
+
+### Added
+
+- **`colors` — theme the navigation UI.** 24 optional colour overrides covering
+  the route line and its casing, traversed and alternative lines, the five
+  congestion bands, restricted roads, the on-map turn arrow, the maneuver banner
+  (background, sub-background, primary/secondary/distance text, turn icon), the
+  floating map buttons, and the iOS trip progress bar. All of them apply live,
+  including changes made after mount, and every key works on **both** platforms
+  except the three `tripProgress*` ones, which are iOS-only (see below).
+
+  ```tsx
+  <MapboxNavigationView
+    destination={destination}
+    colors={{
+      routeLine: '#1E9E5A',
+      routeLineCasing: '#14532D',
+      maneuverBackground: '#14532D',
+      maneuverText: '#FFFFFF',
+      maneuverTurnIcon: '#FFFFFF',
+      congestionHeavy: '#DC2626',
+    }}
+  />
+  ```
+
+  Fully additive: omitting it keeps every Mapbox default, so no existing app
+  changes appearance. Three things worth knowing:
+
+  - Use `#RGB` or `#RRGGBB`. **Eight-digit hex is not portable** — iOS reads it
+    as `#RRGGBBAA` and Android as `#AARRGGBB`, so the same string gives
+    different colours. Pass an opaque colour instead.
+  - `routeLine` also sets the `low` and `unknown` congestion colours, because
+    congestion shading is painted over the base line and those two bands cover
+    most of a typical route — without it a recoloured route still looks blue.
+    Set `congestionLow` / `congestionUnknown` to override them individually.
+  - `tripProgressBackground`, `tripProgressText` and `tripProgressIcon` are
+    **iOS only**. Android has no trip progress bar to colour: v3's standalone
+    widget only lays out correctly inside the Drop-In info panel that v3
+    removed. Use the `bottomSheet` overlay there — it is JS, so it takes your
+    own styles directly.
+  - Treat it as a theme you set rather than a value you toggle. On iOS the
+    chrome colours go through `UIAppearance`, which is process-global and has no
+    "unset", so *removing* a key leaves its last colour rather than restoring
+    the Mapbox default until the app relaunches. Changing a key's value always
+    works — pass the full palette and vary values within it.
+  - `maneuverTurnIcon` is the one key whose result differs by platform. The turn
+    icon is drawn in two tones, and iOS can colour them separately, so only the
+    emphasised strokes change and a fork still reads correctly; Android only
+    permits a flat tint at runtime, so the whole icon takes the colour.
+
+- **The iOS trip progress bar can now be hidden on its own.** The cancel button
+  lives in that bar, so the bar was previously kept up by `showsActionButtons`
+  — which meant hiding it also meant giving up every other action button. It is
+  now gated on `showCancelButton`, so `showsTripProgress={false}` together with
+  `showCancelButton={false}` hides just that bar. If you were passing
+  `showCancelButton={false}` *and* `showsTripProgress={false}` and relying on the
+  bar staying visible, it will now be hidden.
+
+- **The package no longer crashes Expo Go.** The native view is resolved
+  defensively and falls back to a labelled placeholder when the native module is
+  absent, so a JS-only runtime renders a message instead of throwing.
+- **A missing access token now fails safe.** v3's `ApiConfiguration.default`
+  calls `assertionFailure`, which traps in Debug builds. A missing or blank
+  token is now reported through `onError` as `MISSING_ACCESS_TOKEN` instead.
+- **`npm run verify:parity`** — checks that props, async functions and events
+  still agree across iOS, Android and the TypeScript surface. Neither native
+  platform can be compile-checked from this repo, so silent one-platform drift
+  was the most likely way to break a consumer.
+
+- **`routeProfile` — choose the Directions profile.** `driving-traffic`
+  (default, and the only one reachable before 3.0.0), `driving`, `walking` or
+  `cycling`. Changing it re-requests the route. Note that only
+  `driving-traffic` carries live traffic, so the `congestion*` colours have
+  nothing to shade on the other three.
+
+- **`routeExclusions` — route around road classes and specific points.**
+  `roadClasses` takes `toll`, `motorway`, `ferry`, `tunnel`, `restricted`,
+  `unpaved` and `cashOnlyTolls`; `locations` takes up to 50 coordinates to avoid.
+
+  ```tsx
+  <MapboxNavigationView
+    destination={destination}
+    routeProfile='driving'
+    routeExclusions={{ roadClasses: ['toll', 'ferry'] }}
+    vehicle={{ maxHeight: 4.2, maxWeight: 18 }}
+  />
+  ```
+
+- **`vehicle` — route for a vehicle's dimensions.** `maxHeight` and `maxWidth`
+  in metres, `maxWeight` in metric tons, so oversized vehicles avoid roads they
+  cannot use.
+
+  Both of these are driving-only at the API, and the API *rejects* rather than
+  ignores them elsewhere: `max_height` on `walking` or `cycling` answers
+  `422 Invalid query param`, and those profiles accept only `ferry` and
+  `cashOnlyTolls` for exclusions. Sending them would fail the whole route
+  request, so the wrapper drops them on non-driving profiles and tells you
+  through `onError` (`VEHICLE_NOT_SUPPORTED_BY_PROFILE`,
+  `ROAD_CLASS_NOT_SUPPORTED_BY_PROFILE`,
+  `EXCLUDED_LOCATIONS_NOT_SUPPORTED_BY_PROFILE`) instead of letting it break.
+
+- **`mapStyleConfig` — configure a Standard style's basemap.** `lightPreset`
+  (`day`/`dusk`/`dawn`/`night`), `show3dObjects`, `showRoadLabels`,
+  `showPlaceLabels`, `showPointOfInterestLabels` and `showTransitLabels`.
+  Applied live. Styles with no configurable import report
+  `MAP_STYLE_CONFIG_UNSUPPORTED` once through `onError` rather than silently
+  doing nothing.
+
+  ```tsx
+  <MapboxNavigationView
+    destination={destination}
+    mapStyleUriDay='mapbox://styles/mapbox/standard'
+    mapStyleConfig={{ lightPreset: 'dusk', show3dObjects: true }}
+  />
+  ```
+
+- **Standard / 3D map styles are supported.** Pass
+  `mapbox://styles/mapbox/standard` or `standard-satellite` through
+  `mapStyleUri`, `mapStyleUriDay` or `mapStyleUriNight` and you get 3D
+  buildings, landmarks and lighting with the route line composing correctly:
+  both SDKs place the navigation layers in the Standard `middle` slot, so the
+  route draws above the basemap but below labels, POIs and extrusions. Verified
+  on device.
+
+### Fixed
+
+- **`cameraPitch` and `cameraZoom` now take effect in following mode on
+  Android.** They previously wrote to `mapboxMap.setCamera(...)`, which the
+  navigation camera overwrote on every frame — the old code logged a warning
+  admitting as much. v3's `*PropertyOverride` API is the supported mechanism, so
+  they now hold. A fix, but a behaviour change if you were passing them.
+- **The Android voice button no longer overlaps the maneuver banner.** It was
+  anchored under a fixed top margin; the banner's height varies with the
+  instruction. Both are now anchored to the bottom of the view.
+- **The Android location puck is visible again.** The navigation camera was
+  never told the route had changed, so the viewport had no geometry to frame and
+  the puck sat off-screen. The routes observer now drives
+  `MapboxNavigationViewportDataSource.onRouteChanged`, which also silences a
+  continuous `you didn't call #onRouteChanged` warning.
+- **`distanceUnit` now works on Android.** It was recorded on both the view and
+  the module and applied nowhere, so Android used the device locale: the same
+  app showed "200 m" on iOS and "100 ft" on Android. It now feeds
+  `DistanceFormatterOptions` on both the process-wide `NavigationOptions` and
+  the maneuver component, which carries its own formatter options and does not
+  read the former. Changing it mid-trip is deferred to the next session — the
+  formatter is baked into the process-wide options — and logged rather than
+  silently dropped.
+- **`routeLineTracksTraversal` now works on Android** via
+  `MapboxRouteLineApiOptions.vanishingRouteLineEnabled`. Previously accepted and
+  ignored; iOS was unaffected.
+- **`showsEndOfRouteFeedback` now works on iOS.** It was accepted as a prop and
+  never applied, so the end-of-route feedback card showed regardless.
+- **The default Android map style is a navigation style again.** v2 inherited
+  Mapbox's navigation styles from Drop-In; the first cut of this migration fell
+  back to `Style.MAPBOX_STREETS`, quietly changing how every Android consumer's
+  map looked. It now defaults to `navigation-day-v1` / `navigation-night-v1`.
+- **`mapStyleUri`, `mapStyleUriDay`, `mapStyleUriNight` and `uiTheme` now apply
+  on Android after mount, and `uiTheme` now selects between the day and night
+  styles.** All four setters previously only refreshed widget visibility, so a
+  style change after mount was dropped and `uiTheme` never influenced the map at
+  all. Automatic sunrise/sunset switching remains iOS-only.
+- **`colors` applied at mount now reaches the iOS route line.** The apply ran
+  before the navigation controller was assigned, so it silently returned and
+  only post-mount changes worked. Route-line colours also survive a day/night
+  style change now, and repaint immediately instead of waiting for the next
+  route refresh.
+- **Props that are unsupported on Android are logged instead of ignored.**
+  `annotatesIntersectionsAlongRoute`, `usesNightStyleWhileInTunnel`,
+  `showsContinuousAlternatives` and the `nativeFloatingButtons` flags other than
+  the audio-guidance button have no v3 Android counterpart; they now say so once
+  at runtime.
+
 ## 2.2.0
 
 Supersedes the unpublished 2.1.1. **2.1.0 does not build for Android** and

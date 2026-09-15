@@ -440,7 +440,12 @@ final class LocationPuckFactory {
 
   // MARK: - Value helpers
 
-  private static func color(_ raw: Any?) -> UIColor? {
+  /// Parse a `#RGB` / `#RRGGBB` / `#RRGGBBAA` colour string.
+  ///
+  /// Note the eight-digit form is read as `#RRGGBBAA`, which differs from
+  /// Android's `Color.parseColor` (`#AARRGGBB`). The public `colors` prop
+  /// therefore documents only the 3- and 6-digit forms as portable.
+  static func color(_ raw: Any?) -> UIColor? {
     guard let hex = (raw as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
           hex.hasPrefix("#") else {
       return nil

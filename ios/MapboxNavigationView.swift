@@ -1,3 +1,4 @@
+import Combine
 import ExpoModulesCore
 // Navigation SDK v3 splits the old monolithic `MapboxNavigation` module in two:
 // `MapboxNavigationCore` holds the navigator, routing and NavigationMapView,
@@ -5,7 +6,13 @@ import ExpoModulesCore
 // and the day/night styles. `MapboxCoreNavigation` no longer exists.
 import MapboxNavigationCore
 import MapboxNavigationUIKit
-import MapboxDirections
+// `excludedLocations` is the one routing option Mapbox keeps behind an SPI —
+// it is a beta Directions API feature and the SDK marks it "subject to
+// change". Importing the group is the only way to reach it; the cost is that a
+// future SDK release could rename or drop it, which would break this build
+// loudly at compile time rather than failing silently at runtime. Everything
+// else used from this module is ordinary public API.
+@_spi(ExperimentalMapboxAPI) import MapboxDirections
 import CoreLocation
 import UIKit
 import MapboxMaps
@@ -121,6 +128,21 @@ class MapboxNavigationView: ExpoView {
   var mapStyleUriNight: String?
   var uiTheme: String = "system"
   var routeAlternatives: Bool = false
+  /// Directions profile. See `resolveProfileIdentifier`.
+  var routeProfile: String = "driving-traffic"
+  /// `{ roadClasses: [...], locations: [{latitude, longitude}] }`.
+  var routeExclusions: [String: Any]?
+  /// `{ maxHeight, maxWidth, maxWeight }`, metres and metric tons.
+  var vehicle: [String: Any]?
+  /// Standard-style basemap configuration. Applied live.
+  var mapStyleConfig: [String: Any]? {
+    didSet {
+      // A different config may well be supported where the last one was not,
+      // so let it report again rather than staying silent for the session.
+      hasWarnedAboutMapStyleConfig = false
+      applyMapStyleConfig(afterStyleLoad: true)
+    }
+  }
   var showsSpeedLimits: Bool = true {
     didSet { applyDynamicUIOptionsIfPossible() }
   }
@@ -151,6 +173,22 @@ class MapboxNavigationView: ExpoView {
   }
   var distanceUnit: String = "metric"
   var language: String = "en"
+  /// Colour overrides for the route line, the on-map turn arrow and the chrome.
+  ///
+  /// Applied live. The route line and the arrow are plain properties on
+  /// `NavigationMapView`; the chrome is reached through `UIAppearance`, which
+  /// only runs at view creation, so `MapboxNavigationTheme` also walks the live
+  /// hierarchy. See `MapboxNavigationTheme` for why that split exists.
+  var colors: [String: Any]? {
+    didSet {
+      MapboxNavigationTheme.configure(with: colors)
+      MapboxNavigationTheme.applyAppearance()
+      applyRouteLineColors(redraw: true)
+      if let viewController = navigationViewController {
+        MapboxNavigationTheme.refresh(in: viewController)
+      }
+    }
+  }
   var locationPuck: [String: Any]? {
     didSet {
       puckStates = LocationPuckFactory.parseStates(locationPuck)
@@ -169,6 +207,9 @@ class MapboxNavigationView: ExpoView {
   private var isRouteCalculationInProgress = false
   private var hasPendingSessionConflict = false
   private var routeRequestToken = UUID()
+  private var hasWarnedAboutMapStyleConfig = false
+  /// Keeps the `onStyleLoaded` subscription alive; see `observeStyleLoads`.
+  private var styleLoadedSubscription: AnyCancellable?
   private var isCameraFollowing = true
   private var hasCameraPanGesture = false
   private var puckStates = [LocationPuckState: [String: Any]]()
@@ -341,10 +382,15 @@ class MapboxNavigationView: ExpoView {
     let destinationName = (dest["name"] as? String) ?? (dest["title"] as? String) ?? "Destination"
     waypointsList.append(Waypoint(coordinate: destCoord, name: destinationName))
     
-    let routeOptions = NavigationRouteOptions(waypoints: waypointsList)
+    let routeOptions = NavigationRouteOptions(
+      waypoints: waypointsList,
+      profileIdentifier: resolveProfileIdentifier()
+    )
     routeOptions.locale = Locale(identifier: language)
     routeOptions.distanceMeasurementSystem = distanceUnit == "imperial" ? .imperial : .metric
     routeOptions.includesAlternativeRoutes = routeAlternatives
+    applyRouteExclusions(to: routeOptions)
+    applyVehicleConstraints(to: routeOptions)
     
     let requestToken = UUID()
     routeRequestToken = requestToken
@@ -438,6 +484,7 @@ class MapboxNavigationView: ExpoView {
     viewController.routeLineTracksTraversal = routeLineTracksTraversal
     viewController.annotatesIntersectionsAlongRoute = annotatesIntersectionsAlongRoute
     applyInterfaceStyle(to: viewController)
+    applyRouteLineColors()
     applyCameraConfiguration(to: viewController)
     
     // Attach to the nearest owning view controller in the current RN hierarchy.
@@ -449,11 +496,29 @@ class MapboxNavigationView: ExpoView {
       viewController.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
       viewController.didMove(toParent: parent)
       
+      navigationViewController = viewController
+      // Subscribed before `applyMapStyle` triggers the load, not after: the
+      // load can finish first, and `onStyleLoaded` does not replay for a style
+      // that is already loaded, so subscribing afterwards missed it entirely.
+      observeStyleLoads()
       // The view has now loaded, so `styleManager` exists — force the map's
       // day/night tiles to match `uiTheme` (see applyMapStyle).
       applyMapStyle(to: viewController)
+      // The banner views are built in `loadView`, before `styleManager` gets a
+      // chance to run `apply()`, so the appearance proxies alone would not have
+      // reached them. The SDK's own answer is `forceRefreshAppearance`, which
+      // detaches and re-adds every window subview — that is not something to
+      // depend on with a React Native root in that window, so recolour the
+      // hierarchy we own directly.
+      MapboxNavigationTheme.refresh(in: viewController)
 
-      navigationViewController = viewController
+      // `applyRouteLineColors` reads
+      // `navigationViewController?.navigationMapView`, so it has to come after
+      // that property is assigned above — called any earlier it silently did
+      // nothing, and a `colors` value supplied at mount never reached the
+      // route line.
+      applyRouteLineColors()
+      applyMapStyleConfig()
       renderNavigationMarkersIfPossible()
       applyLocationPuck(for: .activeNavigation, force: true)
       hostViewController = parent
@@ -484,6 +549,7 @@ class MapboxNavigationView: ExpoView {
     navigationViewController?.view.removeFromSuperview()
     navigationViewController?.removeFromParent()
     navigationViewController = nil
+    styleLoadedSubscription = nil
     hasCameraPanGesture = false
     if isWaitingForOriginFix {
       isWaitingForOriginFix = false
@@ -927,6 +993,10 @@ class MapboxNavigationView: ExpoView {
   /// `styleManager` is set up in `viewDidLoad`).
   private func applyMapStyle(to viewController: NavigationViewController) {
     guard let styleManager = viewController.styleManager else { return }
+    // Applying a style re-runs the appearance pass. The route line's plain
+    // colours are proxy-backed so they survive it, but the per-congestion
+    // colours live in a struct with no proxy, so re-assert them afterwards.
+    defer { applyRouteLineColors(redraw: true) }
     switch uiTheme.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
     case "light", "day":
       styleManager.automaticallyAdjustsStyleForTimeOfDay = false
@@ -996,6 +1066,346 @@ class MapboxNavigationView: ExpoView {
   /// leaves the SDK puck untouched when neither is configured. Asset loading is
   /// asynchronous, so a token guards against a late load overwriting a puck for
   /// a state the session has since left.
+  /**
+   Apply the `colors` prop to the route line.
+
+   v3 groups these under "RouteLine Customization" on `NavigationMapView`:
+   `routeColor`, `routeCasingColor`, `traversedRouteColor`,
+   `routeAlternateColor`, `routeAlternateCasingColor` and
+   `routeRestrictedAreaColor`, plus per-congestion colours on
+   `congestionConfiguration`.
+
+   `routeColor` is a convenience that writes the `.unknown` and `.low`
+   congestion colours, which is why setting `routeLine` alone is enough to stop
+   a route looking Mapbox-blue: congestion shading is drawn over the base line,
+   and those two bands cover most of a typical route. Explicit `congestion*`
+   values are applied afterwards so they win.
+   */
+  // MARK: - Routing options
+
+  /**
+   Re-request the route after a change to the request parameters.
+
+   `startNavigationIfReady` deliberately refuses to do anything once a
+   controller exists, so on its own it cannot express "the profile changed, the
+   current route is now wrong". Android already re-requests for
+   `routeAlternatives` by clearing its latch; this gives iOS the same behaviour
+   for the routing props, and makes it explicit that changing one mid-trip
+   restarts guidance rather than silently keeping a stale route.
+   */
+  func restartRouteRequestIfNeeded() {
+    guard navigationViewController != nil else {
+      startNavigationIfReady()
+      return
+    }
+    cleanupNavigation()
+    startNavigationIfReady()
+  }
+
+  /**
+   Map the `routeProfile` prop onto a `ProfileIdentifier`.
+
+   Defaults to `automobileAvoidingTraffic`, which is what `NavigationRouteOptions`
+   itself defaults to and the only profile this package could reach before 3.0.0
+   — so an existing consumer sees no change.
+   */
+  private func resolveProfileIdentifier() -> ProfileIdentifier {
+    switch routeProfile.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "driving":
+      return .automobile
+    case "walking":
+      return .walking
+    case "cycling":
+      return .cycling
+    case "driving-traffic", "":
+      return .automobileAvoidingTraffic
+    default:
+      dispatchError([
+        "code": "INVALID_ROUTE_PROFILE",
+        "message": "Unknown routeProfile '\(routeProfile)'. Falling back to driving-traffic."
+      ])
+      return .automobileAvoidingTraffic
+    }
+  }
+
+  /**
+   Apply the `routeExclusions` prop.
+
+   The Directions API shares one `exclude` query parameter between road classes
+   and excluded points, and `RouteOptions` mirrors that by encoding
+   `roadClassesToAvoid` and `excludedLocations` into the same key — so both can
+   be set independently here without one clobbering the other.
+   */
+  /// Whether the active profile accepts the driving-only request parameters.
+  private var isDrivingProfile: Bool {
+    let identifier = resolveProfileIdentifier()
+    return identifier == .automobile || identifier == .automobileAvoidingTraffic
+  }
+
+  private func applyRouteExclusions(to routeOptions: NavigationRouteOptions) {
+    guard let routeExclusions else { return }
+
+    if let rawClasses = routeExclusions["roadClasses"] as? [String] {
+      var classes: RoadClasses = []
+      var dropped: [String] = []
+      for raw in rawClasses {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Walking and cycling accept only `ferry` and `cash_only_tolls`; the
+        // Directions API answers 422 for the rest rather than ignoring them,
+        // which fails the whole route request. Verified against the API.
+        if !isDrivingProfile, name != "ferry", name != "cashOnlyTolls" {
+          dropped.append(name)
+          continue
+        }
+        switch name {
+        case "toll": classes.insert(.toll)
+        case "motorway": classes.insert(.motorway)
+        case "ferry": classes.insert(.ferry)
+        case "tunnel": classes.insert(.tunnel)
+        case "restricted": classes.insert(.restricted)
+        case "unpaved": classes.insert(.unpaved)
+        case "cashOnlyTolls": classes.insert(.cashTollOnly)
+        default:
+          dispatchError([
+            "code": "INVALID_ROAD_CLASS",
+            "message": "Unknown routeExclusions.roadClasses entry '\(raw)'. Ignored."
+          ])
+        }
+      }
+      if !dropped.isEmpty {
+        dispatchError([
+          "code": "ROAD_CLASS_NOT_SUPPORTED_BY_PROFILE",
+          "message": "The '\(routeProfile)' profile only supports excluding ferry and " +
+            "cashOnlyTolls, so \(dropped.sorted().joined(separator: ", ")) " +
+            "\(dropped.count == 1 ? "was" : "were") dropped. Sending them would have " +
+            "failed the route request."
+        ])
+      }
+      routeOptions.roadClassesToAvoid = classes
+    }
+
+    if let rawLocations = routeExclusions["locations"] as? [[String: Any]], !rawLocations.isEmpty {
+      guard isDrivingProfile else {
+        dispatchError([
+          "code": "EXCLUDED_LOCATIONS_NOT_SUPPORTED_BY_PROFILE",
+          "message": "routeExclusions.locations is only supported on the driving and " +
+            "driving-traffic profiles, so it was dropped for '\(routeProfile)'."
+        ])
+        return
+      }
+      var coordinates: [CLLocationCoordinate2D] = []
+      for entry in rawLocations {
+        guard let latitude = entry["latitude"] as? Double,
+              let longitude = entry["longitude"] as? Double else {
+          continue
+        }
+        coordinates.append(CLLocationCoordinate2D(latitude: latitude, longitude: longitude))
+      }
+      // The API rejects the whole request past 50 points, so trim rather than
+      // let a large list fail the route outright.
+      if coordinates.count > 50 {
+        dispatchError([
+          "code": "TOO_MANY_EXCLUDED_LOCATIONS",
+          "message": "routeExclusions.locations supports at most 50 points; using the first 50 of \(coordinates.count)."
+        ])
+        coordinates = Array(coordinates.prefix(50))
+      }
+      routeOptions.excludedLocations = coordinates
+    }
+  }
+
+  /// Apply the `vehicle` prop. Metres and metric tons, matching `RouteOptions`'
+  /// own units so no conversion is needed beyond wrapping in `Measurement`.
+  private func applyVehicleConstraints(to routeOptions: NavigationRouteOptions) {
+    guard let vehicle, !vehicle.isEmpty else { return }
+    // `max_height`, `max_width` and `max_weight` are driving-only: the
+    // Directions API answers 422 "Invalid query param" for them on walking and
+    // cycling, which fails the whole request. Verified against the API.
+    guard isDrivingProfile else {
+      dispatchError([
+        "code": "VEHICLE_NOT_SUPPORTED_BY_PROFILE",
+        "message": "Vehicle dimensions are only supported on the driving and " +
+          "driving-traffic profiles, so `vehicle` was dropped for '\(routeProfile)'. " +
+          "Sending it would have failed the route request."
+      ])
+      return
+    }
+    if let height = vehicle["maxHeight"] as? Double {
+      routeOptions.maximumHeight = Measurement(value: height, unit: UnitLength.meters)
+    }
+    if let width = vehicle["maxWidth"] as? Double {
+      routeOptions.maximumWidth = Measurement(value: width, unit: UnitLength.meters)
+    }
+    if let weight = vehicle["maxWeight"] as? Double {
+      routeOptions.maximumWeight = Measurement(value: weight, unit: UnitMass.metricTons)
+    }
+  }
+
+  // MARK: - Standard style configuration
+
+  /**
+   Re-apply `mapStyleConfig` every time a style finishes loading.
+
+   Writes to a style import are ignored while the style is still loading, so a
+   config supplied at mount lands too early, and switching `mapStyleUri` at
+   runtime replaces the import the previous config was written to. Subscribing
+   covers both. The SDK's own `StandardDayStyle` does exactly this for its
+   `lightPreset`.
+   */
+  private func observeStyleLoads() {
+    guard let mapboxMap = navigationViewController?.navigationMapView?.mapView.mapboxMap else {
+      return
+    }
+    styleLoadedSubscription = mapboxMap.onStyleLoaded.sink { [weak self] _ in
+      self?.applyMapStyleConfig(afterStyleLoad: true)
+    }
+  }
+
+  /**
+   Apply the `mapStyleConfig` prop to the basemap style import.
+
+   Standard styles expose their basemap as a configurable import rather than
+   fixed layers, which is what `setStyleImportConfigProperty` writes to. This is
+   the same mechanism the SDK's own `StandardDayStyle` uses to set `lightPreset`.
+
+   Classic styles (`navigation-day-v1`, `streets-v12`) have no `basemap` import,
+   so every write throws. That is not an error worth surfacing per property —
+   the consumer simply paired a config with a style that has nothing to
+   configure — so it is reported once through `onError` and then dropped.
+
+   Re-applied on `styleLoaded` as well as immediately, because writes are
+   silently ignored until the style is loaded and a `mapStyleConfig` set at
+   mount would otherwise land too early.
+   */
+  private func applyMapStyleConfig(afterStyleLoad: Bool = false) {
+    guard let config = mapStyleConfig, !config.isEmpty else { return }
+    guard let mapboxMap = navigationViewController?.navigationMapView?.mapView.mapboxMap else {
+      return
+    }
+
+    var values: [String: Any] = [:]
+    if let preset = config["lightPreset"] as? String { values["lightPreset"] = preset }
+    if let show = config["show3dObjects"] as? Bool { values["show3dObjects"] = show }
+    if let show = config["showRoadLabels"] as? Bool { values["showRoadLabels"] = show }
+    if let show = config["showPlaceLabels"] as? Bool { values["showPlaceLabels"] = show }
+    if let show = config["showPointOfInterestLabels"] as? Bool {
+      values["showPointOfInterestLabels"] = show
+    }
+    if let show = config["showTransitLabels"] as? Bool { values["showTransitLabels"] = show }
+    guard !values.isEmpty else { return }
+
+    // Config properties live on style *imports*, and the import's id is
+    // whatever the style author chose — "basemap" is only the conventional name
+    // used by styles that import Standard (Mapbox's own navigation styles do).
+    // Writing to a hard-coded "basemap" therefore silently did nothing on
+    // styles that name it otherwise, so discover the ids instead.
+    let importIds = mapboxMap.styleImports.map(\.id)
+    let targets = importIds.isEmpty ? ["basemap"] : importIds
+
+    var applied: [String] = []
+    var failed: [String] = []
+    for (key, value) in values {
+      var landed = false
+      for importId in targets {
+        do {
+          try mapboxMap.setStyleImportConfigProperty(for: importId, config: key, value: value)
+          landed = true
+        } catch {
+          continue
+        }
+      }
+      if landed { applied.append(key) } else { failed.append(key) }
+    }
+
+    // Only judge support once a style has finished loading. Before that the
+    // map reports no imports at all, so warning from the eager call produced a
+    // false "unsupported" that then latched and hid the later success.
+    if !failed.isEmpty, afterStyleLoad, !hasWarnedAboutMapStyleConfig {
+      hasWarnedAboutMapStyleConfig = true
+      dispatchError([
+        "code": "MAP_STYLE_CONFIG_UNSUPPORTED",
+        "message": "mapStyleConfig (\(failed.sorted().joined(separator: ", "))) had no " +
+          "effect: this style's imports (\(importIds.isEmpty ? "none" : importIds.joined(separator: ", "))) " +
+          "accept no such configuration. Use a Mapbox Standard style such as " +
+          "mapbox://styles/mapbox/standard."
+      ])
+    }
+
+    Log.info(
+      "mapStyleConfig applied=\(applied.sorted()) failed=\(failed.sorted()) imports=\(importIds)",
+      category: .navigationUI
+    )
+  }
+
+  private func applyRouteLineColors(redraw: Bool = false) {
+    guard let colors, !colors.isEmpty else { return }
+    guard let navigationMapView = navigationViewController?.navigationMapView else { return }
+
+    func color(_ key: String) -> UIColor? {
+      LocationPuckFactory.color(colors[key])
+    }
+
+    if let routeLine = color("routeLine") {
+      navigationMapView.routeColor = routeLine
+    }
+    if let casing = color("routeLineCasing") {
+      navigationMapView.routeCasingColor = casing
+    }
+    if let traversed = color("routeLineTraversed") {
+      navigationMapView.traversedRouteColor = traversed
+    }
+    if let alternative = color("routeLineAlternative") {
+      navigationMapView.routeAlternateColor = alternative
+    }
+    if let alternativeCasing = color("routeLineAlternativeCasing") {
+      navigationMapView.routeAlternateCasingColor = alternativeCasing
+    }
+    if let restricted = color("restrictedRoad") {
+      navigationMapView.routeRestrictedAreaColor = restricted
+    }
+    if let arrow = color("maneuverArrow") {
+      navigationMapView.maneuverArrowColor = arrow
+    }
+    if let arrowStroke = color("maneuverArrowStroke") {
+      navigationMapView.maneuverArrowStrokeColor = arrowStroke
+    }
+
+    // Explicit congestion overrides last, so they beat `routeLine`.
+    var congestion = navigationMapView.congestionConfiguration
+    if let low = color("congestionLow") { congestion.colors.mainRouteColors.low = low }
+    if let moderate = color("congestionModerate") { congestion.colors.mainRouteColors.moderate = moderate }
+    if let heavy = color("congestionHeavy") { congestion.colors.mainRouteColors.heavy = heavy }
+    if let severe = color("congestionSevere") { congestion.colors.mainRouteColors.severe = severe }
+    if let unknown = color("congestionUnknown") { congestion.colors.mainRouteColors.unknown = unknown }
+    navigationMapView.congestionConfiguration = congestion
+
+    guard redraw else { return }
+
+    // None of the above repaints anything on its own. `congestionConfiguration`
+    // is a plain `var` with no observer, and every property above writes into
+    // it; the values are only read when the route's map features are rebuilt,
+    // which normally happens on the next route refresh. So a `colors` change
+    // mid-trip appeared to do nothing until the driver moved, and nothing at
+    // all while stationary.
+    //
+    // `show(_:routeAnnotationKinds:)` is the SDK's own way to rebuild them. The
+    // annotation kinds are derived exactly as `NavigationMapView` derives them
+    // internally when it re-shows routes after an alternatives update, so the
+    // alternative-route ETA callouts survive the rebuild.
+    //
+    // This resets the traversed-line offset, so a vanishing route line shows
+    // whole again until the next location update calls back into
+    // `travelAlongRouteLine`. That is a momentary blip on an explicit theme
+    // change, which is a better trade than the colour not applying.
+    guard let routes = navigationViewController?.navigationRoutes else { return }
+    navigationMapView.show(
+      routes,
+      routeAnnotationKinds: navigationMapView.showsRelativeDurationsOnAlternativeManuever
+        ? [.relativeDurationsOnAlternativeManuever]
+        : []
+    )
+  }
+
   private func applyLocationPuck(for state: LocationPuckState, force: Bool = false) {
     guard force || state != currentPuckState else { return }
     currentPuckState = state
@@ -1140,7 +1550,7 @@ class MapboxNavigationView: ExpoView {
     }
 
     if let bottom = resolveBottomBannerController(from: viewController) {
-      let showBottom = showTripProgress || showActionButtons
+      let showBottom = showTripProgress || (showActionButtons && showCancel)
       bottom.view.isHidden = !showBottom
       bottom.view.alpha = showBottom ? 1 : 0
       bottom.view.isUserInteractionEnabled = showBottom
@@ -1154,8 +1564,18 @@ class MapboxNavigationView: ExpoView {
       bottom.cancelButton?.alpha = cancelVisible ? 1 : 0
       bottom.cancelButton?.isUserInteractionEnabled = cancelVisible
     }
-    let showBottom = showTripProgress || showActionButtons
-    // Fallback for SDK builds where bottom banner controller isn't exposed via KVC.
+    // The cancel button lives in this bar, so the bar has to stay up while it
+    // is wanted. `showsActionButtons` alone used to gate that, which meant
+    // hiding the bar also meant giving up every other action button; keying it
+    // on `showCancelButton` lets `showsTripProgress={false}` +
+    // `showCancelButton={false}` hide just this bar.
+    let showBottom = showTripProgress || (showActionButtons && showCancel)
+
+    // `NavigationView.bottomBannerContainerView` is public, so prefer it over
+    // the class-name heuristics below — those are a fallback for SDK builds
+    // that do not expose the banner controllers through KVC.
+    viewController.navigationView.bottomBannerContainerView.isHidden = !showBottom
+
     if !showBottom {
       hideSubtreeByHints(
         root: viewController.view,
@@ -1276,6 +1696,9 @@ class MapboxNavigationView: ExpoView {
 
     // Honour both switches: the dedicated prop and the floating-button toggle.
     viewController.showsReportFeedback = showsReportFeedback && showFeedback
+    // Was accepted as a prop and never applied — the end-of-route feedback card
+    // showed regardless.
+    viewController.showsEndOfRouteFeedback = showsEndOfRouteFeedback
     viewController.loadViewIfNeeded()
 
     let existingButtons = viewController.floatingButtons ?? []
@@ -1409,16 +1832,24 @@ class MapboxNavigationView: ExpoView {
       fallback: mapStyleUriDay ?? mapStyleUri
     )
 
+    // The palette has to be recorded before the view controller is built: the
+    // chrome reads its colours from `UIAppearance` proxies at view-creation
+    // time, and `ThemedDayStyle.apply()` is what populates them.
+    MapboxNavigationTheme.configure(with: colors)
+
+    // Supplying styles at all is what gets `apply()` called, so the themed pair
+    // is needed whenever there is either a custom map style or a chrome colour.
+    // With neither, leaving `styles` nil keeps the SDK's own defaults.
     let styles: [Style]?
-    if dayStyleURL == nil && nightStyleURL == nil {
+    if dayStyleURL == nil && nightStyleURL == nil && MapboxNavigationTheme.palette.isEmpty {
       styles = nil
     } else {
-      let dayStyle = DayStyle()
+      let dayStyle = ThemedDayStyle()
       if let dayStyleURL {
         dayStyle.mapStyleURL = dayStyleURL
       }
 
-      let nightStyle = NightStyle()
+      let nightStyle = ThemedNightStyle()
       if let nightStyleURL {
         nightStyle.mapStyleURL = nightStyleURL
       } else if let dayStyleURL {

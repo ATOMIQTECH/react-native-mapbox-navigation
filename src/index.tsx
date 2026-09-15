@@ -648,6 +648,14 @@ export function addOffRouteListener(listener: (event: OffRouteEvent) => void): S
 /**
  * Subscribe to destination preview events.
  */
+/**
+ * @deprecated No longer fires on either platform as of 3.0.0.
+ *
+ * This mirrored a distinct "route preview" phase that only ever existed inside
+ * the Android Drop-In UI, which Mapbox removed in Navigation SDK v3. It never
+ * fired on iOS at all. The subscription is kept so existing code keeps working,
+ * but the callback will not be invoked.
+ */
 export function addDestinationPreviewListener(
   listener: (event: DestinationPreviewEvent) => void
 ): Subscription {

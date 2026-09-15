@@ -9,6 +9,7 @@ type ScenarioRoute =
   | 'EventsScenario'
   | 'AppearanceScenario'
   | 'LocationPuckScenario'
+  | 'RoutingScenario'
 
 const SCENARIOS: { route: ScenarioRoute; title: string; description: string }[] = [
   {
@@ -43,6 +44,12 @@ const SCENARIOS: { route: ScenarioRoute; title: string; description: string }[] 
     title: 'Location Puck',
     description:
       'Swap the navigation pointer between a 3D model, custom 2D images, a tinted puck, hidden, and per-state pucks.',
+  },
+  {
+    route: 'RoutingScenario',
+    title: 'Routing + Style',
+    description:
+      'Routing profile, road-class and point exclusions, vehicle dimensions, and Standard style config.',
   },
 ]
 

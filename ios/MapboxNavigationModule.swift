@@ -361,6 +361,32 @@ public class MapboxNavigationModule: Module {
         view.language = language
       }
 
+      Prop("colors") { (view: MapboxNavigationView, value: [String: Any]?) in
+        view.colors = value
+      }
+
+      // Routing options. These change the request, not the rendering, so each
+      // setter clears the "already requested" latch and re-runs the start
+      // check — the same thing `routeAlternatives` does.
+      Prop("routeProfile") { (view: MapboxNavigationView, value: String?) in
+        view.routeProfile = value ?? "driving-traffic"
+        view.restartRouteRequestIfNeeded()
+      }
+
+      Prop("routeExclusions") { (view: MapboxNavigationView, value: [String: Any]?) in
+        view.routeExclusions = value
+        view.restartRouteRequestIfNeeded()
+      }
+
+      Prop("vehicle") { (view: MapboxNavigationView, value: [String: Any]?) in
+        view.vehicle = value
+        view.restartRouteRequestIfNeeded()
+      }
+
+      Prop("mapStyleConfig") { (view: MapboxNavigationView, value: [String: Any]?) in
+        view.mapStyleConfig = value
+      }
+
       Prop("locationPuck") { (view: MapboxNavigationView, value: [String: Any]?) in
         view.locationPuck = value
       }

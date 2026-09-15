@@ -72,6 +72,13 @@ dependencies {
   implementation "org.jetbrains.kotlin:kotlin-stdlib"
   implementation "androidx.activity:activity-ktx:1.8.2"
   implementation "androidx.appcompat:appcompat:1.7.0"
+  // Required to *compile* against the ui-components widgets, not just to run
+  // them: MapboxManeuverView extends ConstraintLayout, and the SDK declares
+  // constraintlayout as `implementation`, so it never reaches our compile
+  // classpath. Without it Kotlin cannot resolve the widget's supertype and
+  // stops treating it as a View at all ("none of the addView candidates is
+  // applicable"), which is a confusing way for a missing dependency to show up.
+  implementation "androidx.constraintlayout:constraintlayout:2.1.4"
   
   // Mapbox Navigation SDK v3.
   //
@@ -90,7 +97,14 @@ dependencies {
   // Maneuver, trip progress, speed limit and sound button widgets.
   implementation "com.mapbox.navigationcore:ui-components-ndk27:$mapboxNavigationVersion"
   // The `ComponentInstaller` / `UIComponent` framework the widgets install through.
-  implementation "com.mapbox.navigationcore:ui-base:$mapboxNavigationVersion"
+  //
+  // Must be the `-ndk27` variant like every other Mapbox module here. The
+  // plain and `-ndk27` artifacts ship the *same classes*, so mixing the two
+  // lines puts `base` and `base-ndk27` (and `common`/`common-ndk27`) on the
+  // classpath together and the build dies in `checkDebugDuplicateClasses`
+  // with hundreds of duplicate-class errors. Keep every Mapbox coordinate on
+  // one variant.
+  implementation "com.mapbox.navigationcore:ui-base-ndk27:$mapboxNavigationVersion"
   // Audio guidance (MapboxAudioGuidance moved here from ui-voice).
   implementation "com.mapbox.navigationcore:voice-ndk27:$mapboxNavigationVersion"
   // Mapbox Maps SDK is required for the Android embedded view implementation.
