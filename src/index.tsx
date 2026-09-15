@@ -60,9 +60,7 @@ function getNativeModule(): MapboxNavigationModuleType {
       cachedNativeModule = requireNativeModule<MapboxNavigationModuleType>('MapboxNavigationModule')
     } catch (error) {
       throw new Error(
-        '[react-native-mapbox-navigation] The native module is not available. ' +
-          'This package requires a custom native build (expo prebuild / EAS Build) ' +
-          'and does not work in Expo Go or on web. ' +
+        `${UNAVAILABLE_MESSAGE} ` +
           `Original error: ${error instanceof Error ? error.message : String(error)}`
       )
     }
@@ -72,9 +70,41 @@ function getNativeModule(): MapboxNavigationModuleType {
 
 let cachedNativeView: ComponentType<NativeViewProps> | undefined
 
+const UNAVAILABLE_MESSAGE =
+  '[react-native-mapbox-navigation] The native module is not available. ' +
+  'This package requires a custom native build (expo prebuild / EAS Build) ' +
+  'and does not work in Expo Go or on web.'
+
+let warnedAboutMissingView = false
+
+/**
+ * Placeholder used when the native view manager cannot be resolved.
+ *
+ * Rendering nothing is deliberate: throwing from `getNativeView` would take the
+ * whole app down at render time in Expo Go and on web, where the native module
+ * can never exist. A one-time console error keeps the misconfiguration
+ * diagnosable without turning it into a crash.
+ */
+function UnavailableNativeView(): null {
+  if (!warnedAboutMissingView) {
+    warnedAboutMissingView = true
+    console.error(`${UNAVAILABLE_MESSAGE} <MapboxNavigationView> rendered nothing.`)
+  }
+  return null
+}
+
 function getNativeView(): ComponentType<NativeViewProps> {
   if (cachedNativeView === undefined) {
-    cachedNativeView = requireNativeViewManager<NativeViewProps>('MapboxNavigationModule')
+    try {
+      // Not all expo-modules-core versions throw here — some resolve to a
+      // falsy manager when the module is absent, which React would then reject
+      // as an invalid element type.
+      cachedNativeView =
+        requireNativeViewManager<NativeViewProps>('MapboxNavigationModule') ||
+        (UnavailableNativeView as ComponentType<NativeViewProps>)
+    } catch {
+      cachedNativeView = UnavailableNativeView as ComponentType<NativeViewProps>
+    }
   }
   return cachedNativeView
 }
@@ -617,6 +647,14 @@ export function addOffRouteListener(listener: (event: OffRouteEvent) => void): S
 
 /**
  * Subscribe to destination preview events.
+ */
+/**
+ * @deprecated No longer fires on either platform as of 3.0.0.
+ *
+ * This mirrored a distinct "route preview" phase that only ever existed inside
+ * the Android Drop-In UI, which Mapbox removed in Navigation SDK v3. It never
+ * fired on iOS at all. The subscription is kept so existing code keeps working,
+ * but the callback will not be invoked.
  */
 export function addDestinationPreviewListener(
   listener: (event: DestinationPreviewEvent) => void

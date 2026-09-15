@@ -14,8 +14,8 @@ def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.ab
 apply from: expoModulesCorePlugin
 applyKotlinExpoModulesCorePlugin()
 
-def mapboxNavigationVersion = "2.21.0"
-def mapboxMapsVersion = "10.19.0"
+def mapboxNavigationVersion = "3.30.1"
+def mapboxMapsVersion = "11.30.1"
 def mapboxDownloadsToken = (project.findProperty("MAPBOX_DOWNLOADS_TOKEN") ?: System.getenv("MAPBOX_DOWNLOADS_TOKEN") ?: "")
   .toString()
   .replace('"', '')
@@ -72,12 +72,41 @@ dependencies {
   implementation "org.jetbrains.kotlin:kotlin-stdlib"
   implementation "androidx.activity:activity-ktx:1.8.2"
   implementation "androidx.appcompat:appcompat:1.7.0"
+  // Required to *compile* against the ui-components widgets, not just to run
+  // them: MapboxManeuverView extends ConstraintLayout, and the SDK declares
+  // constraintlayout as `implementation`, so it never reaches our compile
+  // classpath. Without it Kotlin cannot resolve the widget's supertype and
+  // stops treating it as a View at all ("none of the addView candidates is
+  // applicable"), which is a confusing way for a missing dependency to show up.
+  implementation "androidx.constraintlayout:constraintlayout:2.1.4"
   
-  // Mapbox Navigation SDK (NDK 27 artifacts for better native compatibility).
-  // Mapbox docs recommend -ndk27 variants when 16 KB page-size support is needed.
-  implementation "com.mapbox.navigation:ui-dropin-ndk27:$mapboxNavigationVersion"
-  // Map-based UI components (route line, navigation camera, etc) used by embedded mode.
-  implementation "com.mapbox.navigation:ui-maps-ndk27:$mapboxNavigationVersion"
+  // Mapbox Navigation SDK v3.
+  //
+  // v3 moved to the `com.mapbox.navigationcore` Maven group — the old
+  // `com.mapbox.navigation` group has no 3.x artifacts at all, so a version
+  // bump alone silently fails to resolve. The `-ndk27` variants still exist in
+  // v3 and are still what we want: Mapbox recommends them when 16 KB
+  // page-size support is needed.
+  //
+  // `ui-dropin` is gone. v3 ships no Drop-In UI, so the navigation UI is
+  // assembled from `ui-components` widgets wired up through the
+  // `ui-base` installer framework. See docs/v3-migration.md.
+  implementation "com.mapbox.navigationcore:navigation-ndk27:$mapboxNavigationVersion"
+  // Route line, route arrow, navigation camera and location puck components.
+  implementation "com.mapbox.navigationcore:ui-maps-ndk27:$mapboxNavigationVersion"
+  // Maneuver, trip progress, speed limit and sound button widgets.
+  implementation "com.mapbox.navigationcore:ui-components-ndk27:$mapboxNavigationVersion"
+  // The `ComponentInstaller` / `UIComponent` framework the widgets install through.
+  //
+  // Must be the `-ndk27` variant like every other Mapbox module here. The
+  // plain and `-ndk27` artifacts ship the *same classes*, so mixing the two
+  // lines puts `base` and `base-ndk27` (and `common`/`common-ndk27`) on the
+  // classpath together and the build dies in `checkDebugDuplicateClasses`
+  // with hundreds of duplicate-class errors. Keep every Mapbox coordinate on
+  // one variant.
+  implementation "com.mapbox.navigationcore:ui-base-ndk27:$mapboxNavigationVersion"
+  // Audio guidance (MapboxAudioGuidance moved here from ui-voice).
+  implementation "com.mapbox.navigationcore:voice-ndk27:$mapboxNavigationVersion"
   // Mapbox Maps SDK is required for the Android embedded view implementation.
   implementation "com.mapbox.maps:android-ndk27:$mapboxMapsVersion"
 }

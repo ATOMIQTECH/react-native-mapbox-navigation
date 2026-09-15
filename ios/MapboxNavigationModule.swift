@@ -1,7 +1,9 @@
 import ExpoModulesCore
 import Foundation
-import MapboxCoreNavigation
-import MapboxNavigation
+// v3 module layout: `MapboxCoreNavigation` and `MapboxNavigation` are gone,
+// replaced by `MapboxNavigationCore` (navigator, routing) and
+// `MapboxNavigationUIKit` (NavigationViewController and friends).
+import MapboxNavigationCore
 
 public class MapboxNavigationModule: Module {
   /// Events forwarded to JS module listeners via `add*Listener`.
@@ -119,14 +121,22 @@ public class MapboxNavigationModule: Module {
       MapboxNavigationEventBridge.shared.stopObserving("onBottomSheetActionPress")
     }
 
-    // These previously only wrote to a private field and never reached the
-    // SDK, so voice/unit changes from JS were silently dropped on iOS.
-    // `NavigationSettings.shared` properties are observed by the SDK, so
-    // assigning them takes effect on the running session immediately.
+    // v2 wrote these straight onto the global `NavigationSettings.shared`,
+    // which the SDK observed. v3 removed that class outright, so the settings
+    // now go through `MapboxNavigationSession`, which records them even when no
+    // provider exists yet and applies them to a live one. The JS-visible
+    // behaviour — set at any time, takes effect immediately — is unchanged.
+    //
+    // `MapboxNavigationSession` is main-actor isolated because v3's
+    // `SpeechSynthesizing` is; `assumeIsolated` documents that the main queue
+    // and the main actor are the same execution context here, and keeps the
+    // promise resolving on the same hop v2 used.
     AsyncFunction("setMuted") { (muted: Bool, promise: Promise) in
       self.mute = muted
       DispatchQueue.main.async {
-        NavigationSettings.shared.voiceMuted = muted
+        MainActor.assumeIsolated {
+          MapboxNavigationSession.shared.setMuted(muted)
+        }
         promise.resolve(nil)
       }
     }
@@ -135,7 +145,9 @@ public class MapboxNavigationModule: Module {
       let clamped = max(0, min(volume, 1))
       self.voiceVolume = clamped
       DispatchQueue.main.async {
-        NavigationSettings.shared.voiceVolume = Float(clamped)
+        MainActor.assumeIsolated {
+          MapboxNavigationSession.shared.setVoiceVolume(clamped)
+        }
         promise.resolve(nil)
       }
     }
@@ -145,7 +157,9 @@ public class MapboxNavigationModule: Module {
       let imperial = normalized == "imperial"
       self.distanceUnit = imperial ? "imperial" : "metric"
       DispatchQueue.main.async {
-        NavigationSettings.shared.distanceUnit = imperial ? .mile : .kilometer
+        MainActor.assumeIsolated {
+          MapboxNavigationSession.shared.setDistanceUnit(imperial ? "imperial" : "metric")
+        }
         promise.resolve(nil)
       }
     }
@@ -155,22 +169,39 @@ public class MapboxNavigationModule: Module {
       if !trimmed.isEmpty {
         self.language = trimmed
       }
-      // Spoken instruction language is fixed per route request on iOS, so this
-      // only affects routes requested after the change.
-      promise.resolve(nil)
+      // Route requests still bake in the language, so a new language only
+      // changes future routes. Unlike v2, v3 does expose the synthesizer's
+      // locale, so the *spoken* language now updates on the running session
+      // too.
+      DispatchQueue.main.async {
+        if !trimmed.isEmpty {
+          MainActor.assumeIsolated {
+            MapboxNavigationSession.shared.setLanguage(trimmed)
+          }
+        }
+        promise.resolve(nil)
+      }
     }
 
     AsyncFunction("getNavigationSettings") { (promise: Promise) in
-      let isFollowing = NavigationSessionRegistry.shared.isCurrentCameraFollowing()
-      promise.resolve([
-        "isNavigating": NavigationSessionRegistry.shared.isSessionActive(),
-        "isCameraFollowing": isFollowing,
-        "isCameraNotFollowing": !isFollowing,
-        "mute": NavigationSettings.shared.voiceMuted,
-        "voiceVolume": Double(NavigationSettings.shared.voiceVolume),
-        "distanceUnit": NavigationSettings.shared.distanceUnit == .mile ? "imperial" : "metric",
-        "language": self.language
-      ])
+      // Reads main-actor state, so it hops to main like the setters do. Still
+      // an AsyncFunction on the JS side, so callers see no difference.
+      DispatchQueue.main.async {
+        let isFollowing = NavigationSessionRegistry.shared.isCurrentCameraFollowing()
+        let (muted, volume, unit) = MainActor.assumeIsolated {
+          let session = MapboxNavigationSession.shared
+          return (session.isMuted, session.voiceVolume, session.distanceUnit)
+        }
+        promise.resolve([
+          "isNavigating": NavigationSessionRegistry.shared.isSessionActive(),
+          "isCameraFollowing": isFollowing,
+          "isCameraNotFollowing": !isFollowing,
+          "mute": muted,
+          "voiceVolume": volume,
+          "distanceUnit": unit,
+          "language": self.language
+        ])
+      }
     }
 
     AsyncFunction("stopNavigation") { (promise: Promise) in
@@ -328,6 +359,32 @@ public class MapboxNavigationModule: Module {
 
       Prop("language") { (view: MapboxNavigationView, language: String) in
         view.language = language
+      }
+
+      Prop("colors") { (view: MapboxNavigationView, value: [String: Any]?) in
+        view.colors = value
+      }
+
+      // Routing options. These change the request, not the rendering, so each
+      // setter clears the "already requested" latch and re-runs the start
+      // check — the same thing `routeAlternatives` does.
+      Prop("routeProfile") { (view: MapboxNavigationView, value: String?) in
+        view.routeProfile = value ?? "driving-traffic"
+        view.restartRouteRequestIfNeeded()
+      }
+
+      Prop("routeExclusions") { (view: MapboxNavigationView, value: [String: Any]?) in
+        view.routeExclusions = value
+        view.restartRouteRequestIfNeeded()
+      }
+
+      Prop("vehicle") { (view: MapboxNavigationView, value: [String: Any]?) in
+        view.vehicle = value
+        view.restartRouteRequestIfNeeded()
+      }
+
+      Prop("mapStyleConfig") { (view: MapboxNavigationView, value: [String: Any]?) in
+        view.mapStyleConfig = value
       }
 
       Prop("locationPuck") { (view: MapboxNavigationView, value: [String: Any]?) in

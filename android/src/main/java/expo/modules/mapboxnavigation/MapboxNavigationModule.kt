@@ -263,6 +263,26 @@ class MapboxNavigationModule : Module() {
         view.setLanguage(value)
       }
 
+      Prop("colors") { view: MapboxNavigationView, value: Map<String, Any>? ->
+        view.setColors(value)
+      }
+
+      Prop("routeProfile") { view: MapboxNavigationView, value: String? ->
+        view.setRouteProfile(value)
+      }
+
+      Prop("routeExclusions") { view: MapboxNavigationView, value: Map<String, Any>? ->
+        view.setRouteExclusions(value)
+      }
+
+      Prop("vehicle") { view: MapboxNavigationView, value: Map<String, Any>? ->
+        view.setVehicle(value)
+      }
+
+      Prop("mapStyleConfig") { view: MapboxNavigationView, value: Map<String, Any>? ->
+        view.setMapStyleConfig(value)
+      }
+
       Prop("locationPuck") { view: MapboxNavigationView, value: Map<String, Any>? ->
         view.setLocationPuck(value)
       }

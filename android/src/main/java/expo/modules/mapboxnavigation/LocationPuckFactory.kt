@@ -12,9 +12,9 @@ import android.graphics.drawable.Drawable
 import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.Looper
-import android.content.res.Resources
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.mapbox.maps.ImageHolder
 import com.mapbox.maps.plugin.LocationPuck
 import com.mapbox.maps.plugin.LocationPuck2D
 import com.mapbox.maps.plugin.LocationPuck3D
@@ -180,9 +180,12 @@ internal object LocationPuckFactory {
       ?: scale?.let { "[\"literal\", ${it.coerceIn(0.05f, 20f)}]" }
 
     return LocationPuck2D(
-      topImage = top,
-      bearingImage = bearing,
-      shadowImage = shadow,
+      // Maps 11 takes `ImageHolder` rather than `Drawable`, and `ImageHolder.from`
+      // accepts only a drawable resource id, a Bitmap or an Image — never a
+      // Drawable — so loaded drawables have to be rasterised first.
+      topImage = top?.toImageHolder(),
+      bearingImage = bearing?.toImageHolder(),
+      shadowImage = shadow?.toImageHolder(),
       scaleExpression = scaleExpression,
       opacity = floatValue(appearance["opacity"])?.coerceIn(0f, 1f) ?: 1f
     )
@@ -204,12 +207,10 @@ internal object LocationPuckFactory {
     val scale = (floatValue(appearance["scale"]) ?: 1f).coerceIn(0.2f, 4f)
     val size = (28f * density * scale).toInt().coerceAtLeast(8)
 
-    val resources = context.resources
     return LocationPuck2D(
-      topImage = circleDrawable(resources, size, body, halo, density * scale),
-      bearingImage = arrowDrawable(resources, (size * 1.6f).toInt().coerceAtLeast(8), arrow),
-      shadowImage = circleDrawable(
-        resources,
+      topImage = circleImage(size, body, halo, density * scale),
+      bearingImage = arrowImage((size * 1.6f).toInt().coerceAtLeast(8), arrow),
+      shadowImage = circleImage(
         (size * 1.35f).toInt().coerceAtLeast(8),
         Color.argb(40, Color.red(body), Color.green(body), Color.blue(body)),
         Color.TRANSPARENT,
@@ -228,9 +229,12 @@ internal object LocationPuckFactory {
    * disabling the component.
    */
   private fun makeHidden(): LocationPuck = LocationPuck2D(
-    topImage = ColorDrawable(Color.TRANSPARENT),
-    bearingImage = ColorDrawable(Color.TRANSPARENT),
-    shadowImage = ColorDrawable(Color.TRANSPARENT),
+    // Maps 11 wants an ImageHolder; a 1x1 transparent bitmap is how Mapbox
+    // itself models an invisible puck (see Puck2DConfiguration.emptyPuck on
+    // iOS). Setting the puck to null instead would stop location updates.
+    topImage = transparentImage(),
+    bearingImage = transparentImage(),
+    shadowImage = transparentImage(),
     scaleExpression = null,
     opacity = 0f
   )
@@ -239,13 +243,37 @@ internal object LocationPuckFactory {
   // Drawing helpers
   // ---------------------------------------------------------------------------
 
-  private fun circleDrawable(
-    resources: Resources,
+  /**
+   * Rasterise a [Drawable] so it can be handed to Maps 11 as an [ImageHolder].
+   *
+   * `ImageHolder.from` overloads cover a drawable *resource id*, a [Bitmap] and
+   * an `Image` — but not a [Drawable] instance, which is what the puck
+   * appearance loader produces for remote and bundled images. A
+   * [BitmapDrawable] can surrender its bitmap directly; anything else is drawn
+   * onto a canvas at its intrinsic size.
+   */
+  private fun Drawable.toImageHolder(): ImageHolder {
+    (this as? BitmapDrawable)?.bitmap?.let { return ImageHolder.from(it) }
+
+    val width = intrinsicWidth.takeIf { it > 0 } ?: 1
+    val height = intrinsicHeight.takeIf { it > 0 } ?: 1
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    setBounds(0, 0, width, height)
+    draw(canvas)
+    return ImageHolder.from(bitmap)
+  }
+
+  /** A 1x1 fully transparent image, used to render an invisible puck. */
+  private fun transparentImage(): ImageHolder =
+    ImageHolder.from(Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888))
+
+  private fun circleImage(
     size: Int,
     fillColor: Int,
     strokeColor: Int,
     strokeWidth: Float
-  ): Drawable {
+  ): ImageHolder {
     val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
     val radius = size / 2f
@@ -266,11 +294,11 @@ internal object LocationPuckFactory {
       canvas.drawCircle(radius, radius, radius - inset, stroke)
     }
 
-    return BitmapDrawable(resources, bitmap)
+    return ImageHolder.from(bitmap)
   }
 
   /** An upward-pointing triangle; Mapbox rotates it to the course bearing. */
-  private fun arrowDrawable(resources: Resources, size: Int, color: Int): Drawable {
+  private fun arrowImage(size: Int, color: Int): ImageHolder {
     val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -288,7 +316,7 @@ internal object LocationPuckFactory {
     }
     canvas.drawPath(path, paint)
 
-    return BitmapDrawable(resources, bitmap)
+    return ImageHolder.from(bitmap)
   }
 
   // ---------------------------------------------------------------------------

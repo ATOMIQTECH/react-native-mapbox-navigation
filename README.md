@@ -6,8 +6,11 @@ This package is `2.x` and embedded-only. Full-screen `startNavigation(...)` flow
 
 ## What You Get
 
-- Native Mapbox navigation UI embedded in a React Native view
+- Native Mapbox navigation UI embedded in a React Native view, on Navigation SDK **v3**
 - Expo config plugin for Mapbox token wiring and required native permissions
+- Theme the route line, traffic colours, maneuver banner and buttons with `colors`
+- Routing controls: profile, road-class and point exclusions, vehicle dimensions
+- Mapbox Standard / 3D styles, with `mapStyleConfig` for lighting and 3D objects
 - Optional React overlay bottom sheet
 - Optional React overlay floating buttons
 - Per-button control over the built-in native floating buttons
@@ -370,6 +373,96 @@ locationPuck={{
 }}
 ```
 
+## Theming (`colors`)
+
+Mapbox's defaults are its own brand blue — the route line on iOS, the maneuver
+banner on Android. `colors` overrides 24 of them. Anything you omit keeps the
+Mapbox default, and changes apply live.
+
+```tsx
+<MapboxNavigationView
+  destination={destination}
+  colors={{
+    routeLine: '#1E9E5A',
+    routeLineCasing: '#14532D',
+    congestionHeavy: '#DC2626',
+    maneuverBackground: '#14532D',
+    maneuverText: '#FFFFFF',
+    maneuverTurnIcon: '#FFFFFF',
+    floatingButtonBackground: '#14532D',
+    floatingButtonIcon: '#FFFFFF',
+  }}
+/>
+```
+
+| Group | Keys |
+| --- | --- |
+| Route line | `routeLine`, `routeLineCasing`, `routeLineTraversed`, `routeLineAlternative`, `routeLineAlternativeCasing`, `restrictedRoad` |
+| Traffic | `congestionLow`, `congestionModerate`, `congestionHeavy`, `congestionSevere`, `congestionUnknown` |
+| On-map turn arrow | `maneuverArrow`, `maneuverArrowStroke` |
+| Maneuver banner | `maneuverBackground`, `maneuverSubBackground`, `maneuverText`, `maneuverSecondaryText`, `maneuverDistanceText`, `maneuverTurnIcon` |
+| Floating buttons | `floatingButtonBackground`, `floatingButtonIcon` |
+| Trip progress bar (iOS) | `tripProgressBackground`, `tripProgressText`, `tripProgressIcon` |
+
+Three things worth knowing:
+
+- Use `#RGB` or `#RRGGBB`. **Eight-digit hex is not portable** — iOS reads it as
+  `#RRGGBBAA` and Android as `#AARRGGBB`, so the same string gives different
+  colours.
+- `routeLine` also sets the `low` and `unknown` congestion colours. Congestion
+  shading is painted over the base line, and those two bands cover most of a
+  typical route, so without it a recoloured route still looks blue.
+- Treat it as a theme you set, not a value you toggle. On iOS the chrome colours
+  go through `UIAppearance`, which has no "unset", so *removing* a key leaves its
+  last colour until the app relaunches. Changing a key's value always works.
+
+## Routing Options
+
+```tsx
+<MapboxNavigationView
+  destination={destination}
+  routeProfile='driving'
+  routeExclusions={{ roadClasses: ['toll', 'ferry'] }}
+  vehicle={{ maxHeight: 4.2, maxWeight: 18 }}
+/>
+```
+
+| Prop | What it does |
+| --- | --- |
+| `routeProfile` | `driving-traffic` (default), `driving`, `walking` or `cycling`. Only `driving-traffic` carries live traffic, so the `congestion*` colours have nothing to shade on the other three. |
+| `routeExclusions` | `roadClasses` avoids `toll`, `motorway`, `ferry`, `tunnel`, `restricted`, `unpaved`, `cashOnlyTolls`; `locations` avoids up to 50 specific points. |
+| `vehicle` | `maxHeight` / `maxWidth` in metres, `maxWeight` in metric tons, so oversized vehicles avoid roads they cannot use. |
+
+Changing any of these re-requests the route.
+
+`vehicle` and most `roadClasses` are driving-only *at the API*, and the API
+rejects rather than ignores them elsewhere — `max_height` on `walking` answers
+`422`. Sending them would fail the whole route request, so the package drops them
+on non-driving profiles and tells you through `onError`
+(`VEHICLE_NOT_SUPPORTED_BY_PROFILE`, `ROAD_CLASS_NOT_SUPPORTED_BY_PROFILE`,
+`EXCLUDED_LOCATIONS_NOT_SUPPORTED_BY_PROFILE`).
+
+## Standard / 3D Map Styles
+
+Mapbox's Standard styles work as-is — both platforms place the navigation layers
+in Standard's `middle` slot, so the route draws above the basemap but below
+labels, POIs and 3D extrusions. `mapStyleConfig` configures the basemap:
+
+```tsx
+<MapboxNavigationView
+  destination={destination}
+  mapStyleUriDay='mapbox://styles/mapbox/standard'
+  mapStyleConfig={{ lightPreset: 'dusk', show3dObjects: true }}
+/>
+```
+
+`lightPreset` takes `day`, `dusk`, `dawn` or `night` — independent of `uiTheme`,
+which picks the day or night *style*. The rest are booleans:
+`show3dObjects`, `showRoadLabels`, `showPlaceLabels`,
+`showPointOfInterestLabels`, `showTransitLabels`. Styles with no configurable
+import report `MAP_STYLE_CONFIG_UNSUPPORTED` once through `onError` rather than
+silently doing nothing.
+
 ## Overlay Bottom Sheet
 
 `bottomSheet` is overlay-only. The package renders a React layer above the native navigation UI.
@@ -694,10 +787,15 @@ What the package wraps today, and what it deliberately does not.
 | Camera (follow / overview, pitch, zoom) | `cameraMode`, `cameraPitch`, `cameraZoom`, `resumeCameraFollowing()`, `onCameraFollowingStateChange` |
 | Voice guidance (mute, volume) | `mute`, `voiceVolume`, `setMuted()`, `setVoiceVolume()` |
 | Map styling (day/night, theme) | `mapStyleUri`, `mapStyleUriDay`, `mapStyleUriNight`, `uiTheme` |
+| Standard / 3D style configuration (lighting, 3D objects, label categories) | `mapStyleConfig` |
+| Route line, traffic, turn arrow, maneuver banner, button and trip-progress colours | `colors` |
+| Routing profile (driving / walking / cycling) | `routeProfile` |
+| Road-class and point exclusions | `routeExclusions` |
+| Vehicle dimensions (height / width / weight) | `vehicle` |
 | Location puck (2D / 3D / tinted / hidden / per-state) | `locationPuck` |
 | Display-only map markers | `navigationMarkers` |
 | Native UI visibility | `showsTripProgress`, `showsManeuverView`, `showsSpeedLimits`, `showsWayNameLabel`, `nativeFloatingButtons` |
-| Route line traversal, tunnel styling, intersection annotations, continuous alternatives | `routeLineTracksTraversal`, `usesNightStyleWhileInTunnel`, `annotatesIntersectionsAlongRoute`, `showsContinuousAlternatives` (iOS) |
+| Route line traversal (both), tunnel styling / intersection annotations / continuous alternatives (iOS) | `routeLineTracksTraversal`, `usesNightStyleWhileInTunnel`, `annotatesIntersectionsAlongRoute`, `showsContinuousAlternatives` |
 | Arrival, multi-stop waypoints, off-route | `onArrive`, `onWaypointArrive`, `onOffRoute` |
 | Programmatic leg advance on multi-stop routes | `advanceToNextWaypoint()`, `RouteProgress.legIndex` |
 | Map day/night tiles forced to match the app theme | `uiTheme` (drives `StyleManager` on iOS) |
@@ -711,8 +809,6 @@ additive — none require breaking changes.
 
 | Capability | Platform support | Note |
 | --- | --- | --- |
-| Route line styling (color, width, traffic gradient) | Android `routeLineOptions`; iOS via `DayStyle`/`NightStyle` subclass | Most-requested customization. The two platforms model it very differently, so it needs a shared abstraction. |
-| Maneuver arrow styling | Android `routeArrowOptions` | Android-only surface. |
 | Destination marker customization | Android `destinationMarkerAnnotationOptions` | iOS equivalent is the `didAdd finalDestinationAnnotation` delegate hook. |
 | Building highlight on arrival | Android `enableBuildingHighlightOnArrival`, `buildingHighlightOptions` | Cheap to add; Android-only. |
 | Free-drive mode (navigate with no destination) | Android `NavigationViewApi.startFreeDrive()` | Would need a `mode` prop; `destination` is currently required. |
@@ -721,7 +817,10 @@ additive — none require breaking changes.
 | Road objects / upcoming alerts (tunnels, tolls, rest stops) | `RouteProgress.upcomingRoadObjects` on both | Rich data, needs a serialization design. |
 | Speed limit value as data | Both (`LocationMatcherResult.speedLimit`) | The native badge is exposed; the raw number is not. |
 | Voice instruction events | Both | Only mute/volume are wrapped, not per-instruction callbacks. |
-| EV routing / charging stations | Both | Large, specialized surface. |
+| EV routing / charging stations | Both | Large, specialized surface, and not verifiable without EV routing data. |
+| Road cameras, pole-style route annotations | Both | iOS keeps these in a separate SPM product this package does not link. |
+| Route callouts | iOS | Behind `@_spi(ExperimentalMapboxAPI)`, with no Android counterpart. |
+| Line width and traffic gradient | Both | `colors` covers colour; widths and gradients are still SDK defaults. |
 | CarPlay / Android Auto | Both | Out of scope for an embedded RN view. |
 | Full-screen navigation UI | Both | Removed in `2.0.0`; embedded-only by design. |
 
@@ -730,13 +829,15 @@ additive — none require breaking changes.
 
 These are important review findings from the current codebase and the docs below reflect them intentionally:
 
-- `androidActionButtons` is ignored on both platforms and is marked `@deprecated`. Mapbox's Drop-In UI does not expose those buttons individually — use `nativeFloatingButtons`, or render your own with `floatingButtons`.
-- `showsReportFeedback` is iOS-only. Android's Drop-In UI does not expose it.
-- `showsContinuousAlternatives`, `usesNightStyleWhileInTunnel`, `routeLineTracksTraversal` and `annotatesIntersectionsAlongRoute` are iOS-only.
-- `cameraPitch` / `cameraZoom` apply on both platforms, but Android's Drop-In camera recomputes the viewport while following the user, so they hold reliably only while idle or in overview.
+- The package targets the Mapbox Navigation **v3** SDKs (iOS `3.30.1`, Android `3.30.1`) and Maps SDK `11.30.1`. See [CHANGELOG.md](./CHANGELOG.md) for the `3.0.0` breaking changes.
+- `androidActionButtons` is ignored on both platforms and is marked `@deprecated` — use `nativeFloatingButtons`, or render your own with `floatingButtons`.
+- Navigation SDK v3 removed Android's Drop-In UI, so the Android chrome is assembled from discrete widgets. Consequences: `showsTripProgress` and `showsSpeedLimits` have no Android effect (use the themeable `bottomSheet` overlay for trip progress), and neither do `showsReportFeedback`, `showsEndOfRouteFeedback`, `showsWayNameLabel`, `showsContinuousAlternatives`, `usesNightStyleWhileInTunnel` or `annotatesIntersectionsAlongRoute`. Each is logged once at runtime rather than silently ignored.
+- `nativeFloatingButtons` controls only the voice toggle on Android; v3 ships no widget for the camera, recenter or compass buttons there.
+- `onDestinationPreview` no longer fires on either platform — it mirrored a Drop-In preview phase that v3 removed. `onDestinationChanged` is unaffected.
+- `locationPuck` accepts per-state pointers on both platforms, but only the `activeNavigation` / `default` entry has a visible effect on Android; v3's puck component takes a single puck.
 - `locationPuck.translation` is Android-only; the iOS puck API has no model-translation equivalent.
-- `MapboxNavigationView` is embedded-only. There is no full-screen activity/controller API in `2.x`.
-- The package targets the Mapbox Navigation **v2** SDKs (iOS `~> 2.19`, Android `2.21`). v3 is not supported yet.
+- Automatic sunrise/sunset style switching is iOS-only. On Android `uiTheme` drives the day/night choice, including following the system night-mode setting.
+- `MapboxNavigationView` is embedded-only. There is no full-screen activity/controller API.
 
 ## Supporting Docs
 

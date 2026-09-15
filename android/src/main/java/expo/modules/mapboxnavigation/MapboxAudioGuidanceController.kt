@@ -1,8 +1,12 @@
 package expo.modules.mapboxnavigation
 
 import android.util.Log
-import com.mapbox.navigation.ui.voice.api.MapboxAudioGuidance
-import com.mapbox.navigation.ui.voice.model.SpeechVolume
+// v3 moved audio guidance out of the `ui-voice` module into `voice`:
+// `com.mapbox.navigation.ui.voice.*` -> `com.mapbox.navigation.voice.*`.
+// The API itself is unchanged — getRegisteredInstance, mute, unmute and
+// getCurrentVoiceInstructionsPlayer all still exist.
+import com.mapbox.navigation.voice.api.MapboxAudioGuidance
+import com.mapbox.navigation.voice.model.SpeechVolume
 
 internal object MapboxAudioGuidanceController {
   private const val TAG = "MapboxAudioGuidance"
@@ -17,7 +21,7 @@ internal object MapboxAudioGuidanceController {
           warnedUnavailable = true
           Log.w(
             TAG,
-            "MapboxAudioGuidance is not registered yet; mute/volume/language will be applied once Drop-In attaches.",
+            "MapboxAudioGuidance is not registered yet; mute/volume/language will be applied once navigation attaches.",
             throwable
           )
         }

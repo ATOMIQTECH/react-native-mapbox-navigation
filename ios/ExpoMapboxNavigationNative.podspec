@@ -12,14 +12,21 @@ Pod::Spec.new do |s|
   s.author         = { 'ATOMIQ Ltd' => 'info@atomiq.rw' }
   s.homepage       = 'https://github.com/ATOMIQTECH/react-native-mapbox-navigation'
   s.platform       = :ios, '14.0'
-  s.swift_version  = '5.4'
+  # Navigation SDK v3 requires Swift 5.9 / Xcode 16.
+  s.swift_version  = '5.9'
   s.source         = { :git => 'https://github.com/ATOMIQTECH/react-native-mapbox-navigation.git', :tag => s.version.to_s }
-  # Let CocoaPods choose linkage to avoid circular static-framework graphs
-  # with MapboxNavigation / MapboxCoreNavigation.
+  # Must be dynamic: the Mapbox Navigation v3 frameworks arrive over SPM and
+  # are dynamically linked, so a static wrapper around them fails to link.
   s.static_framework = false
 
   s.dependency 'ExpoModulesCore'
-  s.dependency 'MapboxNavigation', '~> 2.19'
+
+  # NOTE: the Mapbox Navigation SDK is deliberately NOT declared here.
+  #
+  # Mapbox dropped CocoaPods support in Navigation v3 — the `MapboxNavigation`
+  # pod stops at 2.22.0 and no v3 pods exist. The SDK is instead injected as a
+  # Swift package by `ios/spm.rb`, which the Expo config plugin wires into the
+  # app's Podfile. See docs/v3-migration.md.
 
   # Swift/Objective-C compatibility
   s.pod_target_xcconfig = {

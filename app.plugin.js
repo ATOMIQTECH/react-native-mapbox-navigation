@@ -1,11 +1,15 @@
+const path = require('node:path')
+const { promises: fs } = require('node:fs')
 const {
   withProjectBuildGradle,
   withAppBuildGradle,
   withSettingsGradle,
   withAndroidManifest,
   withInfoPlist,
+  withDangerousMod,
   createRunOncePlugin,
 } = require('@expo/config-plugins')
+const { mergeContents } = require('@expo/config-plugins/build/utils/generateCode')
 
 const MAPBOX_REPO_BLOCK = `    maven {
       url 'https://api.mapbox.com/downloads/v2/releases/maven'
@@ -242,6 +246,78 @@ function withMapboxNavigationAndroid(config, options) {
   return config
 }
 
+/**
+ * Wire the Mapbox Navigation SDK v3 into the app's Podfile as a Swift package.
+ *
+ * Mapbox ships no CocoaPods support for Navigation v3, and a podspec cannot
+ * declare an SPM dependency, so the SDK has to be injected into the generated
+ * Xcode projects from a `post_install` hook. `ios/spm.rb` does that work; this
+ * mod only makes the Podfile call it.
+ *
+ * Consumers who do not use Expo prebuild must add the two lines below to their
+ * Podfile by hand — that is documented in docs/v3-migration.md.
+ */
+const MAPBOX_SPM_REQUIRE_TAG = '@atomiqlab/react-native-mapbox-navigation-spm-require'
+const MAPBOX_SPM_INSTALLER_TAG = '@atomiqlab/react-native-mapbox-navigation-spm-post_install'
+
+function resolveSpmHelperPath(podfilePath) {
+  // Resolved relative to the Podfile so the path stays correct under pnpm's
+  // nested store layout, npm hoisting, and yarn workspaces alike.
+  const helper = require.resolve('./ios/spm.rb')
+  const relative = path.relative(path.dirname(podfilePath), helper)
+  return relative.startsWith('.') ? relative : `./${relative}`
+}
+
+function applyPodfileSpmModifications(contents, podfilePath) {
+  let src = contents
+
+  src = mergeContents({
+    tag: MAPBOX_SPM_REQUIRE_TAG,
+    src,
+    newSrc: `require_relative '${resolveSpmHelperPath(podfilePath)}'`,
+    // Sits above the first target block, alongside the other requires Expo
+    // and React Native generate.
+    anchor: /target .+ do/,
+    offset: 0,
+    comment: '#',
+  }).contents
+
+  const withHook = mergeContents({
+    tag: MAPBOX_SPM_INSTALLER_TAG,
+    src,
+    newSrc: '    $ExpoMapboxNavigation.post_install(installer)',
+    anchor: /^\s*post_install do \|installer\|/m,
+    offset: 1,
+    comment: '#',
+  })
+
+  if (!withHook.didMerge) {
+    console.warn(
+      '[@atomiqlab/react-native-mapbox-navigation] Could not find a `post_install do |installer|` ' +
+        'block in the iOS Podfile, so the Mapbox Navigation v3 Swift package was not injected. ' +
+        'The iOS build will fail to compile until you add this to your Podfile:\n' +
+        '  post_install do |installer|\n' +
+        '    $ExpoMapboxNavigation.post_install(installer)\n' +
+        '  end'
+    )
+    return src
+  }
+
+  return withHook.contents
+}
+
+function withMapboxNavigationSpm(config) {
+  return withDangerousMod(config, [
+    'ios',
+    async (exportedConfig) => {
+      const podfilePath = path.join(exportedConfig.modRequest.platformProjectRoot, 'Podfile')
+      const contents = await fs.readFile(podfilePath, 'utf8')
+      await fs.writeFile(podfilePath, applyPodfileSpmModifications(contents, podfilePath), 'utf8')
+      return exportedConfig
+    },
+  ])
+}
+
 function withMapboxNavigationIos(config, options) {
   return withInfoPlist(config, (config) => {
     const infoPlist = config.modResults
@@ -302,6 +378,7 @@ const withMapboxNavigation = (config, options = {}) => {
   validateTokensIfPresent(config)
   config = withMapboxNavigationAndroid(config, resolvedOptions)
   config = withMapboxNavigationIos(config, resolvedOptions)
+  config = withMapboxNavigationSpm(config)
   return config
 }
 
