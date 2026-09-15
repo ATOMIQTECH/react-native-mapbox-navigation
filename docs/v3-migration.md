@@ -12,8 +12,8 @@ authority for everything below.
 ## Why we are doing this
 
 Not primarily for v3 features. `@rnmapbox/maps@10.2.10` defaults to Mapbox Maps
-SDK `11.16.2`, but a consuming app pins it **back down** to
-`10.19.0` in three places to match this package:
+SDK `11.16.2`, but an app that uses both it and this package has to pin it **back
+down** to `10.19.0` in three places to match us:
 
 | Where | Pin |
 | --- | --- |
@@ -548,9 +548,10 @@ pod, but to a framework in `<target>/PackageFrameworks/` under
 dependency, which is empty in the static case.
 
 **Consumers sit on both sides of this line**, so the package must handle both:
-a consuming app gets dynamic frameworks (@rnmapbox/maps forces them), while a
-default Expo app — including this repo's `example/` — gets static pods. The
-config above is what works for static; it is inert under dynamic linkage.
+an app that also pulls in @rnmapbox/maps gets dynamic frameworks (that package
+forces them), while a default Expo app — including this repo's `example/` — gets
+static pods. The config above is what works for static; it is inert under
+dynamic linkage.
 
 ### Still unproven
 
@@ -916,14 +917,15 @@ Five, all deliberate:
 ## Sequence
 
 1. **iOS packaging spike** — port rnmapbox's `_add_spm_to_target` approach;
-   prove the CocoaPods + SPM duplication is resolvable in a consuming app.
-   This is the go/no-go gate for the whole migration.
+   prove the CocoaPods + SPM duplication is resolvable in an app that also has
+   @rnmapbox/maps as a pod. This is the go/no-go gate for the whole migration.
 2. iOS API migration (`MapboxNavigationView.swift`, 1,589 lines — edited, not
    rewritten).
 3. Android: nav `2.21.0` → `3.30.x`, Maps `11.30.x`, and rebuild the Drop-In
    layer in `MapboxNavigationView.kt` (2,027 lines). Largest single item.
 4. Wire the new v3 capability above.
-5. Release `3.0.0`; delete a consuming app's three `10.19.0` pins in the same change.
+5. Release `3.0.0`; downstream apps can then drop the three `10.19.0` pins
+   described under "Why we are doing this".
 
 ## Verification plan
 

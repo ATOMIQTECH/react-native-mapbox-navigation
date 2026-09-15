@@ -299,7 +299,7 @@ should not be used.
   leg transitions are observable from `onRouteProgressChange`.
 
   > `advanceToNextWaypoint()` and `legIndex` were contributed from a downstream
-  > `pnpm` patch in a consuming app and are now upstreamed.
+  > app's `pnpm` patch and are now upstreamed.
 
 ### Fixed
 
