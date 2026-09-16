@@ -93,6 +93,13 @@ jobs:
       # Building the app scheme compiles the library's pod as a dependency.
       # The scheme name is derived from the app name, so discover it rather than
       # hardcoding it.
+      #
+      # `ARCHS=arm64` is deliberate. The runner image is macos-26-arm64, but
+      # `generic/platform=iOS Simulator` carries no architecture, so Xcode
+      # resolved it to x86_64 and cross-compiled the whole graph. Both
+      # architectures do build, so this is purely about not spending premium
+      # macOS runner minutes compiling an architecture that neither
+      # contributors nor consumers build.
       - name: Build for simulator
         if: env.HAS_MAPBOX_TOKEN == 'true'
         working-directory: example/ios
@@ -110,6 +117,7 @@ jobs:
             -quiet \
             CODE_SIGNING_ALLOWED=NO \
             ONLY_ACTIVE_ARCH=YES \
+            ARCHS=arm64 \
             build
 
       - name: Confirm the library's pod actually compiled

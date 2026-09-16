@@ -96,12 +96,13 @@ end
 #
 # `link:` controls whether (3) is created, and it must differ per target:
 #
-#   * The **pod target** takes (1) and (2) but NOT (3). It needs the module on
-#     its include path to compile — that comes from `SWIFT_INCLUDE_PATHS`, see
-#     `_add_swift_include_path` — and it needs (2) so the build system builds
-#     the packages before it. It must not *link* them: a static pod library
-#     that links its dependencies makes the app link them a second time, and
-#     the build fails with a wall of `duplicate symbol` errors.
+#   * The **pod target** takes (1) only, and never goes through this function.
+#     It finds the modules via `SWIFT_INCLUDE_PATHS` (see
+#     `_add_swift_include_path`) and gets its build ordering from a non-linking
+#     `PBXTargetDependency` (see `_add_spm_build_order_dependency`). It must
+#     take neither (2) nor (3): a static pod library archives its package
+#     product dependencies into its own `.a`, so the app links them a second
+#     time and the build fails with a wall of `duplicate symbol` errors.
 #   * Every **user target** takes all three. The app is what actually links.
 #
 # Re-running `pod install` must not accumulate duplicates, so every lookup
@@ -154,6 +155,45 @@ def $ExpoMapboxNavigation._add_spm_to_target(project, target, url, requirement, 
   build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
   build_file.product_ref = ref
   frameworks_phase.files << build_file
+end
+
+# Make the pod target *wait* for the Swift packages without linking them.
+#
+# `SWIFT_INCLUDE_PATHS` (below) tells the compiler where to find the SPM
+# `.swiftmodule` files, but nothing told the build system to produce them
+# first. With no dependency of any kind from the pod target to the packages,
+# their relative order is unconstrained — and on a cold build the pod target
+# can start before the packages have been built, failing with
+# "no such module 'MapboxMaps'". Locally this almost always won the race
+# because DerivedData already held the modules from an earlier build, which is
+# why it only ever showed up on clean CI machines.
+#
+# A `PBXTargetDependency` that carries a `productRef` instead of a `target` is
+# how Xcode models "depend on this package product" separately from linking it.
+# It lives in the target's `dependencies` list, NOT in
+# `package_product_dependencies`, so it orders the build without reintroducing
+# the `duplicate symbol` failures described above — those come from the static
+# library archiving its package product dependencies.
+def $ExpoMapboxNavigation._add_spm_build_order_dependency(project, target, url, requirement, product_name)
+  return if target.nil?
+
+  ref_class = Xcodeproj::Project::Object::XCSwiftPackageProductDependency
+  pkg = self._ensure_package_reference(project, url, requirement)
+
+  already = target.dependencies.any? do |dep|
+    dep.product_ref &&
+      dep.product_ref.package == pkg &&
+      dep.product_ref.product_name == product_name
+  end
+  return if already
+
+  ref = project.new(ref_class)
+  ref.package = pkg
+  ref.product_name = product_name
+
+  dependency = project.new(Xcodeproj::Project::Object::PBXTargetDependency)
+  dependency.product_ref = ref
+  target.dependencies << dependency
 end
 
 # Warn when MapboxMaps is about to be resolved by both CocoaPods and SPM.
@@ -238,7 +278,8 @@ def $ExpoMapboxNavigation.post_install(installer)
   end
 
   # The pod target gets the package *reference* (so the project resolves the
-  # packages) and the include path — but deliberately NOT a product dependency.
+  # packages), a non-linking build-order dependency, and the include path — but
+  # deliberately NOT an entry in `package_product_dependencies`.
   #
   # Xcode archives a static library target's package product dependencies *into*
   # the resulting `.a`. With the dependency attached, our
@@ -251,9 +292,15 @@ def $ExpoMapboxNavigation.post_install(installer)
   # `_add_swift_include_path` provides, so the pod target needs nothing more.
   packages.each do |package|
     self._ensure_package_reference(pods_project, package[:url], package[:requirement])
+    package[:products].each do |product|
+      self._add_spm_build_order_dependency(
+        pods_project, pod_target, package[:url], package[:requirement], product
+      )
+    end
   end
 
   self._add_swift_include_path(pod_target)
+  pods_project.save
 
   # 2. Every user target, so the frameworks link into the app binary.
   installer.aggregate_targets.group_by(&:user_project).each do |project, targets|

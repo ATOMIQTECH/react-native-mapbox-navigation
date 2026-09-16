@@ -8,7 +8,12 @@ if (project.extensions.findByName('kotlin') == null) {
 }
 
 group = 'expo.modules.mapboxnavigation'
-version = '2.2.0'
+// Read from package.json rather than hand-maintained here. The podspec already
+// does this (`package['version']`), and the two drifted: this line still said
+// 2.2.0 after the 3.0.0 release because every previous bump had been manual.
+version = new groovy.json.JsonSlurper()
+  .parseText(new File(projectDir, '../package.json').text)
+  .version
 
 def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
 apply from: expoModulesCorePlugin
