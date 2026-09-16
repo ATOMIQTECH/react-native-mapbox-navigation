@@ -1,5 +1,41 @@
 # Changelog
 
+## 3.0.1
+
+Fixes a cold-build failure on iOS introduced with the v3 Swift Package Manager
+integration in 3.0.0. Android is unaffected.
+
+### Fixed
+
+- **iOS: `no such module 'MapboxMaps'` on a clean build.** The Mapbox Swift
+  packages were not guaranteed to be built before this package's pod target
+  compiled, so on a machine with no warm `DerivedData` the compile could start
+  before the `.swiftmodule` files existed.
+
+  The pod target deliberately takes no SPM *product dependency* — a static
+  library archives those into its own `.a`, and the app then links them a second
+  time, failing with `duplicate symbol` errors. But withholding it also removed
+  the only thing ordering the two builds. `ios/spm.rb` now adds a non-linking
+  `PBXTargetDependency` (one carrying a `productRef` rather than a `target`),
+  which orders the build without reintroducing the duplicate symbols.
+
+  This reproduced only on clean machines: an incremental local build almost
+  always found the modules left behind by an earlier build. If you hit it on
+  3.0.0, upgrading and re-running `pod install` is enough — no Podfile or app
+  code changes are needed.
+
+### Changed
+
+- `android/build.gradle` now reads its `version` from `package.json` instead of
+  a hand-maintained literal, which had drifted to `2.2.0`. The coordinate is not
+  resolved by consumers (the module is consumed as a project dependency), so
+  this is cosmetic, but it can no longer fall out of step with a release.
+- CI's iOS job now builds for `arm64` explicitly. `generic/platform=iOS
+  Simulator` carries no architecture, so Xcode had been resolving it to x86_64
+  and cross-compiling on an arm64 runner. This was not related to the bug above
+  — both architectures build correctly — it simply spent runner time
+  cross-compiling an architecture no contributor or consumer builds.
+
 ## 3.0.0
 
 Migrates both platforms to **Mapbox Navigation SDK v3** (iOS 3.30.1, Android
