@@ -2,8 +2,6 @@
 
 Embedded Mapbox turn-by-turn navigation for Expo and React Native on iOS and Android.
 
-This package is `2.x` and embedded-only. Full-screen `startNavigation(...)` flows were removed. The main entry point is `MapboxNavigationView`.
-
 ## What You Get
 
 - Native Mapbox navigation UI embedded in a React Native view, on Navigation SDK **v3**
