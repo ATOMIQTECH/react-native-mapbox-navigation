@@ -1,5 +1,77 @@
 # Changelog
 
+## 3.1.0 — unreleased
+
+Makes eight-digit hex mean the same thing on both platforms, and honour its
+alpha channel. **This reinterprets an input you may already be passing** — read
+the first entry before upgrading if any colour string you pass is eight digits
+long.
+
+Shipped as a minor rather than a major because every doc in this repo has told
+you not to use the eight-digit form ("not portable and should be avoided here"),
+and the results it produced were divergent by construction: the same string gave
+two different colours, and on Android it gave a colour nobody would choose
+deliberately. It is still a behaviour change, hence the flag above.
+
+### Changed
+
+- **Eight-digit hex is now `#RRGGBBAA` on both platforms, and its alpha is
+  applied.** It was `#RRGGBBAA` on iOS and `#AARRGGBB` on Android, so one
+  palette produced two themes; and on iOS the marker colours truncated the
+  string with `prefix(6)` and dropped the alpha byte entirely. Every colour
+  string now goes through one parser per platform, and the two agree.
+
+  Alpha last is the CSS/web convention, which is what a React Native developer
+  writing `'#14532D80'` means by it. Three- and six-digit hex are unaffected.
+
+  What this changes in practice, per prop:
+
+  | Prop | Before | Now |
+  | --- | --- | --- |
+  | `colors` (iOS) | `#RRGGBBAA`, alpha applied | unchanged |
+  | `colors` (Android) | `#AARRGGBB` | `#RRGGBBAA` |
+  | `locationPuck` `appearance` (iOS) | `#RRGGBBAA`, alpha applied | unchanged |
+  | `locationPuck` `appearance` (Android) | `#AARRGGBB` | `#RRGGBBAA` |
+  | `navigationMarkers` `color` / `badgeColor` (iOS) | 8 digits accepted, alpha **dropped** | alpha applied |
+  | `navigationMarkers` `color` / `badgeColor` (Android) | `#AARRGGBB` | `#RRGGBBAA` |
+
+  To migrate, reverse the byte order of any eight-digit string you were passing
+  to Android — `'#8014532D'` becomes `'#14532D80'` — and check any eight-digit
+  string you were passing to iOS *markers*, which will now be translucent where
+  it used to be opaque. The simplest fix in both cases is to drop to six digits,
+  which has always meant the same thing everywhere.
+
+- **Three-digit hex now works on Android.** Every doc listed `#RGB` as one of
+  the two portable forms, but Android never parsed it: `Color.parseColor`
+  accepts only the 7- and 9-character forms and threw on `'#1AF'`, which this
+  package caught and treated as "no colour set", silently leaving the Mapbox
+  default. It now expands by doubling each nibble (`'#1AF'` → `'#11AAFF'`) as
+  CSS and iOS do. If you passed three-digit hex to Android and saw no effect,
+  you will now see the colour you asked for.
+
+- **A malformed `#` string is now rejected rather than guessed at on Android.**
+  `Color.parseColor` parses the digits with `Long.parseLong`, which accepts a
+  sign, so `'#+fffff'` used to yield a colour. Anything starting with `#` is now
+  parsed as hex or rejected outright. Colour *names* without a `#` ("red",
+  "magenta") still work on Android, as they always have — they are not portable,
+  iOS has no equivalent, and they remain undocumented, but nothing is gained by
+  breaking an app that relies on one.
+
+### Fixed
+
+- **Translucent chrome no longer needs a workaround on iOS.** `colors` could
+  already carry alpha there, but the documentation told you not to use it
+  because Android disagreed, so the honest advice was "pass an opaque colour and
+  use the map style for translucency instead". Both platforms now honour it, so
+  that advice is retired.
+
+  One caveat is unchanged and worth repeating: iOS reaches the chrome colours
+  through `UIAppearance`, which is process-global and has no "unset". That
+  applies to alpha as much as to hue, so `'#00000000'` permanently paints a
+  piece of chrome transparent for the life of the process rather than hiding it.
+  Use the `shows*` props to turn UI off.
+
+
 ## 3.0.1
 
 Fixes a cold-build failure on iOS introduced with the v3 Swift Package Manager

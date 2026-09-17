@@ -209,8 +209,8 @@ These are **display-only** — they do not affect routing. Use `waypoints` for i
 | `glyph` | `string` | `"•"` | Short text rendered inside the bubble (max 2 chars) |
 | `badge` | `string` | — | Badge text in the upper-right corner (max 3 chars) |
 | `variant` | `NavigationMarkerVariant` | `"default"` | Semantic color preset |
-| `color` | `string` | — | Custom fill hex (e.g. `"#7C3AED"`). Overrides `variant` |
-| `badgeColor` | `string` | — | Custom badge hex. Falls back to a darker shade of `color`/`variant` |
+| `color` | `string` | — | Custom fill hex — `#RGB`, `#RRGGBB` or `#RRGGBBAA` (e.g. `"#7C3AED"`). Overrides `variant` |
+| `badgeColor` | `string` | — | Custom badge hex, same forms. Falls back to a darker shade of `color`/`variant` |
 | `opacity` | `number` | auto | Marker opacity 0..1. Overrides the `variant`/`selected` default |
 | `size` | `NavigationMarkerSize` | `"medium"` | Size preset |
 | `markerStyle` | `NavigationMarkerStyle` | `"pin"` | `"pin"` = bubble + tail, `"dot"` = circle only |
@@ -341,7 +341,7 @@ matter there.
 | --- | --- | --- |
 | `modelUri` | `3d` | `require()`, `https://` URL, or `{ uri }`. Required. |
 | `topImage` / `bearingImage` / `shadowImage` | `2d` | At least one required. |
-| `color` / `haloColor` / `bearingColor` | `tinted` | Hex strings (`#RGB`, `#RRGGBB`, `#RRGGBBAA`). |
+| `color` / `haloColor` / `bearingColor` | `tinted` | Hex strings (`#RGB`, `#RRGGBB`, `#RRGGBBAA`), read identically on both platforms. |
 | `scale` | `3d`, `2d`, `tinted` | Number, or `[x, y, z]` for `3d`. |
 | `scaleExpression` | `3d`, `2d` | Mapbox style expression as a JSON string. Overrides `scale`. |
 | `rotation` | `3d` | `[x, y, z]` degrees. Corrects a model's authored axis. |
@@ -404,15 +404,18 @@ Mapbox default, and changes apply live.
 
 Three things worth knowing:
 
-- Use `#RGB` or `#RRGGBB`. **Eight-digit hex is not portable** — iOS reads it as
-  `#RRGGBBAA` and Android as `#AARRGGBB`, so the same string gives different
-  colours.
+- Use `#RGB`, `#RRGGBB` or `#RRGGBBAA` — all three read the same way on both
+  platforms, with eight digits taking alpha last as CSS does, so `'#14532D80'`
+  is that green at 50%. (Before 3.1.0 the eight-digit form meant `#RRGGBBAA` on
+  iOS and `#AARRGGBB` on Android; see the changelog if you relied on that.)
 - `routeLine` also sets the `low` and `unknown` congestion colours. Congestion
   shading is painted over the base line, and those two bands cover most of a
   typical route, so without it a recoloured route still looks blue.
 - Treat it as a theme you set, not a value you toggle. On iOS the chrome colours
   go through `UIAppearance`, which has no "unset", so *removing* a key leaves its
-  last colour until the app relaunches. Changing a key's value always works.
+  last colour until the app relaunches. Changing a key's value always works —
+  but that includes alpha, so `'#00000000'` permanently paints a piece of chrome
+  transparent rather than hiding it. Use the `shows*` props to turn UI off.
 
 ## Routing Options
 
