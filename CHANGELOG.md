@@ -1,5 +1,77 @@
 # Changelog
 
+## 3.1.0
+
+Installing this package alongside `@rnmapbox/maps` now needs no setup. Both
+packages depend on the Mapbox Maps SDK and, until now, each consumer had to
+reconcile that themselves — a hand-written Expo config plugin plus a Ruby
+`post_install` shim on iOS, and a Maps version pinned by hand on Android. All of
+it is now done by the config plugin.
+
+### Added
+
+- **`@rnmapbox/maps` is reconciled automatically on both platforms.** When that
+  package is resolvable from your project, the config plugin:
+
+  - **iOS** — writes `$RNMapboxMapsSwiftPackageManager = 'manual'` into the
+    Podfile, which stops `@rnmapbox/maps` declaring `MapboxMaps` and `Turf` as
+    pods, and `ios/spm.rb` then wires its pod target to the same Swift package
+    this package already resolves. A correct install now has **no Mapbox pods at
+    all**.
+  - **Android** — redirects `com.mapbox.maps:android` to
+    `com.mapbox.maps:android-ndk27` at the Maps version Navigation v3 is built
+    against, so the app cannot end up with both artifact variants.
+
+  Nothing to configure, and the order of the two packages in your `plugins`
+  array does not matter. Opt out with `rnmapboxMapsCompat: false` if you would
+  rather wire them together yourself. See
+  [Using with `@rnmapbox/maps`](README.md#using-with-rnmapboxmaps).
+
+- The Mapbox SDK versions are published under a `mapbox` key in `package.json`,
+  so you can read the Maps version this package is built against:
+  `require('@atomiqlab/react-native-mapbox-navigation/package.json').mapbox.maps`.
+
+- `example/` gained a **With `@rnmapbox/maps`** scenario that renders an
+  `@rnmapbox/maps` `MapView` beside the navigation view, so the combination is
+  built on every CI run instead of being discovered by consumers. The example
+  lists `@rnmapbox/maps` *after* this package on purpose — Expo runs mods
+  last-registered-first, so that is the ordering which puts
+  `$ExpoMapboxNavigation.post_install` ahead of `$RNMapboxMaps.post_install` in
+  the Podfile.
+
+### Fixed
+
+- **Android: `checkDebugDuplicateClasses` on `com.mapbox.maps` classes when
+  `@rnmapbox/maps` was installed and `targetSdkVersion` was below 35.** Mapbox
+  publishes every Android artifact twice — a default build and an `-ndk27` build
+  with 16 KB page-size support — and the two carry the same classes. This
+  package is always on `-ndk27`, while `@rnmapbox/maps` picks its variant from
+  the app's `targetSdkVersion` and only uses `-ndk27` at 35 and above. Any app
+  below that got one of each and could not build, with an error naming neither
+  package. Apps on Expo SDK 54+ defaults (targetSdk 35/36) were never affected.
+
+- **iOS: `pod install` no longer only *warns* about MapboxMaps being resolved by
+  both CocoaPods and SPM.** That warning told consumers to edit their Podfile
+  and said the package could not fix it; it now fixes it, and the remaining
+  warning fires only for the cases that genuinely cannot be resolved from here
+  (another pod declaring MapboxMaps, or a `$RNMapboxMapsSwiftPackageManager`
+  Hash set by hand) and says which one it saw.
+
+### Changed
+
+- `ios/spm.rb`, `android/build.gradle` and `app.plugin.js` all read the native
+  SDK versions from `package.json` instead of each holding their own copy. The
+  Maps version is now shared with `@rnmapbox/maps`, so a stale copy would put
+  the two packages on different Maps SDKs without anything failing loudly.
+- CI asserts the shared-Maps invariant on both platforms rather than hoping a
+  build breaks. The iOS job checks that `Podfile.lock` contains no Mapbox pods
+  and that the Podfile hands `@rnmapbox/maps` to SPM. The Android job resolves
+  the *app's* classpath — not just this module's — and fails if both Maps
+  artifact variants appear, forcing `targetSdkVersion` to 34 via
+  `scripts/ci/check-one-mapbox-maps-variant.init.gradle` because that is the
+  only value at which the bug reproduces (Expo's defaults are 35+, where
+  `@rnmapbox/maps` already picks `-ndk27` and the build would pass either way).
+
 ## 3.0.1
 
 Fixes a cold-build failure on iOS introduced with the v3 Swift Package Manager

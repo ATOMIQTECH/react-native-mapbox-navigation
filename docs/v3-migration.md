@@ -286,6 +286,28 @@ product_name)` creates `XCRemoteSwiftPackageReference` entries from a CocoaPods
 Android has no equivalent problem: Gradle resolves a single Maps 11.x for both
 packages, so Android gets *simpler* after the migration.
 
+> **Resolved in 3.1.0, and the Android note above was wrong.**
+>
+> 3.0.x shipped the hazard as a `pod install` *warning* telling consumers to
+> edit their Podfile, which meant every app using both packages hand-wrote a
+> config plugin and a Ruby `post_install` shim. The config plugin now does it:
+> it writes `$RNMapboxMapsSwiftPackageManager = 'manual'`, which stops rnmapbox
+> declaring any Mapbox pod, and `ios/spm.rb` wires the `rnmapbox-maps` pod
+> target to the same Swift package. Note the choice of `'manual'` over the Hash
+> form: rnmapbox then writes nothing to the Xcode project, so the two
+> `post_install` hooks can run in either order — and their order follows the
+> order the packages sit in the app's `plugins` array, which no consumer should
+> have to reason about.
+>
+> Android did have an equivalent problem. Gradle resolves a single Maps
+> *version*, but not a single *artifact variant*: rnmapbox picks
+> `com.mapbox.maps:android-ndk27` only at `targetSdkVersion` 35+ and the plain
+> build below that, while this package is always on `-ndk27`. The two carry the
+> same classes, so any app below targetSdk 35 failed
+> `checkDebugDuplicateClasses`. The plugin now substitutes the plain coordinate.
+>
+> See [Using with `@rnmapbox/maps`](../README.md#using-with-rnmapboxmaps).
+
 ## New v3 capability to wire into the wrapper
 
 Per the goal, v3-only features should be surfaced through the wrapper rather

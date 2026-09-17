@@ -19,6 +19,26 @@ Check:
 - `MAPBOX_DOWNLOADS_TOKEN` is exported in the shell running the build
 - you rebuilt after adding the package
 
+## `@rnmapbox/maps` Is Installed and the Build Fails on Mapbox Maps
+
+Installing both packages needs no configuration of your own — the config plugin
+shares one Mapbox Maps SDK between them. What it cannot do is apply itself to a
+native project that already exists, so re-run prebuild after adding either
+package:
+
+```bash
+npx expo prebuild --clean
+```
+
+If a failure survives that, match the symptom:
+
+- **`pod install` prints `MapboxMaps is being resolved by BOTH CocoaPods and SwiftPackageManager`.** Something still declares MapboxMaps as a pod. Check your `Podfile` for a `$RNMapboxMapsSwiftPackageManager` assignment of your own — the Hash form keeps `@rnmapbox/maps` on CocoaPods, so remove it and let the plugin set `'manual'`. The warning itself names whichever case it detected.
+- **iOS fails with `no such module 'MapboxMaps'` in an `@rnmapbox/maps` file.** The Podfile is missing `$ExpoMapboxNavigation.post_install(installer)`, which is what points that pod target at the Swift package. Prebuild writes it; a hand-managed `ios/` directory needs it added by hand.
+- **iOS fails with a wall of `duplicate symbol` errors mentioning Mapbox.** A pod target is linking the Swift package instead of only compiling against it. This is what the plugin's wiring prevents, so it usually means a third `post_install` hook is attaching package product dependencies — remove it, or set `rnmapboxMapsCompat: false` and take over the whole job.
+- **Android fails in `checkDebugDuplicateClasses` on `com.mapbox.maps` classes.** The app has both the plain and `-ndk27` Maps artifacts. Confirm your `android/build.gradle` still carries the plugin's `react-native-mapbox-navigation-mapbox-maps-variant` block; `expo prebuild --clean` restores it.
+
+A correct iOS install has **no** Mapbox pods at all — `grep -i mapbox ios/Podfile.lock` should show only `ExpoMapboxNavigationNative` and `rnmapbox-maps` themselves.
+
 ## The View Shows `LOCATION_PERMISSION_REQUIRED`
 
 The library does not request permission for you. Request foreground location access before enabling the view.

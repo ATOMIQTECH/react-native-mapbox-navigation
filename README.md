@@ -56,6 +56,8 @@ The package ships with an Expo config plugin that:
 - sets `MBXAccessToken` in `Info.plist`
 - adds required Android location/foreground-service permissions
 - adds iOS location usage strings and `location` / `audio` background modes
+- reconciles the Mapbox Maps SDK with `@rnmapbox/maps` when that package is
+  also installed — see [Using with `@rnmapbox/maps`](#using-with-rnmapboxmaps)
 
 If you manage plugins explicitly, add the package to your app config:
 
@@ -91,6 +93,52 @@ If you manage plugins explicitly, add the package to your app config:
 | `backgroundLocation` | `false` | Adds `ACCESS_BACKGROUND_LOCATION` on Android. **Opt-in**: it triggers a Google Play policy review and a prominent-disclosure requirement, so it is no longer added automatically. |
 | `backgroundAudio` | `true` | Keeps the iOS `audio` background mode so spoken guidance continues while backgrounded. Set `false` if you don't need it at App Store review. |
 | `locationWhenInUsePermission` | package default | Overrides the iOS location usage description. |
+| `rnmapboxMapsCompat` | `true` | Shares one Mapbox Maps SDK with `@rnmapbox/maps` when it is installed. Set `false` only if you want to wire the two packages together yourself. |
+
+## Using with `@rnmapbox/maps`
+
+Install both packages and add both plugins. There is nothing else to configure —
+no Podfile edits, no Maps version to keep in step, and the order of the two
+entries in `plugins` does not matter.
+
+```json
+{
+  "expo": {
+    "plugins": ["@atomiqlab/react-native-mapbox-navigation", "@rnmapbox/maps"]
+  }
+}
+```
+
+The two packages need the same Mapbox Maps SDK and, left alone, ask two
+different build systems for it. The config plugin settles both platforms:
+
+- **iOS.** Mapbox ships no CocoaPods artifacts for Navigation SDK v3, so the
+  Navigation SDK — and the Maps SDK under it — arrive over Swift Package
+  Manager, while `@rnmapbox/maps` declares `MapboxMaps` as a *pod*. One app
+  resolving the same framework through both resolvers does not link. The plugin
+  writes `$RNMapboxMapsSwiftPackageManager = 'manual'` into the Podfile, which
+  stops `@rnmapbox/maps` declaring any Mapbox pod, and `ios/spm.rb` then points
+  its pod target at the same Swift package. Your `Podfile.lock` ends up with no
+  Mapbox pods at all.
+- **Android.** Mapbox publishes each artifact twice — `com.mapbox.maps:android`
+  and the 16 KB page-size `com.mapbox.maps:android-ndk27` — and the two carry
+  the same classes, so an app that resolves one of each fails
+  `checkDebugDuplicateClasses`. `@rnmapbox/maps` picks its variant from your
+  `targetSdkVersion` while this package is always on `-ndk27`, so the plugin
+  redirects the plain coordinate and holds the whole app to one variant at the
+  Maps version Navigation v3 is built against.
+
+That version is published in this package's `package.json` if you need to read
+it:
+
+```js
+require("@atomiqlab/react-native-mapbox-navigation/package.json").mapbox.maps;
+```
+
+Both paths apply only when `@rnmapbox/maps` is actually resolvable from your
+project, and both run after `expo prebuild`, so re-run it (or `--clean`) after
+adding either package. `example/` exercises this combination — see its
+**With `@rnmapbox/maps`** scenario.
 
 ## Minimal Usage
 
