@@ -10,6 +10,7 @@ type ScenarioRoute =
   | 'AppearanceScenario'
   | 'LocationPuckScenario'
   | 'RoutingScenario'
+  | 'MapCoexistenceScenario'
 
 const SCENARIOS: { route: ScenarioRoute; title: string; description: string }[] = [
   {
@@ -50,6 +51,12 @@ const SCENARIOS: { route: ScenarioRoute; title: string; description: string }[] 
     title: 'Routing + Style',
     description:
       'Routing profile, road-class and point exclusions, vehicle dimensions, and Standard style config.',
+  },
+  {
+    route: 'MapCoexistenceScenario',
+    title: 'With @rnmapbox/maps',
+    description:
+      'Renders an @rnmapbox/maps MapView beside navigation, proving both packages share one Mapbox Maps SDK with no Podfile or Gradle edits.',
   },
 ]
 

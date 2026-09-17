@@ -1249,13 +1249,13 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
    * A bad colour string is a consumer typo, not a reason to take down
    * navigation, so it is logged and skipped and the SDK default stands.
    *
-   * `Color.parseColor` reads 8-digit hex as `#AARRGGBB` while iOS reads it as
-   * `#RRGGBBAA`. The public type documents 3- and 6-digit hex as the portable
-   * forms for exactly this reason; both parse identically here.
+   * [HexColor] rather than `Color.parseColor`, so `#RGB`, `#RRGGBB` and
+   * `#RRGGBBAA` all mean here what they mean on iOS — see its docs for why the
+   * platform parser could not be used for the 8-digit form.
    */
   private fun color(key: String): Int? =
     (colorOverrides[key] as? String)?.let { raw ->
-      runCatching { Color.parseColor(raw.trim()) }.getOrElse {
+      HexColor.parse(raw) ?: run {
         Log.w(TAG, "Ignoring unparseable colors.$key value '$raw'")
         null
       }
@@ -2136,8 +2136,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     val glyph = (value["glyph"] as? String)?.trim()?.takeIf { it.isNotEmpty() }?.take(2) ?: "•"
     val badge = (value["badge"] as? String)?.trim()?.takeIf { it.isNotEmpty() }?.take(3)
     val variant = normalizeMarkerVariant(value["variant"] as? String)
-    val customColor = parseHexColor(value["color"] as? String)
-    val customBadgeColor = parseHexColor(value["badgeColor"] as? String)
+    val customColor = HexColor.parse(value["color"])
+    val customBadgeColor = HexColor.parse(value["badgeColor"])
     val customOpacity = (value["opacity"] as? Number)?.toFloat()?.coerceIn(0f, 1f)
     val size = normalizeMarkerSize(value["size"] as? String)
     val markerStyle = normalizeMarkerStyle(value["markerStyle"] as? String)
@@ -2305,11 +2305,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private fun normalizeMarkerStyle(raw: String?): String = when (raw?.trim()?.lowercase()) {
     "dot" -> "dot"
     else -> "pin"
-  }
-
-  private fun parseHexColor(raw: String?): Int? {
-    val trimmed = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-    return runCatching { Color.parseColor(trimmed) }.getOrNull()
   }
 
   private fun resolveNavigationMarkerMetrics(size: String): NavigationMarkerMetrics = when (size) {

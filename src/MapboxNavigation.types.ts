@@ -78,12 +78,16 @@ export type NavigationMarker = Coordinate & {
    */
   variant?: NavigationMarkerVariant
   /**
-   * Custom fill color as a CSS/Android hex string (e.g. `"#2563EB"`).
+   * Custom fill color as a hex string — `#RGB`, `#RRGGBB` or `#RRGGBBAA`
+   * (e.g. `"#2563EB"`), read the same way on both platforms.
    * Takes priority over `variant` when provided.
+   *
+   * Note that an eight-digit value's alpha is applied to the marker's fill,
+   * and then `opacity` multiplies the marker as a whole.
    */
   color?: string
   /**
-   * Custom badge background color (hex string).
+   * Custom badge background color (hex string, same forms as `color`).
    * Defaults to a darkened shade of `color` or the `variant` badge color.
    */
   badgeColor?: string
@@ -566,11 +570,21 @@ export interface MapStyleConfig {
  * omitted keeps the Mapbox default, so you can override just the route line and
  * leave the chrome alone, or vice versa.
  *
- * Use `#RGB` or `#RRGGBB`. Both are parsed identically on iOS and Android.
- * Eight-digit hex is **not** portable and should be avoided here: iOS reads it
- * as `#RRGGBBAA` while Android reads it as `#AARRGGBB`, so the same string
- * produces different colours on each platform. Pass an opaque colour and use
- * the map style for translucency instead.
+ * Use `#RGB`, `#RRGGBB` or `#RRGGBBAA`. All three are parsed identically on
+ * iOS and Android, and eight digits are read the CSS way — alpha last — so
+ * `'#14532D80'` is that green at 50%. The alpha channel is honoured rather
+ * than dropped.
+ *
+ * Before 3.1.0 the eight-digit form was not portable: iOS read it as
+ * `#RRGGBBAA` while Android read it as `#AARRGGBB`, so one string gave two
+ * colours. If you were working around that with an opaque colour, nothing
+ * changes; if you were passing eight digits to one platform only, see the
+ * 3.1.0 changelog entry.
+ *
+ * Translucency composites over whatever is behind the element — the map for
+ * the route line and the maneuver banner. It is honoured, but read the
+ * `UIAppearance` note below before using it on the chrome keys: a translucent
+ * chrome colour is as permanent as an opaque one for the life of the process.
  *
  * Every key below applies live, including changes made after mount, and every
  * key works on **both** platforms except the three `tripProgress*` ones, which
@@ -585,6 +599,11 @@ export interface MapStyleConfig {
  * relaunched. Setting a key to a different colour always works. So pass the
  * full palette you want and change values within it, rather than adding and
  * removing keys at runtime.
+ *
+ * That applies to alpha too, so `'#00000000'` is not a way to hide a piece of
+ * chrome: it paints it fully transparent for the rest of the process, and
+ * there is no value you can pass afterwards to get the Mapbox default back.
+ * Use the `shows*` props to turn UI off — they are designed for it.
  *
  * ```tsx
  * <MapboxNavigationView
@@ -1015,11 +1034,17 @@ export type LocationPuck2D = {
  */
 export type LocationPuckTinted = {
   type: 'tinted'
-  /** Fill color of the puck body, as a hex string (e.g. `"#2563EB"`). */
+  /**
+   * Fill color of the puck body, as a hex string — `#RGB`, `#RRGGBB` or
+   * `#RRGGBBAA` (e.g. `"#2563EB"`), read the same way on both platforms.
+   */
   color?: string
-  /** Color of the surrounding halo/accuracy ring. */
+  /** Color of the surrounding halo/accuracy ring. Same forms as `color`. */
   haloColor?: string
-  /** Color of the directional arrow. Defaults to a contrast of `color`. */
+  /**
+   * Color of the directional arrow. Same forms as `color`.
+   * Defaults to a contrast of `color`.
+   */
   bearingColor?: string
   /** Uniform scale multiplier. Defaults to `1`. */
   scale?: number

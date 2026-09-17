@@ -10,8 +10,8 @@ node_modules
 *.expo
 
 # env files (added by remove-malware script)
-.env*
 !.env.example
 branch_structure.json
 temp_auto_push.bat
 temp_interactive_push.bat
+config.bat
