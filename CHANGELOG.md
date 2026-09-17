@@ -1,5 +1,135 @@
 # Changelog
 
+## 3.1.0
+
+Two unrelated things, both about not making consumers work around this package.
+
+`@rnmapbox/maps` alongside this package now needs no setup at all, where before
+every consuming app hand-wrote an Expo config plugin and a Ruby `post_install`
+shim. And eight-digit hex colours now mean the same thing on both platforms.
+
+**The colour change reinterprets an input you may already be passing.** If any
+colour string you pass is eight digits long, read the first entry under
+*Changed* before upgrading. Everything else here is additive.
+
+### Added
+
+- **`@rnmapbox/maps` is reconciled automatically on both platforms.** When that
+  package is resolvable from your project, the config plugin:
+
+  - **iOS** — writes `$RNMapboxMapsSwiftPackageManager = 'manual'` into the
+    Podfile, which stops `@rnmapbox/maps` declaring `MapboxMaps` and `Turf` as
+    pods, and `ios/spm.rb` then wires its pod target to the same Swift package
+    this package already resolves. A correct install now has **no Mapbox pods at
+    all**.
+  - **Android** — redirects `com.mapbox.maps:android` to
+    `com.mapbox.maps:android-ndk27` at the Maps version Navigation v3 is built
+    against, so the app cannot end up with both artifact variants.
+
+  Nothing to configure, and the order of the two packages in your `plugins`
+  array does not matter. Opt out with `rnmapboxMapsCompat: false` if you would
+  rather wire them together yourself. See
+  [Using with `@rnmapbox/maps`](README.md#using-with-rnmapboxmaps).
+
+- The Mapbox SDK versions are published under a `mapbox` key in `package.json`,
+  so you can read the Maps version this package is built against:
+  `require('@atomiqlab/react-native-mapbox-navigation/package.json').mapbox.maps`.
+
+- `example/` gained a **With `@rnmapbox/maps`** scenario that renders an
+  `@rnmapbox/maps` `MapView` beside the navigation view, so the combination is
+  built on every CI run instead of being discovered by consumers. The example
+  lists `@rnmapbox/maps` *after* this package on purpose — Expo runs mods
+  last-registered-first, so that is the ordering which puts
+  `$ExpoMapboxNavigation.post_install` ahead of `$RNMapboxMaps.post_install` in
+  the Podfile.
+
+### Changed
+
+- **Eight-digit hex is now `#RRGGBBAA` on both platforms, and its alpha is
+  applied.** It was `#RRGGBBAA` on iOS and `#AARRGGBB` on Android, so one
+  palette produced two themes; and on iOS the marker colours truncated the
+  string with `prefix(6)` and dropped the alpha byte entirely. Every colour
+  string now goes through one parser per platform, and the two agree.
+
+  Alpha last is the CSS/web convention, which is what a React Native developer
+  writing `'#14532D80'` means by it. Three- and six-digit hex are unaffected.
+
+  What this changes in practice, per prop:
+
+  | Prop | Before | Now |
+  | --- | --- | --- |
+  | `colors` (iOS) | `#RRGGBBAA`, alpha applied | unchanged |
+  | `colors` (Android) | `#AARRGGBB` | `#RRGGBBAA` |
+  | `locationPuck` `appearance` (iOS) | `#RRGGBBAA`, alpha applied | unchanged |
+  | `locationPuck` `appearance` (Android) | `#AARRGGBB` | `#RRGGBBAA` |
+  | `navigationMarkers` `color` / `badgeColor` (iOS) | 8 digits accepted, alpha **dropped** | alpha applied |
+  | `navigationMarkers` `color` / `badgeColor` (Android) | `#AARRGGBB` | `#RRGGBBAA` |
+
+  To migrate, reverse the byte order of any eight-digit string you were passing
+  to Android — `'#8014532D'` becomes `'#14532D80'` — and check any eight-digit
+  string you were passing to iOS *markers*, which will now be translucent where
+  it used to be opaque. The simplest fix in both cases is to drop to six digits,
+  which has always meant the same thing everywhere.
+
+- **Three-digit hex now works on Android.** Every doc listed `#RGB` as one of
+  the two portable forms, but Android never parsed it: `Color.parseColor`
+  accepts only the 7- and 9-character forms and threw on `'#1AF'`, which this
+  package caught and treated as "no colour set", silently leaving the Mapbox
+  default. It now expands by doubling each nibble (`'#1AF'` → `'#11AAFF'`) as
+  CSS and iOS do. If you passed three-digit hex to Android and saw no effect,
+  you will now see the colour you asked for.
+
+- **A malformed `#` string is now rejected rather than guessed at on Android.**
+  `Color.parseColor` parses the digits with `Long.parseLong`, which accepts a
+  sign, so `'#+fffff'` used to yield a colour. Anything starting with `#` is now
+  parsed as hex or rejected outright. Colour *names* without a `#` ("red",
+  "magenta") still work on Android, as they always have — they are not portable,
+  iOS has no equivalent, and they remain undocumented, but nothing is gained by
+  breaking an app that relies on one.
+- `ios/spm.rb`, `android/build.gradle` and `app.plugin.js` all read the native
+  SDK versions from `package.json` instead of each holding their own copy. The
+  Maps version is now shared with `@rnmapbox/maps`, so a stale copy would put
+  the two packages on different Maps SDKs without anything failing loudly.
+- CI asserts the shared-Maps invariant on both platforms rather than hoping a
+  build breaks. The iOS job checks that `Podfile.lock` contains no Mapbox pods
+  and that the Podfile hands `@rnmapbox/maps` to SPM. The Android job resolves
+  the *app's* classpath — not just this module's — and fails if both Maps
+  artifact variants appear, forcing `targetSdkVersion` to 34 via
+  `scripts/ci/check-one-mapbox-maps-variant.init.gradle` because that is the
+  only value at which the bug reproduces (Expo's defaults are 35+, where
+  `@rnmapbox/maps` already picks `-ndk27` and the build would pass either way).
+
+### Fixed
+
+- **Android: `checkDebugDuplicateClasses` on `com.mapbox.maps` classes when
+  `@rnmapbox/maps` was installed and `targetSdkVersion` was below 35.** Mapbox
+  publishes every Android artifact twice — a default build and an `-ndk27` build
+  with 16 KB page-size support — and the two carry the same classes. This
+  package is always on `-ndk27`, while `@rnmapbox/maps` picks its variant from
+  the app's `targetSdkVersion` and only uses `-ndk27` at 35 and above. Any app
+  below that got one of each and could not build, with an error naming neither
+  package. Apps on Expo SDK 54+ defaults (targetSdk 35/36) were never affected.
+
+- **iOS: `pod install` no longer only *warns* about MapboxMaps being resolved by
+  both CocoaPods and SPM.** That warning told consumers to edit their Podfile
+  and said the package could not fix it; it now fixes it, and the remaining
+  warning fires only for the cases that genuinely cannot be resolved from here
+  (another pod declaring MapboxMaps, or a `$RNMapboxMapsSwiftPackageManager`
+  Hash set by hand) and says which one it saw.
+
+- **Translucent chrome no longer needs a workaround on iOS.** `colors` could
+  already carry alpha there, but the documentation told you not to use it
+  because Android disagreed, so the honest advice was "pass an opaque colour and
+  use the map style for translucency instead". Both platforms now honour it, so
+  that advice is retired.
+
+  One caveat is unchanged and worth repeating: iOS reaches the chrome colours
+  through `UIAppearance`, which is process-global and has no "unset". That
+  applies to alpha as much as to hue, so `'#00000000'` permanently paints a
+  piece of chrome transparent for the life of the process rather than hiding it.
+  Use the `shows*` props to turn UI off.
+
+
 ## 3.0.1
 
 Fixes a cold-build failure on iOS introduced with the v3 Swift Package Manager

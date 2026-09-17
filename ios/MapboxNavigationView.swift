@@ -635,8 +635,8 @@ class MapboxNavigationView: ExpoView {
       .nilIfEmpty?
       .prefix(3)
     let variant = normalizeMarkerVariant(value["variant"] as? String)
-    let customColor = parseHexColor(value["color"])
-    let customBadgeColor = parseHexColor(value["badgeColor"])
+    let customColor = HexColor.parse(value["color"])
+    let customBadgeColor = HexColor.parse(value["badgeColor"])
     let customOpacity = (value["opacity"] as? NSNumber).map { CGFloat($0.doubleValue).clamped(to: 0...1) }
     let size = normalizeMarkerSize(value["size"] as? String)
     let markerStyle = normalizeMarkerStyle(value["markerStyle"] as? String)
@@ -827,16 +827,6 @@ class MapboxNavigationView: ExpoView {
     case "dot": return "dot"
     default:    return "pin"
     }
-  }
-
-  private func parseHexColor(_ raw: Any?) -> UIColor? {
-    guard let str = raw as? String else { return nil }
-    var hex = str.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !hex.isEmpty else { return nil }
-    if hex.hasPrefix("#") { hex = String(hex.dropFirst()) }
-    guard hex.count == 6 || hex.count == 8,
-          let value = UInt32(hex.prefix(6), radix: 16) else { return nil }
-    return hexColor(value)
   }
 
   private func resolveNavigationMarkerMetrics(_ size: String) -> NavigationMarkerMetrics {
@@ -1342,7 +1332,7 @@ class MapboxNavigationView: ExpoView {
     guard let navigationMapView = navigationViewController?.navigationMapView else { return }
 
     func color(_ key: String) -> UIColor? {
-      LocationPuckFactory.color(colors[key])
+      HexColor.parse(colors[key])
     }
 
     if let routeLine = color("routeLine") {

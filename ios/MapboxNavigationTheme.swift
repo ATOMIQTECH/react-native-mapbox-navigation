@@ -63,7 +63,7 @@ enum MapboxNavigationTheme {
 
     init(colors: [String: Any]?) {
       func color(_ key: String) -> UIColor? {
-        LocationPuckFactory.color(colors?[key])
+        HexColor.parse(colors?[key])
       }
       maneuverBackground = color("maneuverBackground")
       maneuverSubBackground = color("maneuverSubBackground") ?? maneuverBackground
