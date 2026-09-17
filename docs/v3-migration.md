@@ -509,6 +509,14 @@ parser reads 8-digit hex as `#RRGGBBAA`, while Android's `Color.parseColor`
 reads it as `#AARRGGBB`. The same string produces different colours. `#RGB` and
 `#RRGGBB` parse identically on both, and those are what the contract promises.
 
+> **Resolved in 3.1.0.** Both platforms now read 8-digit hex as `#RRGGBBAA` and
+> honour the alpha, so all three forms are portable. The write-up above is kept
+> as the record of what v3 shipped with. Two things it did not catch, found
+> while fixing this: `Color.parseColor` rejects 3-digit hex outright, so the
+> `#RGB` form the contract promised never worked on Android at all; and iOS had
+> a *third* parser for marker colours that truncated 8-digit input with
+> `prefix(6)` and dropped the alpha. Each platform now has exactly one parser.
+
 ## iOS SPM integration — the part that took 9 builds
 
 Verified end to end on 2026-09-14: `expo prebuild` → `pod install` → `xcodebuild`

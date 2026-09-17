@@ -146,10 +146,10 @@ final class LocationPuckFactory {
     // `color` paints the puck body/arrow; `haloColor` paints the surrounding
     // circle. Fall back to `bearingColor` so a caller supplying only that key
     // still gets a visibly tinted puck.
-    let body = Self.color(appearance["color"])
-      ?? Self.color(appearance["bearingColor"])
+    let body = HexColor.parse(appearance["color"])
+      ?? HexColor.parse(appearance["bearingColor"])
       ?? UIColor(red: 0.22, green: 0.49, blue: 0.96, alpha: 1)
-    let halo = Self.color(appearance["haloColor"]) ?? UIColor.white
+    let halo = HexColor.parse(appearance["haloColor"]) ?? UIColor.white
 
     let rawOpacity = (appearance["opacity"] as? NSNumber)?.doubleValue
     let opacity = (rawOpacity?.isFinite == true) ? rawOpacity!.clamped(to: 0...1) : 1
@@ -439,35 +439,6 @@ final class LocationPuckFactory {
   }
 
   // MARK: - Value helpers
-
-  /// Parse a `#RGB` / `#RRGGBB` / `#RRGGBBAA` colour string.
-  ///
-  /// Note the eight-digit form is read as `#RRGGBBAA`, which differs from
-  /// Android's `Color.parseColor` (`#AARRGGBB`). The public `colors` prop
-  /// therefore documents only the 3- and 6-digit forms as portable.
-  static func color(_ raw: Any?) -> UIColor? {
-    guard let hex = (raw as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-          hex.hasPrefix("#") else {
-      return nil
-    }
-
-    var digits = String(hex.dropFirst())
-    if digits.count == 3 {
-      digits = digits.map { "\($0)\($0)" }.joined()
-    }
-    guard digits.count == 6 || digits.count == 8,
-          let value = UInt64(digits, radix: 16) else {
-      return nil
-    }
-
-    let hasAlpha = digits.count == 8
-    let r = CGFloat((value >> (hasAlpha ? 24 : 16)) & 0xFF) / 255
-    let g = CGFloat((value >> (hasAlpha ? 16 : 8)) & 0xFF) / 255
-    let b = CGFloat((value >> (hasAlpha ? 8 : 0)) & 0xFF) / 255
-    let a = hasAlpha ? CGFloat(value & 0xFF) / 255 : 1
-
-    return UIColor(red: r, green: g, blue: b, alpha: a)
-  }
 
   private static func doubleArray(_ raw: Any?) -> [Double]? {
     guard let numbers = raw as? [NSNumber], !numbers.isEmpty else {
