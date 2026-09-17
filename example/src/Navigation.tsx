@@ -6,6 +6,7 @@ import CoreScenarioScreen from './screens/CoreScenarioScreen'
 import EventsScenarioScreen from './screens/EventsScenarioScreen'
 import HomeScreen from './screens/HomeScreen'
 import LocationPuckScenarioScreen from './screens/LocationPuckScenarioScreen'
+import MapCoexistenceScenarioScreen from './screens/MapCoexistenceScenarioScreen'
 import OverlayScenarioScreen from './screens/OverlayScenarioScreen'
 import RoutingScenarioScreen from './screens/RoutingScenarioScreen'
 import RuntimeScenarioScreen from './screens/RuntimeScenarioScreen'
@@ -71,6 +72,12 @@ const RootStack = createNativeStackNavigator({
       screen: RoutingScenarioScreen,
       options: {
         title: 'Routing + Style',
+      },
+    },
+    MapCoexistenceScenario: {
+      screen: MapCoexistenceScenarioScreen,
+      options: {
+        title: 'With @rnmapbox/maps',
       },
     },
   },

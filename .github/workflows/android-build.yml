@@ -159,6 +159,33 @@ jobs:
         working-directory: example/android
         run: ./gradlew "${MODULE_PROJECT}:assembleDebug" --stacktrace
 
+      # The example installs @rnmapbox/maps too, so this is the regression test
+      # for the two packages sharing one Mapbox Maps SDK on Android. Unlike the
+      # steps above it resolves the *app's* classpath, not just this module's:
+      # the failure being guarded against is the app ending up with both the
+      # plain and the `-ndk27` Maps artifacts, which carry the same classes and
+      # die in `checkDebugDuplicateClasses`.
+      #
+      # The init script forces targetSdkVersion to 34, because that is the only
+      # case that breaks — @rnmapbox/maps picks `-ndk27` at 35+, and Expo's
+      # defaults are 35+, so the unforced build would pass whether or not the
+      # config plugin's substitution works. Verified to fail without it.
+      #
+      # Needs the token: unlike configuration, resolving the graph downloads
+      # Mapbox metadata.
+      - name: Confirm one Mapbox Maps artifact variant (targetSdk < 35)
+        if: env.HAS_MAPBOX_TOKEN == 'true'
+        working-directory: example/android
+        run: |
+          set -euo pipefail
+          grep -q 'react-native-mapbox-navigation-mapbox-maps-variant' build.gradle || {
+            echo "::error::The config plugin did not write its Mapbox Maps variant block into android/build.gradle, so @rnmapbox/maps and this package can resolve different artifact variants."
+            exit 1
+          }
+          ./gradlew \
+            --init-script ../../scripts/ci/check-one-mapbox-maps-variant.init.gradle \
+            :app:checkOneMapboxMapsVariant --stacktrace
+
       - name: Upload Gradle reports on failure
         if: failure()
         uses: actions/upload-artifact@v4

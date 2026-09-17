@@ -90,6 +90,32 @@ jobs:
         working-directory: example/ios
         run: pod install --repo-update
 
+      # The example installs @rnmapbox/maps too, so this run is also the
+      # regression test for the two packages sharing one Mapbox Maps SDK. A
+      # correct install has no Mapbox pods at all: the config plugin sets
+      # `$RNMapboxMapsSwiftPackageManager = 'manual'`, which stops
+      # @rnmapbox/maps declaring `MapboxMaps` and `Turf` as pods, and
+      # ios/spm.rb points its pod target at the Swift package instead. If that
+      # ever regresses the app links two copies of MapboxMaps, which fails in a
+      # way that names neither package — so assert it here rather than reading
+      # it out of a compiler error.
+      - name: Confirm one Mapbox Maps SDK, resolved by SPM only
+        if: env.HAS_MAPBOX_TOKEN == 'true'
+        working-directory: example/ios
+        run: |
+          set -euo pipefail
+          if grep -nE '^ +- (MapboxMaps|MapboxCoreMaps|MapboxCommon|Turf)\b' Podfile.lock; then
+            echo "::error::CocoaPods installed a Mapbox pod. It would be resolved by SPM as well, and two copies of the same framework do not link."
+            exit 1
+          fi
+          echo "no Mapbox pods in Podfile.lock — Maps comes only from SPM"
+
+          grep -q "RNMapboxMapsSwiftPackageManager" Podfile || {
+            echo "::error::The config plugin did not write \$RNMapboxMapsSwiftPackageManager into the Podfile, so @rnmapbox/maps was left on CocoaPods."
+            exit 1
+          }
+          echo "Podfile hands @rnmapbox/maps over to Swift Package Manager"
+
       # Building the app scheme compiles the library's pod as a dependency.
       # The scheme name is derived from the app name, so discover it rather than
       # hardcoding it.

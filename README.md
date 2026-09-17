@@ -56,6 +56,8 @@ The package ships with an Expo config plugin that:
 - sets `MBXAccessToken` in `Info.plist`
 - adds required Android location/foreground-service permissions
 - adds iOS location usage strings and `location` / `audio` background modes
+- reconciles the Mapbox Maps SDK with `@rnmapbox/maps` when that package is
+  also installed — see [Using with `@rnmapbox/maps`](#using-with-rnmapboxmaps)
 
 If you manage plugins explicitly, add the package to your app config:
 
@@ -91,6 +93,52 @@ If you manage plugins explicitly, add the package to your app config:
 | `backgroundLocation` | `false` | Adds `ACCESS_BACKGROUND_LOCATION` on Android. **Opt-in**: it triggers a Google Play policy review and a prominent-disclosure requirement, so it is no longer added automatically. |
 | `backgroundAudio` | `true` | Keeps the iOS `audio` background mode so spoken guidance continues while backgrounded. Set `false` if you don't need it at App Store review. |
 | `locationWhenInUsePermission` | package default | Overrides the iOS location usage description. |
+| `rnmapboxMapsCompat` | `true` | Shares one Mapbox Maps SDK with `@rnmapbox/maps` when it is installed. Set `false` only if you want to wire the two packages together yourself. |
+
+## Using with `@rnmapbox/maps`
+
+Install both packages and add both plugins. There is nothing else to configure —
+no Podfile edits, no Maps version to keep in step, and the order of the two
+entries in `plugins` does not matter.
+
+```json
+{
+  "expo": {
+    "plugins": ["@atomiqlab/react-native-mapbox-navigation", "@rnmapbox/maps"]
+  }
+}
+```
+
+The two packages need the same Mapbox Maps SDK and, left alone, ask two
+different build systems for it. The config plugin settles both platforms:
+
+- **iOS.** Mapbox ships no CocoaPods artifacts for Navigation SDK v3, so the
+  Navigation SDK — and the Maps SDK under it — arrive over Swift Package
+  Manager, while `@rnmapbox/maps` declares `MapboxMaps` as a *pod*. One app
+  resolving the same framework through both resolvers does not link. The plugin
+  writes `$RNMapboxMapsSwiftPackageManager = 'manual'` into the Podfile, which
+  stops `@rnmapbox/maps` declaring any Mapbox pod, and `ios/spm.rb` then points
+  its pod target at the same Swift package. Your `Podfile.lock` ends up with no
+  Mapbox pods at all.
+- **Android.** Mapbox publishes each artifact twice — `com.mapbox.maps:android`
+  and the 16 KB page-size `com.mapbox.maps:android-ndk27` — and the two carry
+  the same classes, so an app that resolves one of each fails
+  `checkDebugDuplicateClasses`. `@rnmapbox/maps` picks its variant from your
+  `targetSdkVersion` while this package is always on `-ndk27`, so the plugin
+  redirects the plain coordinate and holds the whole app to one variant at the
+  Maps version Navigation v3 is built against.
+
+That version is published in this package's `package.json` if you need to read
+it:
+
+```js
+require("@atomiqlab/react-native-mapbox-navigation/package.json").mapbox.maps;
+```
+
+Both paths apply only when `@rnmapbox/maps` is actually resolvable from your
+project, and both run after `expo prebuild`, so re-run it (or `--clean`) after
+adding either package. `example/` exercises this combination — see its
+**With `@rnmapbox/maps`** scenario.
 
 ## Minimal Usage
 
@@ -209,8 +257,8 @@ These are **display-only** — they do not affect routing. Use `waypoints` for i
 | `glyph` | `string` | `"•"` | Short text rendered inside the bubble (max 2 chars) |
 | `badge` | `string` | — | Badge text in the upper-right corner (max 3 chars) |
 | `variant` | `NavigationMarkerVariant` | `"default"` | Semantic color preset |
-| `color` | `string` | — | Custom fill hex (e.g. `"#7C3AED"`). Overrides `variant` |
-| `badgeColor` | `string` | — | Custom badge hex. Falls back to a darker shade of `color`/`variant` |
+| `color` | `string` | — | Custom fill hex — `#RGB`, `#RRGGBB` or `#RRGGBBAA` (e.g. `"#7C3AED"`). Overrides `variant` |
+| `badgeColor` | `string` | — | Custom badge hex, same forms. Falls back to a darker shade of `color`/`variant` |
 | `opacity` | `number` | auto | Marker opacity 0..1. Overrides the `variant`/`selected` default |
 | `size` | `NavigationMarkerSize` | `"medium"` | Size preset |
 | `markerStyle` | `NavigationMarkerStyle` | `"pin"` | `"pin"` = bubble + tail, `"dot"` = circle only |
@@ -341,7 +389,7 @@ matter there.
 | --- | --- | --- |
 | `modelUri` | `3d` | `require()`, `https://` URL, or `{ uri }`. Required. |
 | `topImage` / `bearingImage` / `shadowImage` | `2d` | At least one required. |
-| `color` / `haloColor` / `bearingColor` | `tinted` | Hex strings (`#RGB`, `#RRGGBB`, `#RRGGBBAA`). |
+| `color` / `haloColor` / `bearingColor` | `tinted` | Hex strings (`#RGB`, `#RRGGBB`, `#RRGGBBAA`), read identically on both platforms. |
 | `scale` | `3d`, `2d`, `tinted` | Number, or `[x, y, z]` for `3d`. |
 | `scaleExpression` | `3d`, `2d` | Mapbox style expression as a JSON string. Overrides `scale`. |
 | `rotation` | `3d` | `[x, y, z]` degrees. Corrects a model's authored axis. |
@@ -404,15 +452,18 @@ Mapbox default, and changes apply live.
 
 Three things worth knowing:
 
-- Use `#RGB` or `#RRGGBB`. **Eight-digit hex is not portable** — iOS reads it as
-  `#RRGGBBAA` and Android as `#AARRGGBB`, so the same string gives different
-  colours.
+- Use `#RGB`, `#RRGGBB` or `#RRGGBBAA` — all three read the same way on both
+  platforms, with eight digits taking alpha last as CSS does, so `'#14532D80'`
+  is that green at 50%. (Before 3.1.0 the eight-digit form meant `#RRGGBBAA` on
+  iOS and `#AARRGGBB` on Android; see the changelog if you relied on that.)
 - `routeLine` also sets the `low` and `unknown` congestion colours. Congestion
   shading is painted over the base line, and those two bands cover most of a
   typical route, so without it a recoloured route still looks blue.
 - Treat it as a theme you set, not a value you toggle. On iOS the chrome colours
   go through `UIAppearance`, which has no "unset", so *removing* a key leaves its
-  last colour until the app relaunches. Changing a key's value always works.
+  last colour until the app relaunches. Changing a key's value always works —
+  but that includes alpha, so `'#00000000'` permanently paints a piece of chrome
+  transparent rather than hiding it. Use the `shows*` props to turn UI off.
 
 ## Routing Options
 

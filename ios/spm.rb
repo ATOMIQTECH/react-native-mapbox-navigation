@@ -19,6 +19,12 @@
 # Attaching to only (1) compiles but crashes at launch with a missing dylib;
 # attaching to only (2) fails to compile this package.
 #
+# A third job, for apps that also use @rnmapbox/maps: that package wants the
+# Maps SDK as a *pod*, and one app resolving MapboxMaps through both CocoaPods
+# and SPM does not link. `_integrate_rnmapbox_maps` folds its pod target into
+# the SPM graph resolved here, so installing both packages needs no Podfile
+# edits from the consumer.
+#
 # Usage (the Expo config plugin writes this into the Podfile automatically):
 #
 #   require_relative '../node_modules/@atomiqlab/react-native-mapbox-navigation/ios/spm.rb'
@@ -37,10 +43,39 @@ EXPO_MAPBOX_NAVIGATION_POD_TARGET = 'ExpoMapboxNavigationNative'
 
 EXPO_MAPBOX_NAVIGATION_SPM_URL = 'https://github.com/mapbox/mapbox-navigation-ios.git'
 
-# Pinned to a known-good v3 line. Overridable from the Podfile with
-# `$ExpoMapboxNavigationVersion = '3.31.0'` for consumers who need to move
-# ahead of us; `upToNextMajorVersion` keeps them inside v3.
-EXPO_MAPBOX_NAVIGATION_DEFAULT_VERSION = '3.30.1'
+# The native SDK versions, read from package.json's `mapbox` block rather than
+# written here. Three files need them — this one, android/build.gradle and
+# app.plugin.js — and keeping them in one place is what stops the Maps version
+# in particular from drifting: app.plugin.js hands it to @rnmapbox/maps, so a
+# stale copy silently puts the two packages on different Maps SDKs.
+EXPO_MAPBOX_NAVIGATION_VERSIONS =
+  begin
+    versions = JSON.parse(File.read(File.join(__dir__, '..', 'package.json')))['mapbox']
+    missing = %w[navigation maps turf].reject { |key| versions.is_a?(Hash) && versions[key] }
+    unless missing.empty?
+      raise "package.json has no `mapbox` versions for: #{missing.join(', ')}"
+    end
+
+    versions
+  rescue StandardError => e
+    # Without this the failure surfaces as a `NoMethodError` on `nil` from
+    # somewhere inside `pod install`, which says nothing about the cause.
+    raise "[react-native-mapbox-navigation] Could not read the Mapbox SDK versions from this " \
+          "package's package.json (#{e.message}). The install looks incomplete — reinstall the " \
+          'package and re-run `pod install`.'
+  end
+
+# Overridable from the Podfile with `$ExpoMapboxNavigationVersion = '3.31.0'`
+# for consumers who need to move ahead of us; `upToNextMajorVersion` keeps them
+# inside v3.
+EXPO_MAPBOX_NAVIGATION_DEFAULT_VERSION = EXPO_MAPBOX_NAVIGATION_VERSIONS['navigation']
+
+# The Maps SDK version Navigation v3 is built against. Published in package.json
+# so the config plugin can hand the same value to @rnmapbox/maps.
+EXPO_MAPBOX_NAVIGATION_MAPS_VERSION = EXPO_MAPBOX_NAVIGATION_VERSIONS['maps']
+EXPO_MAPBOX_NAVIGATION_TURF_VERSION = EXPO_MAPBOX_NAVIGATION_VERSIONS['turf']
+
+EXPO_MAPBOX_NAVIGATION_MAPS_SPM_URL = 'https://github.com/mapbox/mapbox-maps-ios.git'
 
 # Every SPM product this package's Swift sources `import`, grouped by the
 # package that vends it.
@@ -73,13 +108,17 @@ def $ExpoMapboxNavigation._packages
       products: %w[MapboxNavigationCore MapboxNavigationUIKit MapboxDirections],
     },
     {
-      url: 'https://github.com/mapbox/mapbox-maps-ios.git',
-      requirement: { kind: 'upToNextMajorVersion', minimumVersion: '11.30.1' },
+      url: EXPO_MAPBOX_NAVIGATION_MAPS_SPM_URL,
+      requirement: {
+        kind: 'upToNextMajorVersion', minimumVersion: EXPO_MAPBOX_NAVIGATION_MAPS_VERSION
+      },
       products: %w[MapboxMaps],
     },
     {
       url: 'https://github.com/mapbox/turf-swift.git',
-      requirement: { kind: 'upToNextMajorVersion', minimumVersion: '4.0.0' },
+      requirement: {
+        kind: 'upToNextMajorVersion', minimumVersion: EXPO_MAPBOX_NAVIGATION_TURF_VERSION
+      },
       products: %w[Turf],
     },
   ]
@@ -196,17 +235,107 @@ def $ExpoMapboxNavigation._add_spm_build_order_dependency(project, target, url, 
   target.dependencies << dependency
 end
 
-# Warn when MapboxMaps is about to be resolved by both CocoaPods and SPM.
+# @rnmapbox/maps interoperability.
 #
-# Navigation v3 pulls MapboxMaps in through SPM (nav 3.30.1 pins it to exactly
-# 11.30.1). If another pod — @rnmapbox/maps being the common case — also
-# declares MapboxMaps as a *pod*, the app ends up with two copies of the same
-# framework from two resolvers, which fails to link or crashes with duplicate
-# class warnings. There is no way for us to fix that from here, so we detect it
-# and say precisely what to do.
-def $ExpoMapboxNavigation._warn_on_duplicate_maps(installer)
+# Most apps that navigate also render a plain map, so @rnmapbox/maps alongside
+# this package is the common case rather than an edge one. Both need the Mapbox
+# Maps SDK, and they reach for it through different resolvers: Navigation v3
+# exists only as a Swift package, while @rnmapbox/maps declares `MapboxMaps` as
+# a *pod*. An app that resolves the same framework through CocoaPods and SPM at
+# once does not link.
+#
+# The config plugin settles that by writing `$RNMapboxMapsSwiftPackageManager =
+# 'manual'` into the Podfile whenever @rnmapbox/maps is installed. 'manual' means
+# two things in @rnmapbox/maps: its podspec declares no Mapbox pods at all (the
+# `unless $RNMapboxMapsSwiftPackageManager` guard drops both `MapboxMaps` and
+# `Turf`), and its own `post_install` returns before touching the Xcode project.
+# So the whole job lands here, on the SPM packages this file already resolves —
+# and, because @rnmapbox/maps then writes nothing, it does not matter whether its
+# `post_install` runs before or after ours. That ordering is decided by the order
+# the two packages happen to sit in the app's `plugins` array, which is not
+# something a consumer should have to get right.
+EXPO_MAPBOX_NAVIGATION_RNMAPBOX_POD_TARGET = 'rnmapbox-maps'
+
+# The SPM products the @rnmapbox/maps Swift sources import and no longer get as
+# pods. `MapboxMobileEvents` is also imported but sits behind `#if
+# canImport(...)`, so it needs nothing from us.
+EXPO_MAPBOX_NAVIGATION_RNMAPBOX_PRODUCTS = %w[MapboxMaps Turf].freeze
+
+# Give the @rnmapbox/maps pod target the same SPM MapboxMaps this package uses.
+#
+# Deliberately the *compile-only* treatment our own pod target gets — include
+# path plus a non-linking build-order dependency, and no entry in
+# `package_product_dependencies`. @rnmapbox/maps' own SPM helper attaches a
+# product dependency instead, which is right for dynamic frameworks and wrong
+# twice over for a static pod: the compiler gets no module search path
+# ("no such module 'MapboxMaps'"), and Xcode archives the dependency into
+# `librnmapbox-maps.a` so the app links those objects a second time.
+#
+# The static case is the one that matters. Expo's precompiled-modules pipeline
+# keeps Mapbox pods static ("Disabling USE_FRAMEWORKS for ... rnmapbox-maps")
+# even when the app asks for dynamic frameworks, so `use_frameworks!` is not an
+# escape hatch. On a genuinely dynamic target both changes below are inert,
+# because the frameworks are found first.
+#
+# Returns true when the target was found and wired up.
+def $ExpoMapboxNavigation._integrate_rnmapbox_maps(pods_project, packages)
+  target = pods_project.targets.find do |t|
+    t.name == EXPO_MAPBOX_NAVIGATION_RNMAPBOX_POD_TARGET
+  end
+  return false if target.nil?
+
+  # Normally a no-op: with 'manual' set, @rnmapbox/maps attached nothing. It
+  # matters for consumers who set the Hash form of
+  # `$RNMapboxMapsSwiftPackageManager` themselves and whose Podfile therefore
+  # still runs `$RNMapboxMaps.post_install` — see `_warn_on_duplicate_maps`.
+  self._detach_spm_product_dependencies(target, EXPO_MAPBOX_NAVIGATION_RNMAPBOX_PRODUCTS)
+
+  packages.each do |package|
+    wanted = package[:products] & EXPO_MAPBOX_NAVIGATION_RNMAPBOX_PRODUCTS
+    wanted.each do |product|
+      self._add_spm_build_order_dependency(
+        pods_project, target, package[:url], package[:requirement], product
+      )
+    end
+  end
+
+  self._add_swift_include_path(target)
+  true
+end
+
+# Drop linking product dependencies for `product_names` from `target`, leaving
+# the project's package references alone so SPM still resolves them.
+def $ExpoMapboxNavigation._detach_spm_product_dependencies(target, product_names)
+  return if target.nil?
+
+  refs = target.package_product_dependencies.select do |ref|
+    product_names.include?(ref.product_name)
+  end
+  return if refs.empty?
+
+  frameworks_phase = target.frameworks_build_phase
+  unless frameworks_phase.nil?
+    frameworks_phase.files.dup.each do |build_file|
+      frameworks_phase.files.delete(build_file) if refs.include?(build_file.product_ref)
+    end
+  end
+
+  target.package_product_dependencies.delete_if { |ref| refs.include?(ref) }
+end
+
+# Report a MapboxMaps pod we could not absorb into the SPM graph.
+#
+# `_integrate_rnmapbox_maps` handles @rnmapbox/maps, which is the only package
+# in common use that declares MapboxMaps as a pod. Anything else that does —
+# or a consumer who has overridden `$RNMapboxMapsSwiftPackageManager` with the
+# Hash form, which leaves @rnmapbox/maps declaring its own Maps pod — still ends
+# up with the same framework from two resolvers, and that we cannot fix from
+# here.
+def $ExpoMapboxNavigation._warn_on_duplicate_maps(installer, rnmapbox_integrated)
   maps_pod = installer.pod_targets.find { |p| p.name == 'MapboxMaps' }
   return if maps_pod.nil?
+
+  spm_setting = $RNMapboxMapsSwiftPackageManager
 
   puts ''
   puts '!!! [react-native-mapbox-navigation] MapboxMaps is being resolved by BOTH CocoaPods and SwiftPackageManager.'
@@ -214,15 +343,20 @@ def $ExpoMapboxNavigation._warn_on_duplicate_maps(installer)
   puts '!!!   Navigation SDK v3 pulls MapboxMaps in over SPM. Two copies of the same framework'
   puts '!!!   will not link correctly.'
   puts '!!!'
-  puts '!!!   If this is @rnmapbox/maps, move it to SPM as well by setting this in your Podfile:'
-  puts '!!!     $RNMapboxMapsSwiftPackageManager = {'
-  puts '!!!       url: "https://github.com/mapbox/mapbox-maps-ios.git",'
-  puts '!!!       requirement: { kind: "upToNextMajorVersion", minimumVersion: "11.30.1" },'
-  puts '!!!       product_name: "MapboxMaps"'
-  puts '!!!     }'
-  puts '!!!'
-  puts '!!!   and remove any $RNMapboxMapsVersion pin. Navigation v3 requires MapboxMaps 11.30.1,'
-  puts '!!!   which satisfies rnmapbox\'s own "~> 11.16.2" constraint, so one resolver can serve both.'
+
+  if rnmapbox_integrated && spm_setting.is_a?(Hash)
+    puts '!!!   Your Podfile sets $RNMapboxMapsSwiftPackageManager to a Hash, which keeps'
+    puts '!!!   @rnmapbox/maps declaring its own MapboxMaps pod. Remove that assignment and let'
+    puts "!!!   this package's config plugin set it to 'manual' instead — it then wires the"
+    puts "!!!   @rnmapbox/maps pod target up to the same Swift package, at MapboxMaps"
+    puts "!!!   #{EXPO_MAPBOX_NAVIGATION_MAPS_VERSION}, with no Podfile edits of your own."
+  else
+    puts '!!!   Some pod in this project declares MapboxMaps as a CocoaPods dependency. Find it'
+    puts '!!!   with `grep -rl MapboxMaps ios/Pods/Local\ Podspecs` and move it to SPM, or drop'
+    puts '!!!   it — Navigation v3 requires the Swift package at'
+    puts "!!!   #{EXPO_MAPBOX_NAVIGATION_MAPS_VERSION}, which this package already resolves for you."
+  end
+
   puts ''
 end
 
@@ -300,6 +434,11 @@ def $ExpoMapboxNavigation.post_install(installer)
   end
 
   self._add_swift_include_path(pod_target)
+
+  # 1b. The @rnmapbox/maps pod target, when that package is installed, so its
+  #     Swift compiles against the same MapboxMaps instead of a second copy.
+  rnmapbox_integrated = self._integrate_rnmapbox_maps(pods_project, packages)
+
   pods_project.save
 
   # 2. Every user target, so the frameworks link into the app binary.
@@ -316,5 +455,5 @@ def $ExpoMapboxNavigation.post_install(installer)
     end
   end
 
-  self._warn_on_duplicate_maps(installer)
+  self._warn_on_duplicate_maps(installer, rnmapbox_integrated)
 end

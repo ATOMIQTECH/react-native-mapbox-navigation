@@ -198,10 +198,10 @@ internal object LocationPuckFactory {
    * puck is drawn here: a filled halo circle with a directional arrow on top.
    */
   private fun makeTinted(context: Context, appearance: Map<String, Any>): LocationPuck {
-    val body = parseColor(appearance["color"]) ?: parseColor(appearance["bearingColor"])
+    val body = HexColor.parse(appearance["color"]) ?: HexColor.parse(appearance["bearingColor"])
       ?: Color.parseColor("#263A57")
-    val halo = parseColor(appearance["haloColor"]) ?: Color.WHITE
-    val arrow = parseColor(appearance["bearingColor"]) ?: body
+    val halo = HexColor.parse(appearance["haloColor"]) ?: Color.WHITE
+    val arrow = HexColor.parse(appearance["bearingColor"]) ?: body
 
     val density = context.resources.displayMetrics.density
     val scale = (floatValue(appearance["scale"]) ?: 1f).coerceIn(0.2f, 4f)
@@ -423,10 +423,5 @@ internal object LocationPuckFactory {
     val values = list.mapNotNull { (it as? Number)?.toFloat() }
     if (values.size != list.size || values.any { !it.isFinite() }) return null
     return values.takeIf { it.isNotEmpty() }
-  }
-
-  private fun parseColor(raw: Any?): Int? {
-    val hex = (raw as? String)?.trim()?.takeIf { it.startsWith("#") } ?: return null
-    return runCatching { Color.parseColor(hex) }.getOrNull()
   }
 }

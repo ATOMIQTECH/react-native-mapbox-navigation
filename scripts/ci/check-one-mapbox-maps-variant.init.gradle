@@ -1,0 +1,57 @@
+// Assert the whole app resolves exactly one Mapbox Maps artifact variant, on an
+// app whose targetSdkVersion is below 35.
+//
+// Why the override: @rnmapbox/maps picks its Maps variant from
+// `rootProject.ext.targetSdkVersion` and only uses `-ndk27` at 35 and above,
+// while this package is always on `-ndk27`. The plain and `-ndk27` artifacts
+// carry the same classes, so an app resolving one of each dies in
+// `checkDebugDuplicateClasses`. Expo's own defaults are 35+, so without forcing
+// a lower value CI would never exercise the case the config plugin fixes.
+//
+// `beforeProject` is the hook that works: Expo's `expo-root-project` plugin sets
+// targetSdkVersion while the root project evaluates, so the override has to land
+// after that and before the @rnmapbox/maps project is evaluated.
+//
+// The assertion reads the *resolved* graph, not `dependencyInsight` output —
+// that prints requested coordinates alongside substituted ones, so grepping it
+// reports a plain-variant "failure" even when substitution worked.
+gradle.beforeProject { project ->
+  if (project.name == 'rnmapbox_maps') {
+    project.rootProject.ext.targetSdkVersion = 34
+    println "[maps-variant-check] forced rootProject.ext.targetSdkVersion=34 before ${project.path}"
+  }
+}
+
+gradle.beforeProject { project ->
+  if (project.path != ':app') return
+
+  project.tasks.register('checkOneMapboxMapsVariant') {
+    doLast {
+      def config = project.configurations.getByName('debugRuntimeClasspath')
+      def maps = config.incoming.resolutionResult.allComponents
+        .collect { it.moduleVersion }
+        .findAll { it?.group == 'com.mapbox.maps' }
+        .collect { "${it.name}:${it.version}" as String }
+        .unique()
+        .sort()
+
+      println "[maps-variant-check] resolved com.mapbox.maps modules: ${maps}"
+
+      def plain = maps.findAll { !it.contains('-ndk27') }
+      if (!plain.isEmpty()) {
+        throw new GradleException(
+          "Resolved non-ndk27 Mapbox Maps artifacts ${plain} alongside the -ndk27 ones. " +
+          'They carry the same classes, so the app will fail checkDebugDuplicateClasses. ' +
+          "The config plugin's dependency substitution is missing or not taking effect."
+        )
+      }
+
+      def versions = maps.collect { it.split(':')[1] }.unique()
+      if (versions.size() > 1) {
+        throw new GradleException("Resolved multiple Mapbox Maps versions ${versions}; expected one.")
+      }
+
+      println "[maps-variant-check] OK - one variant, one version (${versions[0]})"
+    }
+  }
+}
