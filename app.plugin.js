@@ -11,6 +11,13 @@ const {
 } = require('@expo/config-plugins')
 const { mergeContents } = require('@expo/config-plugins/build/utils/generateCode')
 
+/**
+ * The native Mapbox SDK versions, from package.json's `mapbox` block. `ios/spm.rb`
+ * and `android/build.gradle` read the same block, so the Maps version handed to
+ * `@rnmapbox/maps` below cannot drift from the one this package resolves.
+ */
+const MAPBOX_VERSIONS = require('./package.json').mapbox
+
 const MAPBOX_REPO_BLOCK = `    maven {
       url 'https://api.mapbox.com/downloads/v2/releases/maven'
       authentication {
@@ -35,6 +42,31 @@ const MAPBOX_SETTINGS_REPO_BLOCK = `        maven {
             basic(BasicAuthentication)
           }
         }`
+
+/**
+ * `@rnmapbox/maps` is the usual companion to this package — most apps that
+ * navigate also render a plain map — and the two need the same Mapbox Maps SDK.
+ * Left alone they ask two different resolvers for it, which does not link on
+ * iOS and duplicates classes on Android, so both platforms get a fix-up below
+ * whenever that package is installed alongside this one.
+ */
+const RNMAPBOX_PACKAGE = '@rnmapbox/maps'
+
+/**
+ * Is `@rnmapbox/maps` a dependency of the app being prebuilt?
+ *
+ * Resolved from the project root rather than from here, so it answers for the
+ * *app's* dependency tree under npm hoisting, yarn workspaces and pnpm's
+ * strict layout alike.
+ */
+function isRnMapboxMapsInstalled(projectRoot) {
+  try {
+    require.resolve(`${RNMAPBOX_PACKAGE}/package.json`, { paths: [projectRoot] })
+    return true
+  } catch {
+    return false
+  }
+}
 
 const REQUIRED_ANDROID_PERMISSIONS = [
   'android.permission.ACCESS_COARSE_LOCATION',
@@ -92,11 +124,7 @@ function validateTokensIfPresent(config) {
     ['EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN', 'MAPBOX_PUBLIC_TOKEN'],
     ['mapboxPublicToken', 'expoPublicMapboxAccessToken', 'mapboxAccessToken']
   )
-  const downloadsToken = resolveToken(
-    config,
-    ['MAPBOX_DOWNLOADS_TOKEN'],
-    ['mapboxDownloadsToken']
-  )
+  const downloadsToken = resolveToken(config, ['MAPBOX_DOWNLOADS_TOKEN'], ['mapboxDownloadsToken'])
 
   if (publicToken && !validateMapboxTokenShape(publicToken, 'pk.')) {
     throw new Error(
@@ -204,6 +232,54 @@ function ensureProjectBuildGradle(src) {
   return out
 }
 
+const MAPBOX_MAPS_VARIANT_MARKER = 'react-native-mapbox-navigation-mapbox-maps-variant'
+
+/**
+ * Keep every Mapbox Maps artifact in the app on one variant and one version.
+ *
+ * Mapbox publishes each Android artifact twice: `com.mapbox.maps:android` and
+ * `com.mapbox.maps:android-ndk27`, a build with 16 KB page-size support. The two
+ * carry the *same classes*, so an app that ends up with one of each dies in
+ * `checkDebugDuplicateClasses` with hundreds of duplicate-class errors.
+ *
+ * This package is on `-ndk27` throughout (see android/build.gradle — the
+ * Navigation v3 `-ndk27` artifacts depend on the `-ndk27` Maps build).
+ * `@rnmapbox/maps` instead picks its variant from the app's `targetSdkVersion`:
+ * `-ndk27` at 35 and above, the plain build below that. So an app on
+ * targetSdk < 35 that installs both packages gets one of each and cannot build
+ * — silently, and with an error that names neither package.
+ *
+ * Redirecting the plain coordinate settles it in one rule, and also states the
+ * Maps version rather than leaving it to Gradle picking the higher of the two
+ * packages' requests.
+ */
+function ensureMapboxMapsVariantAlignment(src) {
+  if (src.includes(MAPBOX_MAPS_VARIANT_MARKER)) {
+    return src
+  }
+
+  return `${src}
+// ${MAPBOX_MAPS_VARIANT_MARKER}
+//
+// Added by @atomiqlab/react-native-mapbox-navigation because @rnmapbox/maps is
+// also installed. Both packages depend on the Mapbox Maps SDK, and its plain and
+// -ndk27 Android artifacts carry the same classes — an app that resolves one of
+// each fails checkDebugDuplicateClasses. @rnmapbox/maps selects its variant from
+// targetSdkVersion (-ndk27 only at 35+) while the navigation SDK is always on
+// -ndk27, so the plain coordinate is redirected to keep the whole app on one
+// variant at the version Navigation v3 is built against.
+allprojects {
+  configurations.all {
+    resolutionStrategy.dependencySubstitution {
+      substitute(module('com.mapbox.maps:android'))
+        .using(module('com.mapbox.maps:android-ndk27:${MAPBOX_VERSIONS.maps}'))
+        .because('Mapbox Navigation SDK v3 requires the -ndk27 Maps variant; mixing variants duplicates classes')
+    }
+  }
+}
+`
+}
+
 function ensureAppBuildGradle(src) {
   if (src.includes('resValue "string", "mapbox_access_token"')) {
     return src
@@ -230,6 +306,14 @@ function withMapboxNavigationAndroid(config, options) {
 
   config = withProjectBuildGradle(config, (config) => {
     config.modResults.contents = ensureProjectBuildGradle(config.modResults.contents)
+
+    if (
+      options.rnmapboxMapsCompat !== false &&
+      isRnMapboxMapsInstalled(config.modRequest.projectRoot)
+    ) {
+      config.modResults.contents = ensureMapboxMapsVariantAlignment(config.modResults.contents)
+    }
+
     return config
   })
 
@@ -259,6 +343,37 @@ function withMapboxNavigationAndroid(config, options) {
  */
 const MAPBOX_SPM_REQUIRE_TAG = '@atomiqlab/react-native-mapbox-navigation-spm-require'
 const MAPBOX_SPM_INSTALLER_TAG = '@atomiqlab/react-native-mapbox-navigation-spm-post_install'
+const MAPBOX_SPM_RNMAPBOX_TAG = '@atomiqlab/react-native-mapbox-navigation-rnmapbox-maps'
+
+/**
+ * Hand `@rnmapbox/maps` over to the Swift package this package already resolves.
+ *
+ * Mapbox ships no CocoaPods artifacts for Navigation v3, so the SDK — and the
+ * Maps SDK underneath it — arrive over SPM. `@rnmapbox/maps` declares
+ * `MapboxMaps` as a *pod*, and an app that resolves the same framework through
+ * both resolvers does not link.
+ *
+ * `'manual'` is the setting that unpicks it: `@rnmapbox/maps` then declares no
+ * Mapbox pods (its podspec guards both `MapboxMaps` and `Turf` behind
+ * `unless $RNMapboxMapsSwiftPackageManager`) and its own `post_install` returns
+ * without touching the Xcode project, leaving `$ExpoMapboxNavigation.post_install`
+ * to give its pod target the same SPM products. Because it then writes nothing,
+ * the two `post_install` calls can run in either order — which matters, since
+ * their order in the Podfile follows the order the packages happen to sit in the
+ * app's `plugins` array.
+ *
+ * `||=` so a Podfile that sets this itself further up keeps its own value, and
+ * the `rnmapboxMapsCompat: false` plugin option opts out of the block entirely.
+ */
+const RNMAPBOX_SPM_BLOCK = [
+  '# @rnmapbox/maps resolves the Mapbox Maps SDK through CocoaPods by default,',
+  '# while the Mapbox Navigation SDK v3 exists only as a Swift package. Resolving',
+  "# one framework through both does not link, so 'manual' tells @rnmapbox/maps to",
+  '# declare no Mapbox pods; $ExpoMapboxNavigation.post_install below then wires',
+  '# its pod target up to the same Swift package this package uses',
+  `# (MapboxMaps ${MAPBOX_VERSIONS.maps}).`,
+  "$RNMapboxMapsSwiftPackageManager ||= 'manual'",
+].join('\n')
 
 function resolveSpmHelperPath(podfilePath) {
   // Resolved relative to the Podfile so the path stays correct under pnpm's
@@ -268,8 +383,21 @@ function resolveSpmHelperPath(podfilePath) {
   return relative.startsWith('.') ? relative : `./${relative}`
 }
 
-function applyPodfileSpmModifications(contents, podfilePath) {
+function applyPodfileSpmModifications(contents, podfilePath, { rnmapboxMaps = false } = {}) {
   let src = contents
+
+  if (rnmapboxMaps) {
+    // Above the first target block with the other globals, so it is set before
+    // `pod install` evaluates the @rnmapbox/maps podspec.
+    src = mergeContents({
+      tag: MAPBOX_SPM_RNMAPBOX_TAG,
+      src,
+      newSrc: RNMAPBOX_SPM_BLOCK,
+      anchor: /target .+ do/,
+      offset: 0,
+      comment: '#',
+    }).contents
+  }
 
   src = mergeContents({
     tag: MAPBOX_SPM_REQUIRE_TAG,
@@ -306,13 +434,21 @@ function applyPodfileSpmModifications(contents, podfilePath) {
   return withHook.contents
 }
 
-function withMapboxNavigationSpm(config) {
+function withMapboxNavigationSpm(config, options = {}) {
   return withDangerousMod(config, [
     'ios',
     async (exportedConfig) => {
       const podfilePath = path.join(exportedConfig.modRequest.platformProjectRoot, 'Podfile')
       const contents = await fs.readFile(podfilePath, 'utf8')
-      await fs.writeFile(podfilePath, applyPodfileSpmModifications(contents, podfilePath), 'utf8')
+      const rnmapboxMaps =
+        options.rnmapboxMapsCompat !== false &&
+        isRnMapboxMapsInstalled(exportedConfig.modRequest.projectRoot)
+
+      await fs.writeFile(
+        podfilePath,
+        applyPodfileSpmModifications(contents, podfilePath, { rnmapboxMaps }),
+        'utf8'
+      )
       return exportedConfig
     },
   ])
@@ -370,6 +506,12 @@ function withMapboxNavigationIos(config, options) {
  *   backgrounded. Set to `false` if your app does not need it at review time.
  * @property {string} [locationWhenInUsePermission]
  *   Override the iOS location usage description shown in the permission prompt.
+ * @property {boolean} [rnmapboxMapsCompat=true]
+ *   Reconcile the Mapbox Maps SDK with `@rnmapbox/maps` when that package is
+ *   also installed: hand it this package's Swift package on iOS, and hold the
+ *   whole app to one Mapbox Maps Android artifact variant. Applied only when
+ *   `@rnmapbox/maps` is found in the project, and needs no configuration — set
+ *   `false` only to wire the two packages together yourself.
  */
 
 /** @param {MapboxNavigationPluginOptions} [options] */
@@ -378,7 +520,7 @@ const withMapboxNavigation = (config, options = {}) => {
   validateTokensIfPresent(config)
   config = withMapboxNavigationAndroid(config, resolvedOptions)
   config = withMapboxNavigationIos(config, resolvedOptions)
-  config = withMapboxNavigationSpm(config)
+  config = withMapboxNavigationSpm(config, resolvedOptions)
   return config
 }
 

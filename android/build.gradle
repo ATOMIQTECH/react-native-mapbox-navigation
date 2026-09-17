@@ -8,19 +8,25 @@ if (project.extensions.findByName('kotlin') == null) {
 }
 
 group = 'expo.modules.mapboxnavigation'
+
 // Read from package.json rather than hand-maintained here. The podspec already
-// does this (`package['version']`), and the two drifted: this line still said
-// 2.2.0 after the 3.0.0 release because every previous bump had been manual.
-version = new groovy.json.JsonSlurper()
+// does this (`package['version']`), and the two drifted: the version line still
+// said 2.2.0 after the 3.0.0 release because every previous bump had been manual.
+def packageJson = new groovy.json.JsonSlurper()
   .parseText(new File(projectDir, '../package.json').text)
-  .version
+
+version = packageJson.version
 
 def expoModulesCorePlugin = new File(project(":expo-modules-core").projectDir.absolutePath, "ExpoModulesCorePlugin.gradle")
 apply from: expoModulesCorePlugin
 applyKotlinExpoModulesCorePlugin()
 
-def mapboxNavigationVersion = "3.30.1"
-def mapboxMapsVersion = "11.30.1"
+// The native SDK versions live in package.json's `mapbox` block, which ios/spm.rb
+// and app.plugin.js read too. The Maps version especially has to be shared: the
+// config plugin hands it to @rnmapbox/maps so an app using both packages resolves
+// one Maps SDK, and a copy pinned here would drift out of that agreement unseen.
+def mapboxNavigationVersion = packageJson.mapbox.navigation
+def mapboxMapsVersion = packageJson.mapbox.maps
 def mapboxDownloadsToken = (project.findProperty("MAPBOX_DOWNLOADS_TOKEN") ?: System.getenv("MAPBOX_DOWNLOADS_TOKEN") ?: "")
   .toString()
   .replace('"', '')

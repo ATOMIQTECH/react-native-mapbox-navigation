@@ -10,6 +10,57 @@ import { useNavigationLocation } from '../hooks/useNavigationLocation'
 type ThemeOption = 'system' | 'light' | 'dark' | 'day' | 'night'
 type StylePreset = 'navigation' | 'standard' | 'standard-satellite' | 'streets' | 'satellite'
 
+const COLOR_MODES = ['mapbox', 'hex6', 'hex8', 'hex3', 'alpha'] as const
+type ColorMode = (typeof COLOR_MODES)[number]
+
+const nextColorMode = (mode: ColorMode): ColorMode =>
+  COLOR_MODES[(COLOR_MODES.indexOf(mode) + 1) % COLOR_MODES.length]
+
+// `hex6` and `hex8` MUST look the same; `hex3` is the same green coarsened to
+// one nibble per channel; `alpha` is the only mode with real transparency.
+const COLOR_PALETTES: Record<Exclude<ColorMode, 'mapbox'>, Record<string, string>> = {
+  hex6: {
+    routeLine: '#1E9E5A',
+    routeLineCasing: '#14532D',
+    maneuverBackground: '#14532D',
+    maneuverSubBackground: '#0B3320',
+    maneuverText: '#FFFFFF',
+    maneuverTurnIcon: '#FFFFFF',
+    floatingButtonBackground: '#14532D',
+    floatingButtonIcon: '#FFFFFF',
+  },
+  hex8: {
+    routeLine: '#1E9E5AFF',
+    routeLineCasing: '#14532DFF',
+    maneuverBackground: '#14532DFF',
+    maneuverSubBackground: '#0B3320FF',
+    maneuverText: '#FFFFFFFF',
+    maneuverTurnIcon: '#FFFFFFFF',
+    floatingButtonBackground: '#14532DFF',
+    floatingButtonIcon: '#FFFFFFFF',
+  },
+  hex3: {
+    routeLine: '#1A5',
+    routeLineCasing: '#152',
+    maneuverBackground: '#152',
+    maneuverSubBackground: '#032',
+    maneuverText: '#FFF',
+    maneuverTurnIcon: '#FFF',
+    floatingButtonBackground: '#152',
+    floatingButtonIcon: '#FFF',
+  },
+  alpha: {
+    routeLine: '#1E9E5A99',
+    routeLineCasing: '#14532D99',
+    maneuverBackground: '#14532D80',
+    maneuverSubBackground: '#0B332080',
+    maneuverText: '#FFFFFFFF',
+    maneuverTurnIcon: '#FFFFFFFF',
+    floatingButtonBackground: '#14532D80',
+    floatingButtonIcon: '#FFFFFFFF',
+  },
+}
+
 export default function AppearanceScenarioScreen() {
   const {
     hasLocationPermission,
@@ -32,7 +83,15 @@ export default function AppearanceScenarioScreen() {
   // Demonstrates the `colors` prop: a green theme instead of Mapbox blue,
   // covering the route line, the on-map turn arrow, the maneuver banner and the
   // floating buttons — so this toggle exercises every group the prop reaches.
-  const [customColors, setCustomColors] = useState(false)
+  //
+  // It cycles the *hex format* rather than just on/off, because that is the
+  // only way to see that the formats agree. `hex6` and `hex8` are the same
+  // palette written two ways with the alpha byte at `FF`, so they have to
+  // render identically — if eight digits were read as `#AARRGGBB` the `1E` in
+  // `#1E9E5AFF` would become a 12% alpha over a lilac, which is unmistakable.
+  // `hex3` is the same green to one nibble, and `alpha` is the one mode that
+  // asks for real translucency.
+  const [colorMode, setColorMode] = useState<ColorMode>('mapbox')
   const [routeAlternatives, setRouteAlternatives] = useState(true)
   // Collapses this panel to a single chip. The panel otherwise covers the
   // native maneuver banner, which is the thing several of the `colors` keys
@@ -91,31 +150,7 @@ export default function AppearanceScenarioScreen() {
         showsActionButtons={showsActionButtons}
         showsSpeedLimits={showsSpeedLimits}
         showsWayNameLabel={showsWayNameLabel}
-        colors={
-          customColors
-            ? {
-                routeLine: '#1E9E5A',
-                routeLineCasing: '#14532D',
-                routeLineAlternative: '#94A3B8',
-                congestionModerate: '#F59E0B',
-                congestionHeavy: '#DC2626',
-                congestionSevere: '#7F1D1D',
-                maneuverArrow: '#FFFFFF',
-                maneuverArrowStroke: '#14532D',
-                maneuverBackground: '#14532D',
-                maneuverSubBackground: '#0B3320',
-                maneuverText: '#FFFFFF',
-                maneuverSecondaryText: '#BBF7D0',
-                maneuverDistanceText: '#BBF7D0',
-                maneuverTurnIcon: '#FFFFFF',
-                tripProgressBackground: '#14532D',
-                tripProgressText: '#FFFFFF',
-                tripProgressIcon: '#BBF7D0',
-                floatingButtonBackground: '#14532D',
-                floatingButtonIcon: '#FFFFFF',
-              }
-            : undefined
-        }
+        colors={colorMode === 'mapbox' ? undefined : COLOR_PALETTES[colorMode]}
         nativeFloatingButtons={{
           showAudioGuidanceButton: true,
           showCameraModeButton: true,
@@ -205,9 +240,9 @@ export default function AppearanceScenarioScreen() {
               }}
             />
             <ChipButton
-              label={`Colors: ${customColors ? 'custom' : 'mapbox'}`}
+              label={`Colors: ${colorMode}`}
               onPress={() => {
-                setCustomColors((value) => !value)
+                setColorMode(nextColorMode)
               }}
             />
             <ChipButton
