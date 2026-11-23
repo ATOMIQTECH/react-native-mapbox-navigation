@@ -43,13 +43,7 @@ module.exports = {
           },
         },
       ],
-      '../app.plugin.js',
-      // Deliberately listed *after* this package. Expo runs mods
-      // last-registered-first, so this ordering is the one that puts
-      // `$ExpoMapboxNavigation.post_install` ahead of `$RNMapboxMaps.post_install`
-      // in the Podfile — and it needs no options: the navigation plugin detects
-      // @rnmapbox/maps and reconciles the shared Mapbox Maps SDK on both
-      // platforms by itself.
+      '../app.plugin.ts',
       '@rnmapbox/maps',
     ],
   },

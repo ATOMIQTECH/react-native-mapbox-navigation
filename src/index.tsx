@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react'
 import {
   PanResponder,
@@ -36,22 +37,21 @@ import type {
   MapboxNavigationModule as MapboxNavigationModuleType,
   MapboxNavigationViewProps,
   NavigationError,
+  NavigationErrorCode,
+  NavigationAssetSource,
   NavigationSettings,
   OffRouteEvent,
   RouteChangeEvent,
   RouteProgress,
   Subscription,
 } from './MapboxNavigation.types'
-import { type NativeLocationPuckOptions, resolveLocationPuck } from './resolveLocationPuck'
+import {
+  type NativeLocationPuckOptions,
+  resolveAssetScale,
+  resolveAssetSource,
+  resolveLocationPuck,
+} from './resolveLocationPuck'
 
-/**
- * Resolve the native module lazily.
- *
- * `requireNativeModule` throws when the native module is not linked, and
- * calling it at import time meant that merely importing this package crashed on
- * web, in Jest, and in Expo Go. Deferring the lookup keeps imports safe and
- * surfaces a clear error only when an API is actually used.
- */
 let cachedNativeModule: MapboxNavigationModuleType | undefined
 
 function getNativeModule(): MapboxNavigationModuleType {
@@ -61,7 +61,8 @@ function getNativeModule(): MapboxNavigationModuleType {
     } catch (error) {
       throw new Error(
         `${UNAVAILABLE_MESSAGE} ` +
-          `Original error: ${error instanceof Error ? error.message : String(error)}`
+          `Original error: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
       )
     }
   }
@@ -77,14 +78,6 @@ const UNAVAILABLE_MESSAGE =
 
 let warnedAboutMissingView = false
 
-/**
- * Placeholder used when the native view manager cannot be resolved.
- *
- * Rendering nothing is deliberate: throwing from `getNativeView` would take the
- * whole app down at render time in Expo Go and on web, where the native module
- * can never exist. A one-time console error keeps the misconfiguration
- * diagnosable without turning it into a crash.
- */
 function UnavailableNativeView(): null {
   if (!warnedAboutMissingView) {
     warnedAboutMissingView = true
@@ -96,9 +89,6 @@ function UnavailableNativeView(): null {
 function getNativeView(): ComponentType<NativeViewProps> {
   if (cachedNativeView === undefined) {
     try {
-      // Not all expo-modules-core versions throw here — some resolve to a
-      // falsy manager when the module is absent, which React would then reject
-      // as an invalid element type.
       cachedNativeView =
         requireNativeViewManager<NativeViewProps>('MapboxNavigationModule') ||
         (UnavailableNativeView as ComponentType<NativeViewProps>)
@@ -118,14 +108,6 @@ const emitter = {
     ).addListener(eventName, listener),
 }
 
-/**
- * Absolute-fill style declared locally.
- *
- * React Native 0.86 removed the `absoluteFillObject` export from StyleSheet's
- * types. This module is published as raw TSX under a `react-native: *` peer
- * range, so consumers typecheck it against their own RN version; declaring the
- * object here keeps it valid on all of them.
- */
 const absoluteFill = {
   position: 'absolute',
   left: 0,
@@ -180,12 +162,6 @@ function formatDuration(seconds: number): string {
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
 }
 
-/**
- * Format a distance in metres for the overlay sheet.
- *
- * The overlay previously always rendered raw metres, ignoring `distanceUnit`
- * and showing values like `12480 m`.
- */
 function formatDistance(meters: number, unit?: 'metric' | 'imperial'): string {
   if (!Number.isFinite(meters) || meters < 0) {
     return '--'
@@ -219,20 +195,65 @@ function formatEta(durationRemainingSeconds?: number): string | undefined {
   return `Arrive ${time}`
 }
 
-/**
- * The prop shape handed to the native view.
- *
- * Diverges from the public props: overlay-only props are stripped and
- * `locationPuck` is flattened into its per-state native form.
- */
 type NativeViewProps = Omit<MapboxNavigationViewProps, 'locationPuck'> &
   ViewProps & {
     locationPuck?: NativeLocationPuckOptions
+    journeyDataEnabled?: boolean
   }
 
-function normalizeViewProps(
-  props: MapboxNavigationViewProps & ViewProps
-): NativeViewProps {
+let journeyDataListenerCount = 0
+const journeyDataListenerWatchers = new Set<() => void>()
+
+function changeJourneyDataListenerCount(delta: number): void {
+  journeyDataListenerCount += delta
+  for (const notify of journeyDataListenerWatchers) notify()
+}
+
+function watchJourneyDataListeners(notify: () => void): () => void {
+  journeyDataListenerWatchers.add(notify)
+  return () => {
+    journeyDataListenerWatchers.delete(notify)
+  }
+}
+
+function hasJourneyDataListeners(): boolean {
+  return journeyDataListenerCount > 0
+}
+
+function resolveMarkerImage(
+  source: NavigationAssetSource,
+  scale: number | undefined
+): { uri: string; scale?: number } | undefined {
+  const uri = resolveAssetSource(source)
+  if (uri === undefined) {
+    return undefined
+  }
+  return { uri, scale: scale ?? resolveAssetScale(source) }
+}
+
+const RECOVERABLE_ERROR_CODES: ReadonlySet<string> = new Set<NavigationErrorCode>([
+  'NO_LOCATION_FIX',
+  'ROUTE_DISCARDED_NO_WINDOW',
+  'REROUTE_FAILED',
+  'INVALID_ROUTE_PROFILE',
+  'INVALID_ROAD_CLASS',
+  'ROAD_CLASS_NOT_SUPPORTED_BY_PROFILE',
+  'EXCLUDED_LOCATIONS_NOT_SUPPORTED_BY_PROFILE',
+  'TOO_MANY_EXCLUDED_LOCATIONS',
+  'VEHICLE_NOT_SUPPORTED_BY_PROFILE',
+  'MAP_STYLE_CONFIG_UNSUPPORTED',
+  'NO_ACTIVITY',
+])
+
+function toNavigationError(event: unknown): NavigationError | undefined {
+  const payload = unwrapNativeEventPayload<Omit<NavigationError, 'recoverable'>>(event)
+  if (!payload) {
+    return undefined
+  }
+  return { ...payload, recoverable: RECOVERABLE_ERROR_CODES.has(payload.code) }
+}
+
+function normalizeViewProps(props: MapboxNavigationViewProps & ViewProps): NativeViewProps {
   const overlayModeActive =
     props.bottomSheet?.enabled !== false && props.bottomSheet?.mode === 'overlay'
   let showsTripProgress = props.showsTripProgress
@@ -260,7 +281,6 @@ function normalizeViewProps(
 
   if (overlayModeActive) {
     if (Platform.OS === 'android') {
-      // Android embedded mode keeps custom sheet as the only bottom UI.
       showsTripProgress = false
       showsActionButtons = false
       showCancelButton = false
@@ -356,7 +376,7 @@ function normalizeViewProps(
       }
     : undefined
   const wrappedOnError = (event: unknown) => {
-    const payload = unwrapNativeEventPayload<NavigationError>(event)
+    const payload = toNavigationError(event)
     if (!payload) {
       return
     }
@@ -400,15 +420,18 @@ function normalizeViewProps(
       color: marker.color,
       badgeColor: marker.badgeColor,
       opacity:
-        typeof marker.opacity === 'number'
-          ? Math.max(0, Math.min(1, marker.opacity))
-          : undefined,
+        typeof marker.opacity === 'number' ? Math.max(0, Math.min(1, marker.opacity)) : undefined,
       size: marker.size,
       markerStyle: marker.markerStyle,
       showTail: marker.showTail,
       selected: marker.selected,
       allowOverlap: marker.allowOverlap,
       anchorOffsetY: marker.anchorOffsetY,
+      animatesMovement: marker.animatesMovement,
+      image:
+        marker.image === undefined
+          ? undefined
+          : resolveMarkerImage(marker.image, marker.imageScale),
     }))
 
   return {
@@ -590,12 +613,22 @@ export function addCameraFollowingStateChangeListener(
  * Subscribe to aggregated journey data (location + progress + instruction) for custom UI.
  */
 export function addJourneyDataChangeListener(listener: (data: JourneyData) => void): Subscription {
-  return emitter.addListener('onJourneyDataChange', (event: unknown) => {
+  const subscription = emitter.addListener('onJourneyDataChange', (event: unknown) => {
     const payload = unwrapNativeEventPayload<JourneyData>(event)
     if (payload) {
       listener(payload)
     }
   })
+  changeJourneyDataListenerCount(1)
+  let removed = false
+  return {
+    remove: () => {
+      if (removed) return
+      removed = true
+      subscription.remove()
+      changeJourneyDataListenerCount(-1)
+    },
+  }
 }
 
 export function addRouteChangeListener(listener: (event: RouteChangeEvent) => void): Subscription {
@@ -622,9 +655,7 @@ export function addArriveListener(listener: (point: ArrivalEvent) => void): Subs
 /**
  * Subscribe to intermediate waypoint arrivals on multi-stop routes.
  */
-export function addWaypointArriveListener(
-  listener: (point: ArrivalEvent) => void
-): Subscription {
+export function addWaypointArriveListener(listener: (point: ArrivalEvent) => void): Subscription {
   return emitter.addListener('onWaypointArrive', (event: unknown) => {
     const payload = unwrapNativeEventPayload<ArrivalEvent>(event)
     if (payload) {
@@ -645,9 +676,6 @@ export function addOffRouteListener(listener: (event: OffRouteEvent) => void): S
   })
 }
 
-/**
- * Subscribe to destination preview events.
- */
 /**
  * @deprecated No longer fires on either platform as of 3.0.0.
  *
@@ -695,7 +723,7 @@ export function addCancelNavigationListener(listener: () => void): Subscription 
  */
 export function addErrorListener(listener: (error: NavigationError) => void): Subscription {
   return emitter.addListener('onError', (event: unknown) => {
-    const payload = unwrapNativeEventPayload<NavigationError>(event)
+    const payload = toNavigationError(event)
     if (payload) {
       listener(payload)
     }
@@ -833,8 +861,7 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
       ? bottomSheet.initialState
       : 'collapsed'
   const initialState = requestedInitialState
-  const enableIosHiddenRevealHotzone =
-    isIos && bottomSheet?.revealOnNativeBannerGesture !== false
+  const enableIosHiddenRevealHotzone = isIos && bottomSheet?.revealOnNativeBannerGesture !== false
   const [sheetState, setSheetState] = useState<BottomSheetRenderContext['state']>(initialState)
   const [overlayBanner, setOverlayBanner] = useState<BannerInstruction | undefined>(undefined)
   const [overlayProgress, setOverlayProgress] = useState<RouteProgress | undefined>(undefined)
@@ -850,10 +877,6 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     progressAtMs: 0,
     bannerKey: '',
   })
-  // Sheet gesture handlers are created once. They dispatch through this ref so
-  // that the (re-created each render) sheet actions stay reachable without
-  // rebuilding the responders — PanResponder.create() used to run on every
-  // render, allocating two fresh gesture recognizers each time.
   const sheetActionsRef = useRef({
     expand: () => {},
     collapse: () => {},
@@ -921,9 +944,18 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     setEndOfRouteFeedbackVisible(false)
   }, [navigationResetKey])
 
+  const journeyListenersExist = useSyncExternalStore(
+    watchJourneyDataListeners,
+    hasJourneyDataListeners,
+    hasJourneyDataListeners
+  )
   const nativeProps = useMemo(
-    () => normalizeViewProps(propsWithBottomSheet),
-    [propsWithBottomSheet]
+    () => ({
+      ...normalizeViewProps(propsWithBottomSheet),
+      journeyDataEnabled:
+        journeyListenersExist || propsWithBottomSheet.onJourneyDataChange !== undefined,
+    }),
+    [propsWithBottomSheet, journeyListenersExist]
   )
   const useOverlayTelemetry =
     useOverlayBottomSheet ||
@@ -933,8 +965,6 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     const onArrive = (event: unknown) => {
       const payload = unwrapNativeEventPayload<ArrivalEvent>(event)
       if (payload) {
-        // Native now only sends onArrive for the final destination, but guard
-        // anyway so an intermediate stop can never open the rating modal.
         const isFinal = payload.isFinalDestination !== false
         if (isFinal) {
           setOverlayArrival(payload)
@@ -1066,7 +1096,9 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     routeProgress: overlayProgress,
     location: overlayLocation,
     stopNavigation,
-    emitAction: (actionId: string) => emitOverlayAction(actionId, 'custom'),
+    emitAction: (actionId: string) => {
+      emitOverlayAction(actionId, 'custom')
+    },
   }
   const endOfRouteFeedbackContext: EndOfRouteFeedbackRenderContext = {
     arrival: overlayArrival,
@@ -1322,9 +1354,9 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     }[] = [...builtInQuickActions]
     const etaText = formatEta(overlayProgress?.durationRemaining)
     const durationText =
-      overlayProgress?.durationRemaining != null
-        ? formatDuration(overlayProgress.durationRemaining)
-        : undefined
+      overlayProgress?.durationRemaining == null
+        ? undefined
+        : formatDuration(overlayProgress.durationRemaining)
     const showCurrentStreet = bottomSheet?.showCurrentStreet !== false
     const showRemainingDistance = bottomSheet?.showRemainingDistance !== false
     const showRemainingDuration = bottomSheet?.showRemainingDuration !== false
@@ -1368,7 +1400,7 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
     const defaultCardColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.08)'
     const defaultSheet = (
       <View style={styles.defaultSheet}>
-        {nativeProps.showsManeuverView !== false ? (
+        {nativeProps.showsManeuverView === false ? null : (
           <View style={[styles.defaultCard, { backgroundColor: defaultCardColor }]}>
             <Text
               style={[
@@ -1411,8 +1443,8 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
               </Text>
             ) : null}
           </View>
-        ) : null}
-        {nativeProps.showsTripProgress !== false ? (
+        )}
+        {nativeProps.showsTripProgress === false ? null : (
           <View style={[styles.defaultCard, { backgroundColor: defaultCardColor }]}>
             <Text
               style={[
@@ -1461,7 +1493,7 @@ export function MapboxNavigationView(props: MapboxNavigationViewProps & ViewProp
                   : 'Location not available'}
             </Text>
           </View>
-        ) : null}
+        )}
         {(allQuickActions.length ?? 0) > 0 ? (
           <View style={styles.quickActionsRow}>
             {allQuickActions.map((action) => (

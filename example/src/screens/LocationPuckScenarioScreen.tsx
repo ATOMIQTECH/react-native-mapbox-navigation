@@ -12,23 +12,9 @@ import { useNavigationLocation } from '../hooks/useNavigationLocation'
 
 type PuckPreset = 'default' | 'tinted' | '2d' | '3d' | 'none' | 'perState'
 
-/**
- * A publicly hosted glTF car model from Mapbox's own examples.
- *
- * Using a remote URL here keeps the example runnable without adding binary
- * assets to the repo or registering `glb` in the example's Metro config. In a
- * real app you would usually ship the model locally:
- *
- * ```tsx
- * modelUri: require('./assets/car.glb')
- * ```
- *
- * with `config.resolver.assetExts.push('glb', 'gltf')` in `metro.config.js`.
- */
 const REMOTE_CAR_MODEL =
   'https://raw.githubusercontent.com/mapbox/mapbox-maps-android/main/app/src/main/assets/sportcar.glb'
 
-/** Zoom-interpolated scale, which behaves consistently across platforms. */
 const CAR_SCALE_EXPRESSION = JSON.stringify([
   'interpolate',
   ['linear'],
@@ -40,10 +26,8 @@ const CAR_SCALE_EXPRESSION = JSON.stringify([
 ])
 
 const PUCK_PRESETS: Record<PuckPreset, LocationPuckConfig | undefined> = {
-  // Leaves the prop off entirely — the Mapbox SDK default puck.
   default: undefined,
 
-  // Recolours the built-in puck. No assets required.
   tinted: {
     type: 'tinted',
     color: '#2563EB',
@@ -51,14 +35,12 @@ const PUCK_PRESETS: Record<PuckPreset, LocationPuckConfig | undefined> = {
     scale: 1.1,
   },
 
-  // Custom flat images. `bearingImage` rotates to the course.
   '2d': {
     type: '2d',
     bearingImage: { uri: 'https://docs.mapbox.com/mapbox-gl-js/assets/custom_marker.png' },
     scale: 0.6,
   },
 
-  // A glTF model, sized by a zoom expression.
   '3d': {
     type: '3d',
     modelUri: REMOTE_CAR_MODEL,
@@ -66,12 +48,10 @@ const PUCK_PRESETS: Record<PuckPreset, LocationPuckConfig | undefined> = {
     scaleExpression: CAR_SCALE_EXPRESSION,
   },
 
-  // Hides the pointer — for apps drawing their own vehicle marker.
   none: {
     type: 'none',
   },
 
-  // A different pointer per navigation state.
   perState: {
     default: { type: 'tinted', color: '#7C3AED', haloColor: '#FFFFFF' },
     activeNavigation: {
@@ -134,8 +114,8 @@ export default function LocationPuckScenarioScreen() {
             ))}
           </View>
           <Text style={styles.note}>
-            Remote models are downloaded once and cached. `translation` is Android-only; iOS has
-            no per-state puck API, so the pointer is swapped on state changes there.
+            Remote models are downloaded once and cached. `translation` is Android-only; iOS has no
+            per-state puck API, so the pointer is swapped on state changes there.
           </Text>
         </ScrollView>
       </View>

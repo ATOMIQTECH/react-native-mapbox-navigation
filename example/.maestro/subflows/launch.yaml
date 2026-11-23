@@ -1,0 +1,25 @@
+appId: com.expomapboxnavigationexample
+name: Launch the example with location granted and open the scenario list
+---
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - launchApp:
+          stopApp: true
+          permissions:
+            location: inuse
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - launchApp:
+          stopApp: true
+          permissions:
+            location: allow
+- setLocation:
+    latitude: 37.7749
+    longitude: -122.4194
+- extendedWaitUntil:
+    visible: 'Mapbox Module Test Lab'
+    timeout: 180000

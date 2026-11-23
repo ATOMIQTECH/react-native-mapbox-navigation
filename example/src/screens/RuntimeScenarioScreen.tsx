@@ -19,12 +19,8 @@ import { useNavigationLocation } from '../hooks/useNavigationLocation'
 const LANGUAGES = ['en', 'fr', 'sw'] as const
 
 export default function RuntimeScenarioScreen() {
-  const {
-    hasLocationPermission,
-    permissionStatus,
-    resolvedStartOrigin,
-    requestLocationAccess,
-  } = useNavigationLocation(true)
+  const { hasLocationPermission, permissionStatus, resolvedStartOrigin, requestLocationAccess } =
+    useNavigationLocation(true)
   const [mute, setMute] = useState(false)
   const [voiceVolume, setVoiceVolume] = useState(0.9)
   const [distanceUnit, setDistanceUnit] = useState<'metric' | 'imperial'>('metric')

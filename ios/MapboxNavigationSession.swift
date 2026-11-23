@@ -1,60 +1,31 @@
+import Combine
+import CoreLocation
 import Foundation
 import MapboxNavigationCore
 
-/**
- Owns the v3 `MapboxNavigationProvider` and the navigation settings that used to
- live on `NavigationSettings.shared`.
-
- Navigation SDK v3 removed `NavigationSettings` entirely. In v2 the mute flag,
- voice volume and distance unit were global mutable state that could be set at
- any time — before, during or between navigation sessions — and the SDK observed
- them. v3 replaces that with two per-provider surfaces: `CoreConfig`
- (units, locale, location source) and the voice controller's
- `SpeechSynthesizing` (muted, volume, locale).
-
- That change would leak into the public JS API if handled naively, because
- `setMuted()` and friends can legitimately be called before any
- `<MapboxNavigationView>` exists. This store therefore keeps the *desired*
- settings independently of the provider: values are recorded immediately, baked
- into `CoreConfig` when the provider is first built, and pushed onto a live
- provider whenever one exists. The JS signatures do not change.
-
- Creation is deliberately lazy. Constructing a `MapboxNavigationProvider`
- spins up the navigator and starts a billing session, so it must not happen at
- module load — only when navigation is actually about to start. v2 had the same
- property via `Directions.shared` plus a per-session `MapboxNavigationService`.
-
- `@MainActor` because `MapboxNavigationProvider.routeVoiceController` and
- `SpeechSynthesizing` are both main-actor isolated in v3.
- */
 @MainActor
 final class MapboxNavigationSession {
   static let shared = MapboxNavigationSession()
 
-  // MARK: - Desired settings
 
-  /// Mirrors of the settings v2 read back from `NavigationSettings.shared`.
-  /// `getNavigationSettings()` reports these, so they must stay authoritative
-  /// even when no provider has been created yet.
   private(set) var isMuted = false
   private(set) var voiceVolume: Double = 1
   private(set) var distanceUnit = "metric"
   private(set) var language: String = Locale.preferredLanguages.first ?? "en"
   private var simulatesRoute = false
+  private lazy var guidanceLocationManager = GuidanceLocationManager()
+  private lazy var guidanceLocationClient: LocationClient = guidanceLocationManager.makeClient()
+  private var isGuidanceActive = false
+  private var hasPendingCoreConfig = false
 
   private var cachedProvider: MapboxNavigationProvider?
 
+  nonisolated static let legAdvance = SessionFlag(true)
+  nonisolated static let acceptsFasterRoutes = SessionFlag(true)
+
   private init() {}
 
-  // MARK: - Access token
 
-  /// The Mapbox access token, resolved exactly as the SDK resolves it.
-  ///
-  /// Mirrors `ApiConfiguration.default` in `MapboxNavigationCore`, which reads
-  /// `MBXAccessToken`, then the legacy `MGLMapboxAccessToken`, then a
-  /// `UserDefaults` override. Kept in sync deliberately: the point is to know
-  /// in advance whether the SDK will find a token, so we never construct a
-  /// provider that cannot work.
   static var accessToken: String? {
     let candidates = [
       Bundle.main.object(forInfoDictionaryKey: "MBXAccessToken") as? String,
@@ -64,33 +35,22 @@ final class MapboxNavigationSession {
     return candidates.compactMap { $0 }.first { !$0.isEmpty }
   }
 
-  /// Whether a usable access token is configured.
-  ///
-  /// Without one, `MapboxNavigationProvider` is unusable and the SDK reacts
-  /// badly in both build configurations: `ApiConfiguration.default` calls
-  /// `assertionFailure`, which **traps in Debug** and in Release silently
-  /// returns an empty token, leaving every Directions request to fail with an
-  /// opaque auth error. Neither is catchable from Swift, so the only way to
-  /// keep the promise that this package never crashes its host app is to check
-  /// first and refuse to build the provider.
   static var isConfigured: Bool {
     accessToken != nil
   }
 
-  // MARK: - Provider lifecycle
 
-  /// The live provider, if one has been created. Does **not** create one.
   var existingProvider: MapboxNavigationProvider? {
     cachedProvider
   }
 
-  /// The provider, creating it on first use.
   var provider: MapboxNavigationProvider {
     if let cachedProvider {
       return cachedProvider
     }
     let created = MapboxNavigationProvider(coreConfig: makeCoreConfig())
     cachedProvider = created
+    hasPendingCoreConfig = false
     applyVoiceSettings(to: created)
     return created
   }
@@ -99,20 +59,13 @@ final class MapboxNavigationSession {
     provider.mapboxNavigation
   }
 
-  /// Tear the provider down between navigation sessions.
-  ///
-  /// The settings above intentionally survive this, matching v2 — where they
-  /// were process-global and outlived any individual navigation service.
-  func invalidateProvider() {
-    cachedProvider = nil
-  }
-
-  // MARK: - Settings
-
   func setMuted(_ muted: Bool) {
     isMuted = muted
     guard let cachedProvider else { return }
     applyVoiceSettings(to: cachedProvider)
+    if muted {
+      cachedProvider.routeVoiceController.speechSynthesizer.interruptSpeaking()
+    }
   }
 
   func setVoiceVolume(_ volume: Double) {
@@ -122,58 +75,112 @@ final class MapboxNavigationSession {
   }
 
   func setDistanceUnit(_ unit: String) {
-    distanceUnit = unit == "imperial" ? "imperial" : "metric"
+    let normalized = unit == "imperial" ? "imperial" : "metric"
+    guard normalized != distanceUnit else { return }
+    distanceUnit = normalized
     reapplyCoreConfig()
   }
 
   func setLanguage(_ language: String) {
-    self.language = language
+    let trimmed = language.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed != self.language else { return }
+    self.language = trimmed
     reapplyCoreConfig()
     if let cachedProvider {
-      // The synthesizer keeps its own locale, which is what actually selects the
-      // spoken-instruction voice.
-      cachedProvider.routeVoiceController.speechSynthesizer.locale = Locale(identifier: language)
+      cachedProvider.routeVoiceController.speechSynthesizer.locale = Locale(identifier: trimmed)
     }
   }
 
-  /// Backs the `shouldSimulateRoute` prop.
-  ///
-  /// v2 passed `simulating: .always` to `MapboxNavigationService`'s
-  /// initialiser. v3 moves it into `CoreConfig.locationSource`, which means it
-  /// has to be set *before* the provider is built — so changing it invalidates
-  /// any existing provider rather than trying to mutate a running navigator.
-  func setSimulatesRoute(_ simulate: Bool) {
-    guard simulatesRoute != simulate else { return }
-    simulatesRoute = simulate
-    invalidateProvider()
+  func setGuidanceActive(_ active: Bool) {
+    isGuidanceActive = active
   }
 
-  // MARK: - Internals
+  func prepareForNavigation(
+    language: String,
+    distanceUnit: String,
+    continuousAlternatives: Bool,
+    simulatesRoute: Bool,
+    routeProfile: String = "driving-traffic"
+  ) {
+    guidanceLocationManager.setActivityType(forProfile: routeProfile)
+    Self.acceptsFasterRoutes.set(continuousAlternatives)
+    if simulatesRoute != self.simulatesRoute {
+      self.simulatesRoute = simulatesRoute
+      hasPendingCoreConfig = true
+    }
+    let trimmed = language.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !trimmed.isEmpty, trimmed != self.language {
+      self.language = trimmed
+      hasPendingCoreConfig = true
+    }
+    let unit = distanceUnit == "imperial" ? "imperial" : "metric"
+    if unit != self.distanceUnit {
+      self.distanceUnit = unit
+      hasPendingCoreConfig = true
+    }
+    guard !isGuidanceActive else { return }
+    if hasPendingCoreConfig {
+      reapplyCoreConfig()
+    }
+  }
+
 
   private func makeCoreConfig() -> CoreConfig {
+    var routingConfig = RoutingConfig()
+    routingConfig.fasterRouteDetectionConfig = FasterRouteDetectionConfig(
+      fasterRouteApproval: .manually { [flag = Self.acceptsFasterRoutes] _ in flag.value }
+    )
     var config = CoreConfig(
-      // `.init()` reads the public token from `MBXAccessToken` in Info.plist,
-      // the same source v2's `Directions.shared` used.
       credentials: .init(),
-      locationSource: simulatesRoute ? .simulation() : .live,
-      locale: Locale(identifier: language)
+      routingConfig: routingConfig,
+      locationSource: simulatesRoute ? .simulation() : .custom(guidanceLocationClient),
+      locale: Locale(identifier: language),
+      predictiveCacheConfig: Self.predictiveCacheConfig,
+      multilegAdvancing: .manually { [flag = Self.legAdvance] _ in flag.value }
     )
     config.unitOfMeasurement = distanceUnit == "imperial" ? .imperial : .metric
     return config
   }
 
+  private static let predictiveCacheConfig = PredictiveCacheConfig(
+    predictiveCacheNavigationConfig: PredictiveCacheNavigationConfig(
+      locationConfig: PredictiveCacheLocationConfig(
+        currentLocationRadius: 3000,
+        routeBufferRadius: 1000,
+        destinationLocationRadius: 3000
+      )
+    ),
+    predictiveCacheMapsConfig: PredictiveCacheMapsConfig(
+      locationConfig: PredictiveCacheLocationConfig(
+        currentLocationRadius: 2000,
+        routeBufferRadius: 500,
+        destinationLocationRadius: 2000
+      ),
+      maximumConcurrentRequests: 2,
+      zoomRange: 0...16
+    )
+  )
+
   private func reapplyCoreConfig() {
-    guard let cachedProvider else { return }
+    guard let cachedProvider else {
+      hasPendingCoreConfig = false
+      return
+    }
+    guard !isGuidanceActive else {
+      hasPendingCoreConfig = true
+      return
+    }
+    hasPendingCoreConfig = false
     cachedProvider.apply(coreConfig: makeCoreConfig())
+    Task { @MainActor [weak self] in
+      guard let self, let provider = self.cachedProvider, provider === cachedProvider else { return }
+      self.applyVoiceSettings(to: provider)
+    }
   }
 
   private func applyVoiceSettings(to provider: MapboxNavigationProvider) {
     let synthesizer = provider.routeVoiceController.speechSynthesizer
     synthesizer.muted = isMuted
-    // v2 took a `Float` in 0...1 directly. v3 models "follow the system volume"
-    // and "use an explicit level" as distinct cases, so a full-volume request
-    // maps to `.system` — which is what v2's 1.0 effectively meant — and
-    // anything lower to an explicit override.
     synthesizer.volume = voiceVolume >= 1 ? .system : .override(Float(voiceVolume))
     synthesizer.locale = Locale(identifier: language)
   }
@@ -182,5 +189,74 @@ final class MapboxNavigationSession {
 extension Double {
   fileprivate var clampedToUnitInterval: Double {
     Swift.max(0, Swift.min(self, 1))
+  }
+}
+
+private final class GuidanceLocationManager: NSObject, CLLocationManagerDelegate {
+  private let manager = CLLocationManager()
+  private let locationsSubject = PassthroughSubject<CLLocation, Never>()
+  private let headingSubject = PassthroughSubject<CLHeading, Never>()
+
+  override init() {
+    super.init()
+    manager.requestWhenInUseAuthorization()
+    manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+    manager.activityType = .automotiveNavigation
+    manager.pausesLocationUpdatesAutomatically = false
+    manager.distanceFilter = kCLDistanceFilterNone
+    let backgroundModes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []
+    if backgroundModes.contains("location") {
+      manager.allowsBackgroundLocationUpdates = true
+      manager.showsBackgroundLocationIndicator = true
+    }
+    manager.delegate = self
+  }
+
+  func setActivityType(forProfile profile: String) {
+    switch profile.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "walking": manager.activityType = .fitness
+    case "cycling": manager.activityType = .otherNavigation
+    default: manager.activityType = .automotiveNavigation
+    }
+  }
+
+  func makeClient() -> LocationClient {
+    let delegate = self
+    return LocationClient(
+      locations: delegate.locationsSubject.eraseToAnyPublisher(),
+      headings: delegate.headingSubject.eraseToAnyPublisher(),
+      startUpdatingLocation: { delegate.manager.startUpdatingLocation() },
+      stopUpdatingLocation: { delegate.manager.stopUpdatingLocation() },
+      startUpdatingHeading: { delegate.manager.startUpdatingHeading() },
+      stopUpdatingHeading: { delegate.manager.stopUpdatingHeading() }
+    )
+  }
+
+  func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    if let location = locations.last {
+      locationsSubject.send(location)
+    }
+  }
+
+  func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
+    headingSubject.send(newHeading)
+  }
+}
+
+final class SessionFlag: @unchecked Sendable {
+  private let lock = NSLock()
+  private var current: Bool
+
+  init(_ initial: Bool) {
+    current = initial
+  }
+
+  var value: Bool {
+    lock.lock(); defer { lock.unlock() }
+    return current
+  }
+
+  func set(_ newValue: Bool) {
+    lock.lock(); current = newValue; lock.unlock()
   }
 }

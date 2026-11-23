@@ -6,7 +6,6 @@ import type {
   LocationPuckAppearance,
   LocationPuckAssetSource,
   LocationPuckConfig,
-  LocationPuckStates,
   LocationPuckTinted,
 } from './MapboxNavigation.types'
 
@@ -50,23 +49,14 @@ export type NativeLocationPuckOptions = Partial<
 
 const APPEARANCE_TYPES = new Set(['3d', '2d', 'tinted', 'none', 'default'])
 
-/**
- * Resolve an asset source to a string the native layer can load.
- *
- * `require()` numbers are resolved through React Native's asset registry,
- * which yields a packager URL in development and a bundled asset reference in
- * release builds. Strings and `{ uri }` objects pass through untouched so that
- * remote URLs and platform-native asset paths keep working.
- */
-function resolveAssetSource(source: LocationPuckAssetSource | undefined): string | undefined {
+export function resolveAssetSource(
+  source: LocationPuckAssetSource | undefined
+): string | undefined {
   if (source == null) {
     return undefined
   }
 
   if (typeof source === 'number') {
-    // A require()'d local asset. Image.resolveAssetSource works for any asset
-    // registered with Metro, not just images, provided the extension is listed
-    // in the project's `resolver.assetExts`.
     const resolved = Image.resolveAssetSource(source)
     const uri = resolved?.uri?.trim()
     return uri && uri.length > 0 ? uri : undefined
@@ -98,7 +88,6 @@ function normalizeOpacity(value: unknown): number | undefined {
   return numeric == null ? undefined : clamp(numeric, 0, 1)
 }
 
-/** Expand a uniform scale or `[x, y, z]` triple into an explicit triple. */
 function normalizeVector3(
   value: number | [number, number, number] | undefined,
   fallback?: number
@@ -140,8 +129,6 @@ function normalizeScaleExpression(value: unknown): string | undefined {
   if (trimmed.length === 0) {
     return undefined
   }
-  // Mapbox expects a JSON expression array. Reject anything unparseable early
-  // so a typo degrades to the default scale instead of failing natively.
   try {
     const parsed = JSON.parse(trimmed)
     return Array.isArray(parsed) ? trimmed : undefined
@@ -172,8 +159,6 @@ function normalize2D(appearance: LocationPuck2D): NativeLocationPuck | undefined
   const bearingImage = resolveAssetSource(appearance.bearingImage)
   const shadowImage = resolveAssetSource(appearance.shadowImage)
 
-  // With no images at all this would render nothing; fall back to the SDK
-  // default rather than silently blanking the pointer.
   if (!topImage && !bearingImage && !shadowImage) {
     return undefined
   }
@@ -226,7 +211,6 @@ function normalizeAppearance(value: unknown): NativeLocationPuck | undefined {
   }
 }
 
-/** True when the value is a single appearance rather than a per-state map. */
 function isAppearance(value: LocationPuckConfig): value is LocationPuckAppearance {
   const type = (value as LocationPuckAppearance).type
   return typeof type === 'string' && APPEARANCE_TYPES.has(type)
@@ -251,7 +235,7 @@ export function resolveLocationPuck(
     return resolved ? { default: resolved } : undefined
   }
 
-  const states = config as LocationPuckStates
+  const states = config
   const output: NativeLocationPuckOptions = {}
   let hasAny = false
 
@@ -264,4 +248,12 @@ export function resolveLocationPuck(
   }
 
   return hasAny ? output : undefined
+}
+
+export function resolveAssetScale(source: LocationPuckAssetSource | undefined): number | undefined {
+  if (typeof source !== 'number') {
+    return undefined
+  }
+  const scale = Image.resolveAssetSource(source)?.scale
+  return typeof scale === 'number' && scale > 0 ? scale : undefined
 }

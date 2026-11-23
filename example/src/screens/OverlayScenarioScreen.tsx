@@ -145,26 +145,36 @@ export default function OverlayScenarioScreen() {
 
       {supportSheetOpen ? (
         <View pointerEvents='box-none' style={styles.supportOverlay}>
-          <Pressable style={styles.supportBackdrop} onPress={() => setSupportSheetOpen(false)} />
+          <Pressable
+            style={styles.supportBackdrop}
+            onPress={() => {
+              setSupportSheetOpen(false)
+            }}
+          />
           <View style={styles.supportSheet}>
             <Text style={styles.supportTitle}>App-Owned Support Sheet</Text>
             <Text style={styles.supportText}>
               This overlay proves package UI and app UI can coexist.
             </Text>
-            <Pressable onPress={() => setSupportSheetOpen(false)} style={styles.supportButton}>
+            <Pressable
+              onPress={() => {
+                setSupportSheetOpen(false)
+              }}
+              style={styles.supportButton}
+            >
               <Text style={styles.supportButtonLabel}>Close</Text>
             </Pressable>
           </View>
         </View>
       ) : null}
 
-      {tripRating != null ? (
+      {tripRating == null ? null : (
         <View pointerEvents='box-none' style={styles.ratingToastWrap}>
           <View style={styles.ratingToast}>
             <Text style={styles.ratingToastLabel}>Rated trip {tripRating}/5</Text>
           </View>
         </View>
-      ) : null}
+      )}
 
       <LocationPermissionOverlay
         hasLocationPermission={hasLocationPermission}

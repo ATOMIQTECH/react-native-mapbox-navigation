@@ -54,7 +54,7 @@ export function useNavigationLocation(autoRequest = true): UseNavigationLocation
     setPermissionStatus('requesting')
     const requestedPermission = await Location.requestForegroundPermissionsAsync()
     const granted = requestedPermission.granted
-    const blocked = !granted && requestedPermission.canAskAgain === false
+    const blocked = !granted && !requestedPermission.canAskAgain
 
     setHasLocationPermission(granted)
     setPermissionStatus(granted ? 'granted' : blocked ? 'blocked' : 'denied')

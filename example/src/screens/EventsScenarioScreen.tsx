@@ -65,12 +65,8 @@ function payloadToText(payload: unknown): string {
 }
 
 export default function EventsScenarioScreen() {
-  const {
-    hasLocationPermission,
-    permissionStatus,
-    resolvedStartOrigin,
-    requestLocationAccess,
-  } = useNavigationLocation(true)
+  const { hasLocationPermission, permissionStatus, resolvedStartOrigin, requestLocationAccess } =
+    useNavigationLocation(true)
   const [counts, setCounts] = useState<Record<EventKey, number>>(initialCounts)
   const [lastPayloads, setLastPayloads] = useState<Record<EventKey, string>>({
     location: '-',
@@ -107,18 +103,42 @@ export default function EventsScenarioScreen() {
 
   useEffect(() => {
     const subscriptions = [
-      addLocationChangeListener((payload) => captureEvent('location', payload)),
-      addRouteProgressChangeListener((payload) => captureEvent('progress', payload)),
-      addJourneyDataChangeListener((payload) => captureEvent('journey', payload)),
-      addRouteChangeListener((payload) => captureEvent('route', payload)),
-      addCameraFollowingStateChangeListener((payload) => captureEvent('camera', payload)),
-      addBannerInstructionListener((payload) => captureEvent('banner', payload)),
-      addArriveListener((payload) => captureEvent('arrive', payload)),
-      addDestinationPreviewListener((payload) => captureEvent('preview', payload)),
-      addDestinationChangedListener((payload) => captureEvent('destination', payload)),
-      addCancelNavigationListener(() => captureEvent('cancel')),
-      addErrorListener((payload) => captureEvent('error', payload)),
-      addBottomSheetActionPressListener((payload) => captureEvent('moduleBottomSheetAction', payload)),
+      addLocationChangeListener((payload) => {
+        captureEvent('location', payload)
+      }),
+      addRouteProgressChangeListener((payload) => {
+        captureEvent('progress', payload)
+      }),
+      addJourneyDataChangeListener((payload) => {
+        captureEvent('journey', payload)
+      }),
+      addRouteChangeListener((payload) => {
+        captureEvent('route', payload)
+      }),
+      addCameraFollowingStateChangeListener((payload) => {
+        captureEvent('camera', payload)
+      }),
+      addBannerInstructionListener((payload) => {
+        captureEvent('banner', payload)
+      }),
+      addArriveListener((payload) => {
+        captureEvent('arrive', payload)
+      }),
+      addDestinationPreviewListener((payload) => {
+        captureEvent('preview', payload)
+      }),
+      addDestinationChangedListener((payload) => {
+        captureEvent('destination', payload)
+      }),
+      addCancelNavigationListener(() => {
+        captureEvent('cancel')
+      }),
+      addErrorListener((payload) => {
+        captureEvent('error', payload)
+      }),
+      addBottomSheetActionPressListener((payload) => {
+        captureEvent('moduleBottomSheetAction', payload)
+      }),
     ]
     return () => {
       subscriptions.forEach((subscription) => {

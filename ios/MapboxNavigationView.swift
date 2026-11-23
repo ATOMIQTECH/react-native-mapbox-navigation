@@ -1,17 +1,7 @@
 import Combine
 import ExpoModulesCore
-// Navigation SDK v3 splits the old monolithic `MapboxNavigation` module in two:
-// `MapboxNavigationCore` holds the navigator, routing and NavigationMapView,
-// and `MapboxNavigationUIKit` holds NavigationViewController, NavigationOptions
-// and the day/night styles. `MapboxCoreNavigation` no longer exists.
 import MapboxNavigationCore
 import MapboxNavigationUIKit
-// `excludedLocations` is the one routing option Mapbox keeps behind an SPI —
-// it is a beta Directions API feature and the SDK marks it "subject to
-// change". Importing the group is the only way to reach it; the cost is that a
-// future SDK release could rename or drop it, which would break this build
-// loudly at compile time rather than failing silently at runtime. Everything
-// else used from this module is ordinary public API.
 @_spi(ExperimentalMapboxAPI) import MapboxDirections
 import CoreLocation
 import UIKit
@@ -26,16 +16,17 @@ private struct NavigationMarkerPayload {
   let glyph: String
   let badge: String?
   let variant: String
-  // Customization: these override variant-based defaults when set
   let customColor: UIColor?
   let customBadgeColor: UIColor?
   let customOpacity: CGFloat?
   let size: String
-  let markerStyle: String   // "pin" | "dot"
+  let markerStyle: String
   let showTail: Bool
   let selected: Bool
   let allowOverlap: Bool
-  let anchorOffsetY: CGFloat?  // custom Y offset, overrides size-preset
+  let anchorOffsetY: CGFloat?
+  let image: NavigationMarkerImage?
+  let animatesMovement: Bool
 }
 
 private struct NavigationMarkerMetrics {
@@ -52,11 +43,10 @@ private struct NavigationMarkerMetrics {
   let offsetY: CGFloat
 }
 
-/// Shared formatter — constructing an ISO8601DateFormatter is relatively
-/// expensive and the journey payload is emitted on every location update.
 private let journeyEtaFormatter = ISO8601DateFormatter()
 
 private enum NavigationMarkerViewTag {
+  static let image = 9100
   static let bubble = 9101
   static let glyph = 9102
   static let badge = 9103
@@ -95,22 +85,44 @@ class MapboxNavigationView: ExpoView {
     didSet { startNavigationIfReady() }
   }
   var destination: [String: Any]? {
-    didSet { startNavigationIfReady() }
+    didSet { handleRouteTargetChange() }
   }
   var waypoints: [[String: Any]]? {
-    didSet { startNavigationIfReady() }
+    didSet { handleRouteTargetChange() }
   }
   var navigationMarkers: [[String: Any]]? {
     didSet { renderNavigationMarkersIfPossible() }
   }
+  var navigationLines: [[String: Any]]? {
+    didSet { renderNavigationLinesIfPossible() }
+  }
+  private var renderedNavigationLineIds = Set<String>()
   var shouldSimulateRoute: Bool = false {
     didSet { startNavigationIfReady() }
   }
   var showCancelButton: Bool = true {
     didSet { applyDynamicUIOptionsIfPossible() }
   }
-  var mute: Bool = false
-  var voiceVolume: Double = 1
+  var mute: Bool = false {
+    didSet {
+      guard mute != oldValue, navigationViewController != nil else { return }
+      MapboxNavigationSession.shared.setMuted(mute)
+    }
+  }
+  var voiceVolume: Double = 1 {
+    didSet {
+      guard voiceVolume != oldValue, navigationViewController != nil else { return }
+      MapboxNavigationSession.shared.setVoiceVolume(voiceVolume)
+    }
+  }
+  var journeyDataEnabled: Bool = true
+  var keepAliveWhenDetached: Bool = false {
+    didSet {
+      if !keepAliveWhenDetached, isDetachedWhileAlive {
+        endDetachedSession()
+      }
+    }
+  }
   var cameraPitch: Double?
   var cameraZoom: Double?
   var cameraMode: String = "following" {
@@ -118,27 +130,42 @@ class MapboxNavigationView: ExpoView {
       let normalized = cameraMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
       if normalized == "overview" {
         setCameraFollowingState(false, reason: "prop")
+        if let viewController = navigationViewController {
+          if viewController.navigationMapView?.navigationCamera.currentCameraState != .overview {
+            pendingCameraReason = "prop"
+          }
+          applyCameraConfiguration(to: viewController)
+        }
       } else if normalized == "following" {
         resumeCameraFollowingInternal(reason: "prop")
       }
     }
   }
-  var mapStyleUri: String?
-  var mapStyleUriDay: String?
-  var mapStyleUriNight: String?
+  var mapStyleUri: String? {
+    didSet { scheduleMapStyleUpdate() }
+  }
+  var mapStyleUriDay: String? {
+    didSet { scheduleMapStyleUpdate() }
+  }
+  var mapStyleUriNight: String? {
+    didSet { scheduleMapStyleUpdate() }
+  }
+  var cameraPadding: [String: Any]? {
+    didSet { applyCameraPadding() }
+  }
+  var ornamentBottomMargin: Double? {
+    didSet { navigationViewController?.extraOrnamentBottomMargin = resolvedOrnamentBottomMargin }
+  }
+  private var resolvedOrnamentBottomMargin: CGFloat {
+    CGFloat(max(0, ornamentBottomMargin ?? 0))
+  }
   var uiTheme: String = "system"
   var routeAlternatives: Bool = false
-  /// Directions profile. See `resolveProfileIdentifier`.
   var routeProfile: String = "driving-traffic"
-  /// `{ roadClasses: [...], locations: [{latitude, longitude}] }`.
   var routeExclusions: [String: Any]?
-  /// `{ maxHeight, maxWidth, maxWeight }`, metres and metric tons.
   var vehicle: [String: Any]?
-  /// Standard-style basemap configuration. Applied live.
   var mapStyleConfig: [String: Any]? {
     didSet {
-      // A different config may well be supported where the last one was not,
-      // so let it report again rather than staying silent for the session.
       hasWarnedAboutMapStyleConfig = false
       applyMapStyleConfig(afterStyleLoad: true)
     }
@@ -149,18 +176,33 @@ class MapboxNavigationView: ExpoView {
   var showsWayNameLabel: Bool = true {
     didSet { applyDynamicUIOptionsIfPossible() }
   }
+  var showsWaypoints: Bool = true
+  var waypointAdvance: String = "automatic" {
+    didSet {
+      MapboxNavigationSession.legAdvance.set(waypointAdvance != "manual")
+    }
+  }
   var showsTripProgress: Bool = true {
-    didSet { applyDynamicUIOptionsIfPossible() }
+    didSet { applyBannerChange() }
   }
   var showsManeuverView: Bool = true {
-    didSet { applyDynamicUIOptionsIfPossible() }
+    didSet { applyBannerChange() }
   }
   var showsActionButtons: Bool = true {
-    didSet { applyDynamicUIOptionsIfPossible() }
+    didSet {
+      applyDynamicUIOptionsIfPossible()
+      if let navigationViewController {
+        applyNativeResumeButtonVisibility(to: navigationViewController)
+      }
+    }
   }
   var showsReportFeedback: Bool = true
-  var showsEndOfRouteFeedback: Bool = true
-  var showsContinuousAlternatives: Bool = true
+  var showsContinuousAlternatives: Bool = true {
+    didSet {
+      MapboxNavigationSession.acceptsFasterRoutes.set(showsContinuousAlternatives)
+      navigationViewController?.showsContinuousAlternatives = showsContinuousAlternatives
+    }
+  }
   var usesNightStyleWhileInTunnel: Bool = true
   var routeLineTracksTraversal: Bool = false
   var annotatesIntersectionsAlongRoute: Bool = false
@@ -168,17 +210,17 @@ class MapboxNavigationView: ExpoView {
     didSet {
       if let navigationViewController {
         applyNativeFloatingButtonsConfiguration(to: navigationViewController)
+        applyNativeResumeButtonVisibility(to: navigationViewController)
       }
     }
   }
   var distanceUnit: String = "metric"
-  var language: String = "en"
-  /// Colour overrides for the route line, the on-map turn arrow and the chrome.
-  ///
-  /// Applied live. The route line and the arrow are plain properties on
-  /// `NavigationMapView`; the chrome is reached through `UIAppearance`, which
-  /// only runs at view creation, so `MapboxNavigationTheme` also walks the live
-  /// hierarchy. See `MapboxNavigationTheme` for why that split exists.
+  var language: String = "en" {
+    didSet {
+      guard language != oldValue, navigationViewController != nil else { return }
+      MapboxNavigationSession.shared.setLanguage(resolvedLanguage)
+    }
+  }
   var colors: [String: Any]? {
     didSet {
       MapboxNavigationTheme.configure(with: colors)
@@ -196,48 +238,99 @@ class MapboxNavigationView: ExpoView {
     }
   }
   
-  private var navigationViewController: NavigationViewController?
-  /// Keyed by marker id.
-  ///
-  /// v10 tracked the `UIView` and passed it back to the manager for every
-  /// update. Maps v11 replaced that with a `ViewAnnotation` object that owns its
-  /// view and is mutated in place, so the annotation is what has to be retained.
+  private var navigationViewController: EmbeddedNavigationViewController?
+  private var usesEmptyBanners = false
+  private var routesSubscription: AnyCancellable?
+  private var cameraStateSubscription: AnyCancellable?
+  private var locationMatchingSubscription: AnyCancellable?
+  private var lastLocationEmitAt: CFTimeInterval = 0
+  private var pendingCameraReason: String?
+  private var lastEmittedRouteKey: String?
+  private var lastBannerKey: String?
+  private var lastBannerDistance: CLLocationDistance = 0
+  private var lastBannerEmitAt: CFTimeInterval = 0
+  private var lastBannerPayload: [String: Any]?
+  private var isReportedOffRoute = false
+  private var isDetachedWhileAlive = false
+  private var detachedTeardown: DispatchWorkItem?
+  private static let detachedSessionLifetime: TimeInterval = 10 * 60
+  private var sdkViewportPadding: UIEdgeInsets?
+
+
+  private var routedDestination: CLLocationCoordinate2D?
+  private var routedDestinationCurb = false
+  private var routedIntermediateWaypoints: [Waypoint] = []
+  private var routedWaypointsProp: [Waypoint] = []
+  private var needsInPlaceReroute = false
+  private var needsMapStyleUpdate = false
+  private var cameraBeforeStyleSwap: CameraOptions?
+  private var inPlaceRerouteToken = UUID()
+  private var inPlaceRerouteTask: Task<NavigationRoutes, Error>?
+  private var inPlaceRerouteTarget: InPlaceRerouteTarget?
+  private var inPlaceRerouteAttempt = 0
+  private var inPlaceRerouteRetry: DispatchWorkItem?
+  private var isTargetRerouteFailing = false
+  private var sessionStateSubscription: AnyCancellable?
+  private static let inPlaceRerouteRetryDelays: [TimeInterval] = [2, 5, 10, 20]
+
+  private struct InPlaceRerouteTarget {
+    let destination: CLLocationCoordinate2D
+    let curb: Bool
+    let waypoints: [Waypoint]
+
+    func matches(_ other: InPlaceRerouteTarget) -> Bool {
+      RouteTarget.isSamePlace(destination, other.destination)
+        && curb == other.curb
+        && RouteTarget.isSameWaypointList(waypoints, other.waypoints)
+    }
+  }
   private var navigationMarkerAnnotations = [String: ViewAnnotation]()
+  private struct MarkerMotion {
+    let from: CLLocationCoordinate2D
+    let to: CLLocationCoordinate2D
+    let start: CFTimeInterval
+    let duration: CFTimeInterval
+  }
+  private var markerShownAt = [String: CLLocationCoordinate2D]()
+  private var markerUpdatedAt = [String: CFTimeInterval]()
+  private var markerMotions = [String: MarkerMotion]()
+  private var markerDisplayLink: CADisplayLink?
+  private static let markerGlideMaxDistance: CLLocationDistance = 500
   private var hostViewController: UIViewController?
   private var isRouteCalculationInProgress = false
   private var hasPendingSessionConflict = false
   private var routeRequestToken = UUID()
   private var hasWarnedAboutMapStyleConfig = false
-  /// Keeps the `onStyleLoaded` subscription alive; see `observeStyleLoads`.
   private var styleLoadedSubscription: AnyCancellable?
   private var isCameraFollowing = true
   private var hasCameraPanGesture = false
   private var puckStates = [LocationPuckState: [String: Any]]()
   private var currentPuckState: LocationPuckState = .idle
-  /// Guards against a slow asset load applying a puck for a state the session
-  /// has already moved on from.
   private var puckApplyToken = UUID()
-  /// Minimum gap between the continuous, high-frequency events
-  /// (`onLocationChange`, `onRouteProgressChange`, `onJourneyDataChange`).
-  ///
-  /// The SDK reports progress on every location fix and each event crosses the
-  /// bridge with a payload; on a long drive that is a meaningful amount of
-  /// avoidable CPU, garbage and battery. Discrete events (arrival, banner
-  /// changes, errors) are never throttled.
   var eventThrottleMs: Double = 0
   private var lastContinuousEmitAt: CFTimeInterval = 0
   private var lastDynamicUIRefreshAt: CFTimeInterval = 0
   private static let dynamicUIRefreshInterval: CFTimeInterval = 2.0
-  /// Used only to resolve a starting coordinate when `startOrigin` is omitted.
-  /// Android already falls back to the device location, so iOS previously just
-  /// never started navigation in that case.
   private lazy var originLocationManager: CLLocationManager = {
     let manager = CLLocationManager()
     manager.delegate = self
-    manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+    manager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
     return manager
   }()
   private var isWaitingForOriginFix = false
+  private var guidanceWatchdog: DispatchWorkItem?
+  private var shouldRestartWhenWindowAppears = false
+  private var hasReceivedRouteProgress = false
+  private static let guidanceWatchdogTimeout: TimeInterval = 20
+  private var bestOriginFix: CLLocation?
+  private var acceptedOriginFix: CLLocation?
+  private var hasOriginWaitTimedOut = false
+  private var originWaitTimeout: DispatchWorkItem?
+  private var originNoFixReport: DispatchWorkItem?
+  private static let originMaxAge: TimeInterval = 15
+  private static let originMaxAccuracy: CLLocationAccuracy = 50
+  private static let originWaitSeconds: TimeInterval = 4
+  private static let headingMinimumSpeed: CLLocationSpeed = 2
   
   let onLocationChange = EventDispatcher()
   let onRouteProgressChange = EventDispatcher()
@@ -263,12 +356,59 @@ class MapboxNavigationView: ExpoView {
   
   override func didMoveToWindow() {
     super.didMoveToWindow()
-    
+
     if window != nil && enabled {
-      startNavigationIfReady()
+      shouldRestartWhenWindowAppears = false
+      if isDetachedWhileAlive {
+        resumeDetachedSession()
+      } else {
+        startNavigationIfReady()
+      }
+    } else if window == nil, enabled, keepAliveWhenDetached, navigationViewController != nil {
+      pauseForDetach()
     } else {
       cleanupNavigation()
     }
+  }
+
+  private func pauseForDetach() {
+    guard !isDetachedWhileAlive else { return }
+    isDetachedWhileAlive = true
+    detachedTeardown?.cancel()
+    let teardown = DispatchWorkItem { [weak self] in
+      guard let self, self.isDetachedWhileAlive, self.window == nil else { return }
+      self.endDetachedSession()
+      self.dispatchCancelNavigation([:])
+    }
+    detachedTeardown = teardown
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.detachedSessionLifetime, execute: teardown)
+  }
+
+  private func resumeDetachedSession() {
+    isDetachedWhileAlive = false
+    detachedTeardown?.cancel()
+    detachedTeardown = nil
+    guard let viewController = navigationViewController else {
+      startNavigationIfReady()
+      return
+    }
+    viewController.view.frame = bounds
+    applyCameraPadding()
+    resumeCameraFollowingInternal(reason: "reattach")
+    lastEmittedRouteKey = nil
+    if let mainRoute = viewController.mapboxNavigation.tripSession().currentNavigationRoutes?.mainRoute {
+      emitRouteChange(navigationRoute: mainRoute)
+    }
+    lastBannerKey = nil
+    if let progress = viewController.mapboxNavigation.navigation().currentRouteProgress?.routeProgress {
+      dispatchBannerInstructionIfChanged(for: progress)
+    } else if let lastBannerPayload {
+      dispatchBannerInstruction(lastBannerPayload)
+    }
+  }
+
+  private func endDetachedSession() {
+    cleanupNavigation()
   }
 
   private func handleEnabledChange() {
@@ -297,14 +437,6 @@ class MapboxNavigationView: ExpoView {
       return
     }
 
-    // Refuse to start without an access token rather than let the SDK trap.
-    //
-    // v3 needs the token when the provider is *constructed*, not when a route
-    // is first requested as in v2, and it reports the failure with
-    // `assertionFailure` — which crashes Debug builds outright and silently
-    // yields an empty token in Release. Reporting it as a normal `onError`
-    // keeps a misconfigured app alive and tells the developer exactly what to
-    // fix.
     guard MapboxNavigationSession.isConfigured else {
       dispatchError([
         "code": "MISSING_ACCESS_TOKEN",
@@ -314,16 +446,17 @@ class MapboxNavigationView: ExpoView {
       return
     }
 
-    // `startOrigin` is documented as optional. Fall back to the device's last
-    // known fix, and wait for one if it isn't available yet.
     guard let resolvedOrigin = resolveStartOrigin() else {
       requestOriginFix()
       return
     }
-    let originLat = resolvedOrigin.latitude
-    let originLng = resolvedOrigin.longitude
+    stopWaitingForOriginFix()
+    acceptedOriginFix = nil
 
-    guard NavigationSessionRegistry.shared.acquire(owner: sessionOwner) else {
+    let acquired = NavigationSessionRegistry.shared.acquire(owner: sessionOwner)
+      || (NavigationSessionRegistry.shared.requestYieldCurrent()
+        && NavigationSessionRegistry.shared.acquire(owner: sessionOwner))
+    guard acquired else {
       if !hasPendingSessionConflict {
         hasPendingSessionConflict = true
         dispatchError([
@@ -351,6 +484,11 @@ class MapboxNavigationView: ExpoView {
     NavigationSessionRegistry.shared.registerCameraFollowingProvider(owner: sessionOwner) { [weak self] in
       return self?.isCameraFollowing ?? true
     }
+    NavigationSessionRegistry.shared.registerYieldHandler(owner: sessionOwner) { [weak self] in
+      guard let self, self.isDetachedWhileAlive, self.window == nil else { return false }
+      self.endDetachedSession()
+      return true
+    }
     NavigationSessionRegistry.shared.registerAdvanceLegHandler(owner: sessionOwner) { [weak self] in
       guard let self = self else { return false }
       DispatchQueue.main.async {
@@ -359,88 +497,65 @@ class MapboxNavigationView: ExpoView {
       return true
     }
     
-    let originCoord = CLLocationCoordinate2D(latitude: originLat, longitude: originLng)
     let destCoord = CLLocationCoordinate2D(latitude: destLat, longitude: destLng)
-    
-    var waypointsList = [Waypoint(coordinate: originCoord)]
-    
-    // Add intermediate waypoints
-    if let intermediateWaypoints = waypoints {
-      for wp in intermediateWaypoints {
-        if let lat = (wp["latitude"] as? NSNumber)?.doubleValue,
-           let lng = (wp["longitude"] as? NSNumber)?.doubleValue {
-          let coord = CLLocationCoordinate2D(latitude: lat, longitude: lng)
-          // v3 turned `Waypoint` from a class into a struct, so its properties
-          // can no longer be assigned after construction — the name goes in
-          // through the initialiser instead.
-          waypointsList.append(Waypoint(coordinate: coord, name: wp["name"] as? String))
-        }
-      }
-    }
-    
-    // Add final destination
-    let destinationName = (dest["name"] as? String) ?? (dest["title"] as? String) ?? "Destination"
-    waypointsList.append(Waypoint(coordinate: destCoord, name: destinationName))
-    
-    let routeOptions = NavigationRouteOptions(
-      waypoints: waypointsList,
-      profileIdentifier: resolveProfileIdentifier()
+    let intermediateWaypoints = parseIntermediateWaypoints()
+    let destinationWaypoint = makeDestinationWaypoint(dest, coordinate: destCoord)
+    let routeOptions = makeRouteOptions(
+      waypoints: [resolvedOrigin.waypoint]
+        + intermediateWaypoints
+        + [destinationWaypoint]
     )
-    routeOptions.locale = Locale(identifier: language)
-    routeOptions.distanceMeasurementSystem = distanceUnit == "imperial" ? .imperial : .metric
-    routeOptions.includesAlternativeRoutes = routeAlternatives
-    applyRouteExclusions(to: routeOptions)
-    applyVehicleConstraints(to: routeOptions)
-    
+
     let requestToken = UUID()
     routeRequestToken = requestToken
     isRouteCalculationInProgress = true
 
-    // v2 took a completion handler off `Directions.shared.calculate`. v3's
-    // `RoutingProvider.calculateRoutes(options:)` hands back a
-    // `Task<NavigationRoutes, Error>` instead, so the same flow is expressed by
-    // awaiting the task. The `@MainActor` Task replaces the explicit
-    // `DispatchQueue.main.async` hop the success path used to make.
     Task { @MainActor [weak self] in
       guard let self else { return }
 
-      // `shouldSimulateRoute` is part of `CoreConfig` in v3 rather than a
-      // per-service argument, so it must be in place before the provider that
-      // serves this request is built.
-      MapboxNavigationSession.shared.setSimulatesRoute(self.shouldSimulateRoute)
+      MapboxNavigationSession.shared.prepareForNavigation(
+        language: self.resolvedLanguage,
+        distanceUnit: self.distanceUnit,
+        continuousAlternatives: self.showsContinuousAlternatives,
+        simulatesRoute: self.shouldSimulateRoute,
+        routeProfile: self.routeProfile
+      )
       let routingProvider = MapboxNavigationSession.shared.mapboxNavigation.routingProvider()
 
       do {
         let navigationRoutes = try await routingProvider.calculateRoutes(options: routeOptions).value
 
-        guard self.routeRequestToken == requestToken else {
-          // A newer embedded start/stop cycle occurred; ignore stale route results.
-          NavigationSessionRegistry.shared.release(owner: self.sessionOwner)
-          return
-        }
+        guard self.routeRequestToken == requestToken else { return }
 
         self.isRouteCalculationInProgress = false
-        guard self.enabled, self.window != nil, self.navigationViewController == nil else {
+        guard self.navigationViewController == nil else { return }
+        guard self.enabled, self.window != nil else {
+          if self.enabled, self.window == nil {
+            self.shouldRestartWhenWindowAppears = true
+            self.dispatchError([
+              "code": "ROUTE_DISCARDED_NO_WINDOW",
+              "message": "A route was calculated while this view was not attached to a window, "
+                + "so it could not be shown and was discarded. Navigation will retry "
+                + "automatically once the view enters a window. If it never does, the view is "
+                + "being mounted inside a container that is never attached (a collapsed sheet, "
+                + "an off-screen tab, or a zero-size parent)."
+            ])
+          }
           NavigationSessionRegistry.shared.release(owner: self.sessionOwner)
           return
         }
 
-        self.emitRouteChange(route: navigationRoutes.mainRoute.route)
+        self.routedDestination = destCoord
+        self.routedDestinationCurb = !destinationWaypoint.allowsArrivingOnOppositeSide
+        self.routedIntermediateWaypoints = intermediateWaypoints
+        self.routedWaypointsProp = intermediateWaypoints
+        self.emitRouteChange(navigationRoute: navigationRoutes.mainRoute)
         self.embedNavigation(navigationRoutes: navigationRoutes, routeOptions: routeOptions)
       } catch {
-        guard self.routeRequestToken == requestToken else {
-          NavigationSessionRegistry.shared.release(owner: self.sessionOwner)
-          return
-        }
+        guard self.routeRequestToken == requestToken else { return }
         self.isRouteCalculationInProgress = false
         NavigationSessionRegistry.shared.release(owner: self.sessionOwner)
 
-        // v2 surfaced "routed fine but returned zero routes" as NO_ROUTE by
-        // inspecting the response. v3's `NavigationRoutes.mainRoute` is
-        // non-optional, so that condition arrives as a thrown
-        // `DirectionsError.unableToRoute` — which is the SDK's mapping of the
-        // Directions API's `NoRoute` code. Matching it keeps the JS-visible
-        // error code stable for consumers switching on it.
         if case DirectionsError.unableToRoute = error {
           self.dispatchError([
             "code": "NO_ROUTE",
@@ -459,26 +574,26 @@ class MapboxNavigationView: ExpoView {
   private func embedNavigation(navigationRoutes: NavigationRoutes, routeOptions: NavigationRouteOptions) {
     let navigationOptions = buildNavigationOptions()
 
-    let viewController = NavigationViewController(
+    let viewController = EmbeddedNavigationViewController(
       navigationRoutes: navigationRoutes,
       navigationOptions: navigationOptions
     )
-    
+    viewController.extraOrnamentBottomMargin = resolvedOrnamentBottomMargin
+    viewController.onViewDidAppear = { [weak self] in
+      self?.applyCameraPadding()
+    }
+
     viewController.delegate = self
     attachMapPanDetection(to: viewController)
     
-    // v2 set these on the global `NavigationSettings.shared`. In v3 they belong
-    // to the provider, and `MapboxNavigationSession` owns applying them.
-    MapboxNavigationSession.shared.setDistanceUnit(distanceUnit)
     MapboxNavigationSession.shared.setMuted(mute)
     MapboxNavigationSession.shared.setVoiceVolume(voiceVolume)
+    MapboxNavigationSession.legAdvance.set(waypointAdvance != "manual")
     viewController.showsSpeedLimits = showsSpeedLimits
     applySpeedLimitVisibility(to: viewController)
     applyNativeFloatingButtonsConfiguration(to: viewController)
+    applyNativeResumeButtonVisibility(to: viewController)
     applyEmbeddedBannerVisibility(to: viewController)
-    // These are all first-class NavigationViewController properties in the
-    // Mapbox Navigation iOS v2 SDK; earlier versions of this package warned
-    // that they were unsupported and silently dropped them.
     viewController.showsContinuousAlternatives = showsContinuousAlternatives
     viewController.usesNightStyleWhileInTunnel = usesNightStyleWhileInTunnel
     viewController.routeLineTracksTraversal = routeLineTracksTraversal
@@ -487,9 +602,7 @@ class MapboxNavigationView: ExpoView {
     applyRouteLineColors()
     applyCameraConfiguration(to: viewController)
     
-    // Attach to the nearest owning view controller in the current RN hierarchy.
     if let parent = nearestViewController() {
-      // Add as child view controller
       parent.addChild(viewController)
       addSubview(viewController.view)
       viewController.view.frame = bounds
@@ -497,31 +610,25 @@ class MapboxNavigationView: ExpoView {
       viewController.didMove(toParent: parent)
       
       navigationViewController = viewController
-      // Subscribed before `applyMapStyle` triggers the load, not after: the
-      // load can finish first, and `onStyleLoaded` does not replay for a style
-      // that is already loaded, so subscribing afterwards missed it entirely.
       observeStyleLoads()
-      // The view has now loaded, so `styleManager` exists — force the map's
-      // day/night tiles to match `uiTheme` (see applyMapStyle).
       applyMapStyle(to: viewController)
-      // The banner views are built in `loadView`, before `styleManager` gets a
-      // chance to run `apply()`, so the appearance proxies alone would not have
-      // reached them. The SDK's own answer is `forceRefreshAppearance`, which
-      // detaches and re-adds every window subview — that is not something to
-      // depend on with a React Native root in that window, so recolour the
-      // hierarchy we own directly.
       MapboxNavigationTheme.refresh(in: viewController)
 
-      // `applyRouteLineColors` reads
-      // `navigationViewController?.navigationMapView`, so it has to come after
-      // that property is assigned above — called any earlier it silently did
-      // nothing, and a `colors` value supplied at mount never reached the
-      // route line.
       applyRouteLineColors()
       applyMapStyleConfig()
       renderNavigationMarkersIfPossible()
+      renderNavigationLinesIfPossible()
       applyLocationPuck(for: .activeNavigation, force: true)
       hostViewController = parent
+      armGuidanceWatchdog()
+      MapboxNavigationSession.shared.setGuidanceActive(true)
+      observeCameraStates(of: viewController)
+      setCameraFollowingState(isCameraFollowing, reason: "guidance-started", force: true)
+      observeRoutes(of: viewController)
+      observeLocationMatching(of: viewController)
+      applyCameraPadding()
+      needsInPlaceReroute = true
+      performInPlaceRerouteIfNeeded()
     } else {
       NavigationSessionRegistry.shared.release(owner: sessionOwner)
       dispatchError([
@@ -534,6 +641,17 @@ class MapboxNavigationView: ExpoView {
   override func layoutSubviews() {
     super.layoutSubviews()
     navigationViewController?.view.frame = bounds
+
+    if shouldRestartWhenWindowAppears,
+       enabled,
+       window != nil,
+       navigationViewController == nil,
+       !isRouteCalculationInProgress,
+       bounds.width > 0, bounds.height > 0 {
+      shouldRestartWhenWindowAppears = false
+      startNavigationIfReady()
+    }
+    applyCameraPadding()
   }
   
   deinit {
@@ -541,20 +659,53 @@ class MapboxNavigationView: ExpoView {
   }
   
   private func cleanupNavigation() {
-    // Invalidate any in-flight route calculation callback so it can't re-attach navigation after teardown.
     routeRequestToken = UUID()
+    isDetachedWhileAlive = false
+    detachedTeardown?.cancel()
+    detachedTeardown = nil
+    lastBannerPayload = nil
+    isReportedOffRoute = false
     isRouteCalculationInProgress = false
     clearNavigationMarkers()
+    renderedNavigationLineIds.removeAll()
     navigationViewController?.willMove(toParent: nil)
     navigationViewController?.view.removeFromSuperview()
     navigationViewController?.removeFromParent()
+    if navigationViewController != nil {
+      MapboxNavigationSession.shared.setGuidanceActive(false)
+    }
     navigationViewController = nil
     styleLoadedSubscription = nil
+    routesSubscription = nil
+    cameraStateSubscription = nil
+    locationMatchingSubscription = nil
+    lastLocationEmitAt = 0
+    pendingCameraReason = nil
     hasCameraPanGesture = false
-    if isWaitingForOriginFix {
-      isWaitingForOriginFix = false
-      originLocationManager.stopUpdatingLocation()
-    }
+    cancelGuidanceWatchdog()
+    hasReceivedRouteProgress = false
+    usesEmptyBanners = false
+    sdkViewportPadding = nil
+    lastEmittedRouteKey = nil
+    lastBannerKey = nil
+    routedDestination = nil
+    routedDestinationCurb = false
+    routedIntermediateWaypoints = []
+    routedWaypointsProp = []
+    needsInPlaceReroute = false
+    needsMapStyleUpdate = false
+    cameraBeforeStyleSwap = nil
+    inPlaceRerouteToken = UUID()
+    inPlaceRerouteTask?.cancel()
+    inPlaceRerouteTask = nil
+    inPlaceRerouteTarget = nil
+    inPlaceRerouteRetry?.cancel()
+    inPlaceRerouteRetry = nil
+    inPlaceRerouteAttempt = 0
+    isTargetRerouteFailing = false
+    sessionStateSubscription = nil
+    stopWaitingForOriginFix()
+    acceptedOriginFix = nil
     setCameraFollowingState(true, reason: "cleanup")
     NavigationSessionRegistry.shared.release(owner: sessionOwner)
     if MapboxNavigationView.activeInstance === self {
@@ -577,17 +728,48 @@ class MapboxNavigationView: ExpoView {
     for (markerId, annotation) in Array(navigationMarkerAnnotations) where !nextIds.contains(markerId) {
       annotation.remove()
       navigationMarkerAnnotations.removeValue(forKey: markerId)
+      forgetMarkerMotion(markerId)
     }
 
     for marker in markerPayloads {
       let metrics = resolveNavigationMarkerMetrics(marker.size)
+      let picture = marker.image.flatMap(markerImage)
+
+      if let annotation = navigationMarkerAnnotations[marker.id],
+         (annotation.view.tag == NavigationMarkerViewTag.image) != (picture != nil) {
+        annotation.remove()
+        navigationMarkerAnnotations.removeValue(forKey: marker.id)
+      }
+
+      if let picture, let annotation = navigationMarkerAnnotations[marker.id] {
+        let shown = markerShownAt[marker.id] ?? marker.coordinate
+        if let imageView = annotation.view as? UIImageView, imageView.image !== picture {
+          imageView.image = picture
+          imageView.frame = CGRect(origin: .zero, size: picture.size)
+        }
+        applyNavigationMarkerOptions(to: annotation, marker: marker, metrics: metrics)
+        glideMarker(marker.id, annotation: annotation, from: shown, to: marker.coordinate, animates: marker.animatesMovement)
+        continue
+      }
+
+      if let picture {
+        let annotation = ViewAnnotation(
+          annotatedFeature: .geometry(Turf.Point(marker.coordinate)),
+          view: makeImageMarkerView(marker, image: picture)
+        )
+        applyNavigationMarkerOptions(to: annotation, marker: marker, metrics: metrics)
+        annotationManager.add(annotation)
+        navigationMarkerAnnotations[marker.id] = annotation
+        markerShownAt[marker.id] = marker.coordinate
+        markerUpdatedAt[marker.id] = CACurrentMediaTime()
+        continue
+      }
 
       if let annotation = navigationMarkerAnnotations[marker.id] {
-        // v11 updates are plain property mutation on the retained annotation —
-        // there is no throwing `update(view:options:)` to fall back from, so the
-        // add/remove/re-add recovery dance v10 needed is gone.
+        let shown = markerShownAt[marker.id] ?? marker.coordinate
         bindNavigationMarkerView(annotation.view, marker: marker, metrics: metrics)
         applyNavigationMarkerOptions(to: annotation, marker: marker, metrics: metrics)
+        glideMarker(marker.id, annotation: annotation, from: shown, to: marker.coordinate, animates: marker.animatesMovement)
         continue
       }
 
@@ -601,16 +783,162 @@ class MapboxNavigationView: ExpoView {
       applyNavigationMarkerOptions(to: annotation, marker: marker, metrics: metrics)
       annotationManager.add(annotation)
       navigationMarkerAnnotations[marker.id] = annotation
+      markerShownAt[marker.id] = marker.coordinate
+      markerUpdatedAt[marker.id] = CACurrentMediaTime()
+    }
+  }
+
+  private func glideMarker(
+    _ id: String,
+    annotation: ViewAnnotation,
+    from: CLLocationCoordinate2D,
+    to: CLLocationCoordinate2D,
+    animates: Bool
+  ) {
+    let now = CACurrentMediaTime()
+    let since = now - (markerUpdatedAt[id] ?? now)
+    markerUpdatedAt[id] = now
+    let distance = CLLocation(latitude: from.latitude, longitude: from.longitude)
+      .distance(from: CLLocation(latitude: to.latitude, longitude: to.longitude))
+    guard animates, distance >= 0.3, distance <= Self.markerGlideMaxDistance, since > 0 else {
+      markerMotions.removeValue(forKey: id)
+      markerShownAt[id] = to
+      annotation.annotatedFeature = .geometry(Turf.Point(to))
+      return
+    }
+    annotation.annotatedFeature = .geometry(Turf.Point(from))
+    markerShownAt[id] = from
+    markerMotions[id] = MarkerMotion(from: from, to: to, start: now, duration: min(max(since, 0.3), 3))
+    if markerDisplayLink == nil {
+      let link = CADisplayLink(target: self, selector: #selector(stepMarkerMotions(_:)))
+      link.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
+      link.add(to: .main, forMode: .common)
+      markerDisplayLink = link
+    }
+  }
+
+  @objc
+  private func stepMarkerMotions(_ link: CADisplayLink) {
+    let now = CACurrentMediaTime()
+    for (id, motion) in markerMotions {
+      guard let annotation = navigationMarkerAnnotations[id] else {
+        markerMotions.removeValue(forKey: id)
+        continue
+      }
+      let t = min(1, max(0, (now - motion.start) / motion.duration))
+      let point = CLLocationCoordinate2D(
+        latitude: motion.from.latitude + (motion.to.latitude - motion.from.latitude) * t,
+        longitude: motion.from.longitude + (motion.to.longitude - motion.from.longitude) * t
+      )
+      annotation.annotatedFeature = .geometry(Turf.Point(point))
+      markerShownAt[id] = point
+      if t >= 1 { markerMotions.removeValue(forKey: id) }
+    }
+    if markerMotions.isEmpty { stopMarkerDisplayLink() }
+  }
+
+  private func stopMarkerDisplayLink() {
+    markerDisplayLink?.invalidate()
+    markerDisplayLink = nil
+  }
+
+  private func forgetMarkerMotion(_ id: String) {
+    markerMotions.removeValue(forKey: id)
+    markerShownAt.removeValue(forKey: id)
+    markerUpdatedAt.removeValue(forKey: id)
+    if markerMotions.isEmpty { stopMarkerDisplayLink() }
+  }
+
+  private static func navigationLineSourceId(_ id: String) -> String { "rnmbn-line-\(id)" }
+  private static func navigationLineLayerId(_ id: String) -> String { "rnmbn-line-\(id)-layer" }
+
+  private struct NavigationLinePayload {
+    let id: String
+    let coordinates: [CLLocationCoordinate2D]
+    let color: UIColor
+    let width: Double
+    let opacity: Double
+    let dash: [Double]?
+  }
+
+  private func parseNavigationLine(_ value: [String: Any]) -> NavigationLinePayload? {
+    guard let rawId = value["id"] as? String else { return nil }
+    let id = rawId.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !id.isEmpty else { return nil }
+    let points = (value["coordinates"] as? [[String: Any]] ?? []).compactMap { point -> CLLocationCoordinate2D? in
+      guard let latitude = (point["latitude"] as? NSNumber)?.doubleValue,
+            let longitude = (point["longitude"] as? NSNumber)?.doubleValue,
+            latitude.isFinite, longitude.isFinite else { return nil }
+      return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+    let width = (value["width"] as? NSNumber)?.doubleValue ?? 4
+    let opacity = ((value["opacity"] as? NSNumber)?.doubleValue ?? 1).clamped(to: 0...1)
+    let dash = (value["dash"] as? [NSNumber])?.map(\.doubleValue).filter { $0.isFinite && $0 >= 0 }
+    return NavigationLinePayload(
+      id: id,
+      coordinates: points,
+      color: HexColor.parse(value["color"]) ?? UIColor.systemBlue,
+      width: width.isFinite && width > 0 ? width : 4,
+      opacity: opacity,
+      dash: (dash?.count ?? 0) >= 2 ? dash : nil
+    )
+  }
+
+  private func renderNavigationLinesIfPossible() {
+    guard let mapboxMap = currentNavigationMapView()?.mapboxMap, mapboxMap.isStyleLoaded else { return }
+    let payloads = (navigationLines ?? []).compactMap(parseNavigationLine).filter { $0.coordinates.count >= 2 }
+    let nextIds = Set(payloads.map(\.id))
+
+    for id in renderedNavigationLineIds where !nextIds.contains(id) {
+      try? mapboxMap.removeLayer(withId: Self.navigationLineLayerId(id))
+      try? mapboxMap.removeSource(withId: Self.navigationLineSourceId(id))
+    }
+    renderedNavigationLineIds = renderedNavigationLineIds.intersection(nextIds)
+
+    for line in payloads {
+      let sourceId = Self.navigationLineSourceId(line.id)
+      let layerId = Self.navigationLineLayerId(line.id)
+      let feature = Feature(geometry: .lineString(LineString(line.coordinates)))
+      if mapboxMap.sourceExists(withId: sourceId) {
+        mapboxMap.updateGeoJSONSource(withId: sourceId, geoJSON: .feature(feature))
+      } else {
+        var source = GeoJSONSource(id: sourceId)
+        source.data = .feature(feature)
+        do {
+          try mapboxMap.addSource(source)
+        } catch {
+          continue
+        }
+      }
+      let style: (inout LineLayer) -> Void = { layer in
+        layer.lineColor = .constant(StyleColor(line.color))
+        layer.lineWidth = .constant(line.width)
+        layer.lineOpacity = .constant(line.opacity)
+        layer.lineCap = .constant(.round)
+        layer.lineJoin = .constant(.round)
+        layer.lineDasharray = line.dash.map { .constant($0) }
+      }
+      if mapboxMap.layerExists(withId: layerId) {
+        try? mapboxMap.updateLayer(withId: layerId, type: LineLayer.self, update: style)
+      } else {
+        var layer = LineLayer(id: layerId, source: sourceId)
+        style(&layer)
+        let puckLayer = ["puck-model-layer", "puck"].first(where: mapboxMap.layerExists(withId:))
+        try? mapboxMap.addLayer(layer, layerPosition: puckLayer.map { .below($0) })
+      }
+      renderedNavigationLineIds.insert(line.id)
     }
   }
 
   private func clearNavigationMarkers() {
-    // `ViewAnnotation.remove()` is safe once the map is gone, so unlike v10 this
-    // no longer needs the manager to be reachable to tear annotations down.
     for annotation in navigationMarkerAnnotations.values {
       annotation.remove()
     }
     navigationMarkerAnnotations.removeAll()
+    markerMotions.removeAll()
+    markerShownAt.removeAll()
+    markerUpdatedAt.removeAll()
+    stopMarkerDisplayLink()
   }
 
   private func parseNavigationMarker(_ value: [String: Any]) -> NavigationMarkerPayload? {
@@ -644,6 +972,11 @@ class MapboxNavigationView: ExpoView {
     let selected = (value["selected"] as? Bool) ?? (variant == "primary" || variant == "success")
     let allowOverlap = (value["allowOverlap"] as? Bool) ?? true
     let anchorOffsetY = (value["anchorOffsetY"] as? NSNumber).map { CGFloat($0.doubleValue) }
+    let image = (value["image"] as? [String: Any]).flatMap { raw -> NavigationMarkerImage? in
+      guard let uri = raw["uri"] as? String, !uri.isEmpty else { return nil }
+      let scale = (raw["scale"] as? NSNumber).map { CGFloat($0.doubleValue) } ?? UIScreen.main.scale
+      return NavigationMarkerImage(uri: uri, scale: max(scale, 1))
+    }
 
     return NavigationMarkerPayload(
       id: id,
@@ -660,26 +993,31 @@ class MapboxNavigationView: ExpoView {
       showTail: showTail,
       selected: selected,
       allowOverlap: allowOverlap,
-      anchorOffsetY: anchorOffsetY
+      anchorOffsetY: anchorOffsetY,
+      image: image,
+      animatesMovement: (value["animatesMovement"] as? Bool) ?? false
     )
   }
 
-  /// Apply marker placement to a v11 `ViewAnnotation`.
-  ///
-  /// Maps v11 made `ViewAnnotationOptions.geometry`, `.anchor`, `.offsetX`,
-  /// `.offsetY` and `.associatedFeatureId` **unavailable** — they are declared
-  /// `@available(*, unavailable)` and trap with `fatalError()`. The single
-  /// anchor plus offset pair is replaced by `variableAnchors`, a list of
-  /// candidate `ViewAnnotationAnchorConfig`s; supplying exactly one entry
-  /// reproduces v10's fixed-anchor behaviour rather than letting the SDK pick.
-  ///
-  /// `selected` is deprecated in favour of `priority`, where a higher number
-  /// draws on top. v10's `selected: true` meant "place above others", so it maps
-  /// to a positive priority.
-  ///
-  /// Width and height are no longer part of placement — the annotation measures
-  /// its view — so `metrics.markerWidth` / `markerHeight` are applied to the
-  /// view itself in `bindNavigationMarkerView`.
+  private func markerImage(_ image: NavigationMarkerImage) -> UIImage? {
+    if let cached = NavigationMarkerImageLoader.cached(image) { return cached }
+    NavigationMarkerImageLoader.load(image) { [weak self] in
+      self?.renderNavigationMarkersIfPossible()
+    }
+    return nil
+  }
+
+  private func makeImageMarkerView(_ marker: NavigationMarkerPayload, image: UIImage) -> UIView {
+    let view = UIImageView(image: image)
+    view.tag = NavigationMarkerViewTag.image
+    view.frame = CGRect(origin: .zero, size: image.size)
+    view.contentMode = .scaleAspectFit
+    view.isAccessibilityElement = true
+    view.accessibilityLabel = marker.label ?? marker.id
+    view.accessibilityIdentifier = marker.id
+    return view
+  }
+
   private func applyNavigationMarkerOptions(
     to annotation: ViewAnnotation,
     marker: NavigationMarkerPayload,
@@ -689,6 +1027,8 @@ class MapboxNavigationView: ExpoView {
     annotation.annotatedFeature = .geometry(Turf.Point(marker.coordinate))
     annotation.allowOverlap = marker.allowOverlap
     annotation.visible = true
+    annotation.ignoreCameraPadding = true
+    annotation.allowOverlapWithPuck = true
     annotation.variableAnchors = [
       ViewAnnotationAnchorConfig(anchor: .bottom, offsetX: 0, offsetY: offsetY)
     ]
@@ -766,7 +1106,6 @@ class MapboxNavigationView: ExpoView {
     glyphLabel.font = .boldSystemFont(ofSize: metrics.glyphFontSize)
     glyphLabel.text = marker.glyph
 
-    // Tail: only for pin style when showTail is true
     let showTailView = marker.markerStyle == "pin" && marker.showTail
     tail.isHidden = !showTailView
     if showTailView {
@@ -890,11 +1229,6 @@ class MapboxNavigationView: ExpoView {
     )
   }
 
-  // MARK: - Event dispatch
-
-  /// Send an event to both the view prop callback and the module-level
-  /// listeners that back the exported `add*Listener` helpers. The bridge
-  /// drops the payload when nothing is subscribed.
 
   private func dispatchLocationChange(_ payload: [String: Any]) {
     onLocationChange(payload)
@@ -921,9 +1255,127 @@ class MapboxNavigationView: ExpoView {
     MapboxNavigationEventBridge.shared.emit("onCameraFollowingStateChange", payload)
   }
 
+  private func bannerInstructionPayload(for progress: RouteProgress) -> [String: Any] {
+    let legProgress = progress.currentLegProgress
+    let stepProgress = legProgress.currentStepProgress
+    let visual = stepProgress.currentVisualInstruction
+    let primary = visual?.primaryInstruction
+    let upcoming = legProgress.upcomingStep
+
+    var payload: [String: Any] = [
+      "primaryText": primary?.text ?? upcoming?.instructions ?? legProgress.currentStep.instructions,
+      "stepDistanceRemaining": stepProgress.distanceRemaining
+    ]
+    if let secondary = visual?.secondaryInstruction?.text, !secondary.isEmpty {
+      payload["secondaryText"] = secondary
+    }
+    if let type = primary?.maneuverType ?? upcoming?.maneuverType {
+      payload["maneuverType"] = type.rawValue
+    }
+    if let direction = primary?.maneuverDirection ?? upcoming?.maneuverDirection {
+      payload["maneuverModifier"] = direction.rawValue
+    }
+    if let degrees = primary?.finalHeading {
+      payload["maneuverDegrees"] = degrees
+    }
+    if let drivingSide = visual?.drivingSide ?? upcoming?.drivingSide {
+      payload["drivingSide"] = drivingSide.rawValue
+    }
+    let maneuverType = (primary?.maneuverType ?? upcoming?.maneuverType)?.rawValue ?? ""
+    if maneuverType.contains("roundabout") || maneuverType.contains("rotary"),
+       let exit = upcoming?.exitIndex, exit > 0 {
+      payload["exitNumber"] = exit
+    }
+    let lanes = Self.lanePayload(visual?.tertiaryInstruction)
+    if !lanes.isEmpty {
+      payload["lanes"] = lanes
+    }
+    if let nextManeuver = Self.nextManeuverPayload(for: legProgress) {
+      payload["nextManeuver"] = nextManeuver
+    }
+    return payload
+  }
+
+  private static func lanePayload(_ instruction: VisualInstruction?) -> [[String: Any]] {
+    guard let instruction else { return [] }
+    return instruction.components.compactMap { component in
+      guard case let .lane(indications, isUsable, preferredDirection) = component else { return nil }
+      var lane: [String: Any] = [
+        "indications": indications.descriptions,
+        "active": isUsable
+      ]
+      if isUsable, let preferredDirection {
+        lane["activeDirection"] = preferredDirection.rawValue
+      }
+      return lane
+    }
+  }
+
+  private static func nextManeuverPayload(for legProgress: RouteLegProgress) -> [String: Any]? {
+    guard let upcoming = legProgress.upcomingStep, let followOn = legProgress.followOnStep else { return nil }
+    let instruction = upcoming.instructionsDisplayedAlongStep?.first?.primaryInstruction
+    let text = instruction?.text ?? followOn.instructions
+    guard !text.isEmpty else { return nil }
+    var payload: [String: Any] = [
+      "primaryText": text,
+      "distance": upcoming.distance
+    ]
+    payload["maneuverType"] = (instruction?.maneuverType ?? followOn.maneuverType).rawValue
+    if let direction = instruction?.maneuverDirection ?? followOn.maneuverDirection {
+      payload["maneuverModifier"] = direction.rawValue
+    }
+    if let degrees = instruction?.finalHeading {
+      payload["maneuverDegrees"] = degrees
+    }
+    return payload
+  }
+
+  private static func bannerExtrasKey(_ payload: [String: Any]) -> String {
+    let lanes = (payload["lanes"] as? [[String: Any]] ?? []).map { lane in
+      let indications = (lane["indications"] as? [String] ?? []).joined(separator: "+")
+      let active = (lane["active"] as? Bool ?? false) ? "1" : "0"
+      return "\(indications)/\(active)/\(lane["activeDirection"] as? String ?? "")"
+    }.joined(separator: ",")
+    var nextManeuver = ""
+    if let next = payload["nextManeuver"] as? [String: Any] {
+      nextManeuver = [
+        next["primaryText"] as? String ?? "",
+        next["maneuverType"] as? String ?? "",
+        next["maneuverModifier"] as? String ?? "",
+        String(Int(((next["distance"] as? Double) ?? 0).rounded()))
+      ].joined(separator: "|")
+    }
+    let exit = (payload["exitNumber"] as? Int).map(String.init) ?? ""
+    return [lanes, nextManeuver, exit, payload["drivingSide"] as? String ?? ""].joined(separator: "\u{1E}")
+  }
+
   private func dispatchBannerInstruction(_ payload: [String: Any]) {
     onBannerInstruction(payload)
     MapboxNavigationEventBridge.shared.emit("onBannerInstruction", payload)
+  }
+
+  private func dispatchBannerInstructionIfChanged(for progress: RouteProgress) {
+    let payload = bannerInstructionPayload(for: progress)
+    let distance = (payload["stepDistanceRemaining"] as? CLLocationDistance) ?? 0
+    let degrees = (payload["maneuverDegrees"] as? Double).map { String(Int($0.rounded())) } ?? ""
+    let key = [
+      payload["primaryText"] as? String ?? "",
+      payload["secondaryText"] as? String ?? "",
+      payload["maneuverType"] as? String ?? "",
+      payload["maneuverModifier"] as? String ?? "",
+      degrees,
+      Self.bannerExtrasKey(payload)
+    ].joined(separator: "\u{1F}")
+    let now = CACurrentMediaTime()
+
+    if key == lastBannerKey {
+      guard abs(distance - lastBannerDistance) >= 10, now - lastBannerEmitAt >= 0.25 else { return }
+    }
+    lastBannerKey = key
+    lastBannerDistance = distance
+    lastBannerEmitAt = now
+    lastBannerPayload = payload
+    dispatchBannerInstruction(payload)
   }
 
   private func dispatchArrive(_ payload: [String: Any]) {
@@ -955,37 +1407,81 @@ class MapboxNavigationView: ExpoView {
     onBottomSheetActionPress(payload)
     MapboxNavigationEventBridge.shared.emit("onBottomSheetActionPress", payload)
   }
-  /// Advance the active route to the next leg on a multi-waypoint route without
-  /// restarting the session. Driven by a business event (e.g. a passenger is
-  /// picked up/dropped off) rather than physical arrival at the waypoint. The
-  /// SDK removes the completed leg, recomputes the ETA, and re-focuses the next
-  /// waypoint. Must be called on the main thread.
+  static let matchedLocationMaxDrift: CLLocationDistance = 30
+
+  static func reportedLocation(matched: CLLocation, raw: CLLocation) -> CLLocation {
+    guard CLLocationCoordinate2DIsValid(raw.coordinate), raw.horizontalAccuracy >= 0 else {
+      return matched
+    }
+    let allowed = max(matchedLocationMaxDrift, raw.horizontalAccuracy * 2)
+    return matched.distance(from: raw) > allowed ? raw : matched
+  }
+
+  private func observeLocationMatching(of viewController: NavigationViewController) {
+    locationMatchingSubscription = viewController.mapboxNavigation.navigation().locationMatching
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self, weak viewController] matching in
+        guard let self, let viewController else { return }
+        self.emitLocation(matching, from: viewController)
+      }
+  }
+
+  private func emitLocation(_ matching: MapMatchingState, from viewController: NavigationViewController) {
+    let now = CACurrentMediaTime()
+    let throttleSeconds = max(0, min(eventThrottleMs, 10_000)) / 1000
+    guard throttleSeconds <= 0 || now - lastLocationEmitAt >= throttleSeconds else { return }
+    lastLocationEmitAt = now
+
+    let matched = matching.enhancedLocation
+    let location = Self.reportedLocation(matched: matched, raw: matching.location)
+    var payload: [String: Any] = [
+      "latitude": location.coordinate.latitude,
+      "longitude": location.coordinate.longitude,
+      "bearing": location.course,
+      "speed": location.speed,
+      "altitude": location.altitude,
+      "accuracy": location.horizontalAccuracy,
+      "timestamp": location.timestamp.timeIntervalSince1970 * 1000,
+      "matched": location === matched
+    ]
+    let legProgress = viewController.mapboxNavigation.navigation().currentRouteProgress?
+      .routeProgress.currentLegProgress
+    let limit = matching.speedLimit.value ?? legProgress?.currentSpeedLimit
+    if let sign = limit.flatMap(Self.speedLimitSign) {
+      payload["speedLimit"] = sign
+    }
+    if let roadName = matching.roadName?.text.trimmingCharacters(in: .whitespacesAndNewlines),
+       !roadName.isEmpty {
+      payload["roadName"] = roadName
+    }
+    dispatchLocationChange(payload)
+  }
+
+  private static func speedLimitSign(_ limit: Measurement<UnitSpeed>) -> [String: Any]? {
+    let unit: UnitSpeed = limit.unit == .milesPerHour ? .milesPerHour : .kilometersPerHour
+    let value = limit.converted(to: unit).value
+    guard value.isFinite, value > 0, value < 300 else { return nil }
+    return ["value": Int(value.rounded()), "unit": unit == .milesPerHour ? "mph" : "km/h"]
+  }
+
+
+  private func reportBackOnRoute() {
+    guard isReportedOffRoute else { return }
+    isReportedOffRoute = false
+    dispatchOffRoute(["offRoute": false, "reason": isTargetRerouteFailing ? "destinationChange" : "deviation"])
+  }
+
   private func advanceToNextLeg() {
-    // v2 reached the router through `navigationService.router` and called
-    // `advanceLegIndex(completionHandler:)`. v3 removed both: the navigator is
-    // `mapboxNavigation.navigation()` and the operation is `switchLeg`, which
-    // takes the target index rather than implicitly stepping forward.
     guard let navigationViewController else { return }
     let navigation = navigationViewController.mapboxNavigation.navigation()
     guard let progress = navigation.currentRouteProgress?.routeProgress else { return }
     let legCount = progress.route.legs.count
-    // Already on the final leg (destination) — nothing to advance to.
     guard progress.legIndex < legCount - 1 else { return }
     navigation.switchLeg(newLegIndex: progress.legIndex + 1)
   }
 
-  /// Force the *map* style (day/night tiles) to follow `uiTheme`.
-  ///
-  /// Setting `overrideUserInterfaceStyle` only themes the UIKit chrome; the map
-  /// itself is driven by `StyleManager`, which otherwise auto-switches day/night
-  /// by time of day — so during daylight the map stayed light even when the app
-  /// was dark. Must be called after the controller's view has loaded (its
-  /// `styleManager` is set up in `viewDidLoad`).
   private func applyMapStyle(to viewController: NavigationViewController) {
     guard let styleManager = viewController.styleManager else { return }
-    // Applying a style re-runs the appearance pass. The route line's plain
-    // colours are proxy-backed so they survive it, but the per-congestion
-    // colours live in a struct with no proxy, so re-assert them afterwards.
     defer { applyRouteLineColors(redraw: true) }
     switch uiTheme.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
     case "light", "day":
@@ -999,26 +1495,135 @@ class MapboxNavigationView: ExpoView {
     }
   }
 
-  // MARK: - Start origin resolution
+  private func scheduleMapStyleUpdate() {
+    guard navigationViewController != nil else { return }
+    needsMapStyleUpdate = true
+    DispatchQueue.main.async { [weak self] in
+      self?.applyMapStyleIfNeeded()
+    }
+  }
 
-  /// Prefer an explicit `startOrigin`, otherwise the device's last known fix.
-  private func resolveStartOrigin() -> CLLocationCoordinate2D? {
+  private func applyMapStyleIfNeeded() {
+    guard needsMapStyleUpdate else { return }
+    needsMapStyleUpdate = false
+    guard let viewController = navigationViewController,
+          let styleManager = viewController.styleManager,
+          let navigationMapView = viewController.navigationMapView else { return }
+
+    let dayURL = normalizedStyleURL(primary: mapStyleUriDay, fallback: mapStyleUri)
+    let nightURL = normalizedStyleURL(primary: mapStyleUriNight, fallback: mapStyleUriDay ?? mapStyleUri)
+      ?? dayURL
+
+    for style in styleManager.styles {
+      let requested: URL?
+      switch style.styleType {
+      case .night: requested = nightURL
+      default: requested = dayURL
+      }
+      style.mapStyleURL = requested ?? type(of: style).init().mapStyleURL
+    }
+
+    let current = styleManager.currentStyle ?? styleManager.styles.first
+    cameraBeforeStyleSwap = CameraOptions(cameraState: navigationMapView.mapView.mapboxMap.cameraState)
+    current?.applyMapStyle(to: navigationMapView)
+  }
+
+  private func restoreCameraAfterStyleSwap() {
+    guard let camera = cameraBeforeStyleSwap else { return }
+    cameraBeforeStyleSwap = nil
+    navigationViewController?.navigationMapView?.mapView.mapboxMap.setCamera(to: camera)
+  }
+
+  private func parsedCameraPadding() -> UIEdgeInsets? {
+    guard let cameraPadding else { return nil }
+    func value(_ key: String) -> CGFloat {
+      guard let number = (cameraPadding[key] as? NSNumber)?.doubleValue, number.isFinite else { return 0 }
+      return CGFloat(max(0, number))
+    }
+    return UIEdgeInsets(top: value("top"), left: value("left"), bottom: value("bottom"), right: value("right"))
+  }
+
+  private func applyCameraPadding() {
+    guard let navigationMapView = navigationViewController?.navigationMapView else { return }
+    guard let requested = parsedCameraPadding() else {
+      if let sdkViewportPadding {
+        navigationMapView.viewportPadding = sdkViewportPadding
+        self.sdkViewportPadding = nil
+      }
+      return
+    }
+    let safeArea = navigationMapView.safeAreaInsets
+    let padding = UIEdgeInsets(
+      top: max(0, requested.top - safeArea.top),
+      left: max(0, requested.left - safeArea.left),
+      bottom: max(0, requested.bottom - safeArea.bottom),
+      right: max(0, requested.right - safeArea.right)
+    )
+    guard navigationMapView.viewportPadding != padding else { return }
+    if sdkViewportPadding == nil {
+      sdkViewportPadding = navigationMapView.viewportPadding
+    }
+    navigationMapView.viewportPadding = padding
+  }
+
+  private struct RouteOrigin {
+    let coordinate: CLLocationCoordinate2D
+    let heading: CLLocationDirection?
+
+    init(coordinate: CLLocationCoordinate2D, heading: CLLocationDirection? = nil) {
+      self.coordinate = coordinate
+      self.heading = heading
+    }
+
+    init(location: CLLocation) {
+      self.init(
+        coordinate: location.coordinate,
+        heading: MapboxNavigationView.travelHeading(of: location)
+      )
+    }
+
+    var waypoint: Waypoint {
+      var waypoint = Waypoint(coordinate: coordinate)
+      if let heading {
+        waypoint.heading = heading
+        waypoint.headingAccuracy = 45
+      }
+      return waypoint
+    }
+  }
+
+  private static func travelHeading(of location: CLLocation) -> CLLocationDirection? {
+    guard location.course >= 0, location.speed > headingMinimumSpeed else { return nil }
+    return location.course
+  }
+
+  private static func isGoodOriginFix(_ location: CLLocation) -> Bool {
+    location.horizontalAccuracy >= 0
+      && location.horizontalAccuracy <= originMaxAccuracy
+      && abs(location.timestamp.timeIntervalSinceNow) < originMaxAge
+      && CLLocationCoordinate2DIsValid(location.coordinate)
+  }
+
+  private func resolveStartOrigin() -> RouteOrigin? {
     if let origin = startOrigin,
        let latitude = (origin["latitude"] as? NSNumber)?.doubleValue,
        let longitude = (origin["longitude"] as? NSNumber)?.doubleValue,
        CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: latitude, longitude: longitude)) {
-      return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+      return RouteOrigin(coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude))
     }
 
-    guard let coordinate = originLocationManager.location?.coordinate,
-          CLLocationCoordinate2DIsValid(coordinate) else {
-      return nil
+    if let accepted = acceptedOriginFix,
+       abs(accepted.timestamp.timeIntervalSinceNow) < 30,
+       CLLocationCoordinate2DIsValid(accepted.coordinate) {
+      return RouteOrigin(location: accepted)
     }
-    return coordinate
+
+    if let cached = originLocationManager.location, Self.isGoodOriginFix(cached) {
+      return RouteOrigin(location: cached)
+    }
+    return nil
   }
 
-  /// Begin listening for a single location fix so navigation can start without
-  /// an explicit `startOrigin`.
   private func requestOriginFix() {
     guard !isWaitingForOriginFix else { return }
 
@@ -1035,7 +1640,7 @@ class MapboxNavigationView: ExpoView {
       originLocationManager.requestWhenInUseAuthorization()
     case .authorizedWhenInUse, .authorizedAlways:
       isWaitingForOriginFix = true
-      originLocationManager.requestLocation()
+      beginOriginUpdates()
     default:
       dispatchError([
         "code": "LOCATION_PERMISSION_REQUIRED",
@@ -1044,45 +1649,349 @@ class MapboxNavigationView: ExpoView {
     }
   }
 
-  private func stopWaitingForOriginFix() {
-    isWaitingForOriginFix = false
+  private func beginOriginUpdates() {
+    bestOriginFix = nil
+    hasOriginWaitTimedOut = false
+    originLocationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
+    originLocationManager.startUpdatingLocation()
+
+    originWaitTimeout?.cancel()
+    let timeout = DispatchWorkItem { [weak self] in
+      guard let self, self.isWaitingForOriginFix else { return }
+      self.hasOriginWaitTimedOut = true
+      if let best = self.bestOriginFix {
+        self.acceptOriginFix(best)
+      }
+    }
+    originWaitTimeout = timeout
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.originWaitSeconds, execute: timeout)
+
+    originNoFixReport?.cancel()
+    let noFix = DispatchWorkItem { [weak self] in
+      guard let self, self.isWaitingForOriginFix, self.bestOriginFix == nil else { return }
+      self.originNoFixReport = nil
+      let seconds = Int(Self.guidanceWatchdogTimeout)
+      self.dispatchError([
+        "code": "NO_LOCATION_FIX",
+        "message": "No startOrigin was given and no location fix arrived within \(seconds)s, "
+          + "so no route can be requested yet. Still waiting. On a simulator or emulator, set "
+          + "a location; otherwise pass startOrigin or shouldSimulateRoute."
+      ])
+    }
+    originNoFixReport = noFix
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.guidanceWatchdogTimeout, execute: noFix)
   }
 
-  // MARK: - Custom location puck
+  private func handleOriginFixes(_ locations: [CLLocation]) {
+    for location in locations where location.horizontalAccuracy >= 0
+      && CLLocationCoordinate2DIsValid(location.coordinate) {
+      if let best = bestOriginFix, best.horizontalAccuracy <= location.horizontalAccuracy {
+        continue
+      }
+      bestOriginFix = location
+    }
+    guard let best = bestOriginFix else { return }
+    if Self.isGoodOriginFix(best) || hasOriginWaitTimedOut {
+      acceptOriginFix(best)
+    }
+  }
 
-  /// Resolve and apply the puck configured for `state`.
-  ///
-  /// Falls back to the `default` appearance when the state has no override, and
-  /// leaves the SDK puck untouched when neither is configured. Asset loading is
-  /// asynchronous, so a token guards against a late load overwriting a puck for
-  /// a state the session has since left.
-  /**
-   Apply the `colors` prop to the route line.
+  private func acceptOriginFix(_ location: CLLocation) {
+    acceptedOriginFix = location
+    stopWaitingForOriginFix()
+    startNavigationIfReady()
+  }
 
-   v3 groups these under "RouteLine Customization" on `NavigationMapView`:
-   `routeColor`, `routeCasingColor`, `traversedRouteColor`,
-   `routeAlternateColor`, `routeAlternateCasingColor` and
-   `routeRestrictedAreaColor`, plus per-congestion colours on
-   `congestionConfiguration`.
+  private func stopWaitingForOriginFix() {
+    originWaitTimeout?.cancel()
+    originWaitTimeout = nil
+    originNoFixReport?.cancel()
+    originNoFixReport = nil
+    bestOriginFix = nil
+    hasOriginWaitTimedOut = false
+    guard isWaitingForOriginFix else { return }
+    isWaitingForOriginFix = false
+    originLocationManager.stopUpdatingLocation()
+  }
 
-   `routeColor` is a convenience that writes the `.unknown` and `.low`
-   congestion colours, which is why setting `routeLine` alone is enough to stop
-   a route looking Mapbox-blue: congestion shading is drawn over the base line,
-   and those two bands cover most of a typical route. Explicit `congestion*`
-   values are applied afterwards so they win.
-   */
-  // MARK: - Routing options
 
-  /**
-   Re-request the route after a change to the request parameters.
+  private var resolvedLanguage: String {
+    let trimmed = language.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? (Locale.preferredLanguages.first ?? "en") : trimmed
+  }
 
-   `startNavigationIfReady` deliberately refuses to do anything once a
-   controller exists, so on its own it cannot express "the profile changed, the
-   current route is now wrong". Android already re-requests for
-   `routeAlternatives` by clearing its latch; this gives iOS the same behaviour
-   for the routing props, and makes it explicit that changing one mid-trip
-   restarts guidance rather than silently keeping a stale route.
-   */
+  private func parseIntermediateWaypoints() -> [Waypoint] {
+    (waypoints ?? []).compactMap { wp in
+      guard let lat = (wp["latitude"] as? NSNumber)?.doubleValue,
+            let lng = (wp["longitude"] as? NSNumber)?.doubleValue else {
+        return nil
+      }
+      var waypoint = Waypoint(
+        coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lng),
+        name: wp["name"] as? String
+      )
+      Self.applyApproach(wp, to: &waypoint)
+      return waypoint
+    }
+  }
+
+  private func makeDestinationWaypoint(
+    _ dest: [String: Any],
+    coordinate: CLLocationCoordinate2D
+  ) -> Waypoint {
+    let name = (dest["name"] as? String) ?? (dest["title"] as? String) ?? "Destination"
+    var waypoint = Waypoint(coordinate: coordinate, name: name)
+    Self.applyApproach(dest, to: &waypoint)
+    return waypoint
+  }
+
+  private static func applyApproach(_ value: [String: Any], to waypoint: inout Waypoint) {
+    let approach = (value["approach"] as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    waypoint.allowsArrivingOnOppositeSide = approach != "curb"
+  }
+
+  private func parseDestinationCoordinate() -> CLLocationCoordinate2D? {
+    guard let dest = destination,
+          let lat = (dest["latitude"] as? NSNumber)?.doubleValue,
+          let lng = (dest["longitude"] as? NSNumber)?.doubleValue else {
+      return nil
+    }
+    let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lng)
+    return CLLocationCoordinate2DIsValid(coordinate) ? coordinate : nil
+  }
+
+  private func makeRouteOptions(waypoints: [Waypoint]) -> NavigationRouteOptions {
+    let imperial = distanceUnit == "imperial"
+    let locale = Locale(identifier: resolvedLanguage)
+    let routeOptions = NavigationRouteOptions(
+      waypoints: waypoints,
+      profileIdentifier: resolveProfileIdentifier(),
+      locale: locale,
+      distanceUnit: imperial ? .mile : .kilometer
+    )
+    routeOptions.locale = locale
+    routeOptions.unitMeasurementSystem = distanceUnit == "imperial" ? .imperial : .metric
+    routeOptions.includesAlternativeRoutes = routeAlternatives
+    applyRouteExclusions(to: routeOptions)
+    applyVehicleConstraints(to: routeOptions)
+    return routeOptions
+  }
+
+  private func handleRouteTargetChange() {
+    guard navigationViewController != nil else {
+      if isRouteCalculationInProgress {
+        needsInPlaceReroute = true
+      }
+      startNavigationIfReady()
+      return
+    }
+    needsInPlaceReroute = true
+    DispatchQueue.main.async { [weak self] in
+      self?.performInPlaceRerouteIfNeeded()
+    }
+  }
+
+  func didUpdateProps() {
+    performInPlaceRerouteIfNeeded()
+    applyMapStyleIfNeeded()
+  }
+
+  private func performInPlaceRerouteIfNeeded(isRetry: Bool = false) {
+    guard needsInPlaceReroute else { return }
+    guard let viewController = navigationViewController else { return }
+    needsInPlaceReroute = false
+    guard enabled, let dest = destination, let destCoord = parseDestinationCoordinate() else { return }
+
+    let requestedIntermediates = parseIntermediateWaypoints()
+    let destinationWaypoint = makeDestinationWaypoint(dest, coordinate: destCoord)
+    let destinationCurb = !destinationWaypoint.allowsArrivingOnOppositeSide
+    let target = InPlaceRerouteTarget(
+      destination: destCoord,
+      curb: destinationCurb,
+      waypoints: requestedIntermediates
+    )
+    let waypointsChanged = !RouteTarget.isSameWaypointList(requestedIntermediates, routedWaypointsProp)
+      || destinationCurb != routedDestinationCurb
+
+    if let routed = routedDestination, RouteTarget.isSamePlace(routed, destCoord), !waypointsChanged {
+      abandonInPlaceReroute()
+      return
+    }
+
+    if let pending = inPlaceRerouteTarget {
+      if pending.matches(target), !isRetry { return }
+      if !pending.matches(target) { inPlaceRerouteAttempt = 0 }
+    }
+    inPlaceRerouteRetry?.cancel()
+    inPlaceRerouteRetry = nil
+    inPlaceRerouteToken = UUID()
+    inPlaceRerouteTask?.cancel()
+    inPlaceRerouteTask = nil
+    inPlaceRerouteTarget = target
+
+    let navigation = viewController.mapboxNavigation
+    guard let matching = navigation.navigation().currentLocationMatching else {
+      needsInPlaceReroute = true
+      let poll = DispatchWorkItem { [weak self] in
+        guard let self else { return }
+        self.inPlaceRerouteRetry = nil
+        self.performInPlaceRerouteIfNeeded(isRetry: true)
+      }
+      inPlaceRerouteRetry = poll
+      DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: poll)
+      return
+    }
+
+    let remainingIntermediates: [Waypoint]
+    if waypointsChanged {
+      remainingIntermediates = requestedIntermediates
+    } else {
+      let legIndex = navigation.navigation().currentRouteProgress?.routeProgress.legIndex ?? 0
+      remainingIntermediates = Array(routedIntermediateWaypoints.dropFirst(legIndex))
+    }
+
+    let origin = RouteOrigin(location: matching.enhancedLocation)
+    let routeOptions = makeRouteOptions(
+      waypoints: [origin.waypoint]
+        + remainingIntermediates
+        + [destinationWaypoint]
+    )
+
+    let token = UUID()
+    inPlaceRerouteToken = token
+    let task = navigation.routingProvider().calculateRoutes(options: routeOptions)
+    inPlaceRerouteTask = task
+
+    Task { @MainActor [weak self] in
+      let result = await task.result
+      guard let self,
+            self.inPlaceRerouteToken == token,
+            self.navigationViewController === viewController,
+            self.enabled else { return }
+      self.inPlaceRerouteTask = nil
+
+      switch result {
+      case .success(let navigationRoutes):
+        self.routedDestination = destCoord
+        self.routedDestinationCurb = destinationCurb
+        self.routedIntermediateWaypoints = remainingIntermediates
+        self.routedWaypointsProp = requestedIntermediates
+        self.inPlaceRerouteTarget = nil
+        self.inPlaceRerouteAttempt = 0
+        self.isTargetRerouteFailing = false
+        navigation.tripSession().startActiveGuidance(with: navigationRoutes, startLegIndex: 0)
+        self.emitRouteChange(navigationRoute: navigationRoutes.mainRoute)
+        self.reportBackOnRoute()
+      case .failure(let error):
+        if error is CancellationError { return }
+        var retryable = true
+        if case DirectionsError.unableToRoute = error { retryable = false }
+        self.handleInPlaceRerouteFailure(
+          "Could not route to the new destination; keeping the current route. "
+            + error.localizedDescription,
+          retryable: retryable
+        )
+      }
+    }
+  }
+
+  private func handleInPlaceRerouteFailure(_ message: String, retryable: Bool = true) {
+    if inPlaceRerouteAttempt == 0 {
+      dispatchError([
+        "code": "REROUTE_FAILED",
+        "message": message
+      ])
+    }
+    if !isTargetRerouteFailing {
+      isTargetRerouteFailing = true
+      isReportedOffRoute = true
+      dispatchOffRoute(["offRoute": true, "rerouteFailed": true, "reason": "destinationChange"])
+    }
+    guard retryable else { return }
+    let delays = Self.inPlaceRerouteRetryDelays
+    let delay = delays[min(inPlaceRerouteAttempt, delays.count - 1)]
+    inPlaceRerouteAttempt += 1
+    inPlaceRerouteRetry?.cancel()
+    let retry = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.inPlaceRerouteRetry = nil
+      guard self.enabled,
+            self.navigationViewController != nil,
+            self.inPlaceRerouteTarget != nil,
+            self.inPlaceRerouteTask == nil else { return }
+      self.needsInPlaceReroute = true
+      self.performInPlaceRerouteIfNeeded(isRetry: true)
+    }
+    inPlaceRerouteRetry = retry
+    DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: retry)
+  }
+
+  private func abandonInPlaceReroute() {
+    inPlaceRerouteRetry?.cancel()
+    inPlaceRerouteRetry = nil
+    if inPlaceRerouteTarget != nil {
+      inPlaceRerouteToken = UUID()
+      inPlaceRerouteTask?.cancel()
+      inPlaceRerouteTask = nil
+      inPlaceRerouteTarget = nil
+    }
+    inPlaceRerouteAttempt = 0
+    if isTargetRerouteFailing {
+      isTargetRerouteFailing = false
+      reportBackOnRoute()
+    }
+  }
+
+
+  private func armGuidanceWatchdog() {
+    cancelGuidanceWatchdog()
+    guard !hasReceivedRouteProgress else { return }
+
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      guard self.navigationViewController != nil, !self.hasReceivedRouteProgress else { return }
+      self.guidanceWatchdog = nil
+      let seconds = Int(MapboxNavigationView.guidanceWatchdogTimeout)
+
+      let fix = self.originLocationManager.location
+      let fixAge = fix.map { Date().timeIntervalSince($0.timestamp) }
+      if let fixAge, fixAge <= MapboxNavigationView.guidanceWatchdogTimeout {
+        let age = Int(fixAge)
+        self.dispatchError([
+          "code": "GUIDANCE_NOT_PROGRESSING",
+          "message": "Guidance started but produced no progress in \(seconds)s, "
+            + "although the device has a position (fix is \(age)s old). "
+            + "The navigator is most likely not in active guidance: check for a second "
+            + "MapboxNavigationView mounted at the same time (only one embedded session "
+            + "is supported, see NAVIGATION_SESSION_CONFLICT), and for "
+            + "\"billing session is not running\" in the Mapbox log."
+        ])
+      } else {
+        self.dispatchError([
+          "code": "NO_LOCATION_FIX",
+          "message": "Guidance started but no location fix arrived within \(seconds)s, "
+            + "so the navigator stayed paused. "
+            + "Check that location services are enabled and the simulator has a location set "
+            + "(Features > Location, or `xcrun simctl location <udid> start ...`), "
+            + "or pass `shouldSimulateRoute` to replay the route without device fixes."
+        ])
+      }
+    }
+    guidanceWatchdog = work
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + MapboxNavigationView.guidanceWatchdogTimeout,
+      execute: work
+    )
+  }
+
+  private func cancelGuidanceWatchdog() {
+    guidanceWatchdog?.cancel()
+    guidanceWatchdog = nil
+  }
+
+
+
   func restartRouteRequestIfNeeded() {
     guard navigationViewController != nil else {
       startNavigationIfReady()
@@ -1092,13 +2001,6 @@ class MapboxNavigationView: ExpoView {
     startNavigationIfReady()
   }
 
-  /**
-   Map the `routeProfile` prop onto a `ProfileIdentifier`.
-
-   Defaults to `automobileAvoidingTraffic`, which is what `NavigationRouteOptions`
-   itself defaults to and the only profile this package could reach before 3.0.0
-   — so an existing consumer sees no change.
-   */
   private func resolveProfileIdentifier() -> ProfileIdentifier {
     switch routeProfile.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
     case "driving":
@@ -1118,15 +2020,6 @@ class MapboxNavigationView: ExpoView {
     }
   }
 
-  /**
-   Apply the `routeExclusions` prop.
-
-   The Directions API shares one `exclude` query parameter between road classes
-   and excluded points, and `RouteOptions` mirrors that by encoding
-   `roadClassesToAvoid` and `excludedLocations` into the same key — so both can
-   be set independently here without one clobbering the other.
-   */
-  /// Whether the active profile accepts the driving-only request parameters.
   private var isDrivingProfile: Bool {
     let identifier = resolveProfileIdentifier()
     return identifier == .automobile || identifier == .automobileAvoidingTraffic
@@ -1140,9 +2033,6 @@ class MapboxNavigationView: ExpoView {
       var dropped: [String] = []
       for raw in rawClasses {
         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Walking and cycling accept only `ferry` and `cash_only_tolls`; the
-        // Directions API answers 422 for the rest rather than ignoring them,
-        // which fails the whole route request. Verified against the API.
         if !isDrivingProfile, name != "ferry", name != "cashOnlyTolls" {
           dropped.append(name)
           continue
@@ -1191,8 +2081,6 @@ class MapboxNavigationView: ExpoView {
         }
         coordinates.append(CLLocationCoordinate2D(latitude: latitude, longitude: longitude))
       }
-      // The API rejects the whole request past 50 points, so trim rather than
-      // let a large list fail the route outright.
       if coordinates.count > 50 {
         dispatchError([
           "code": "TOO_MANY_EXCLUDED_LOCATIONS",
@@ -1204,13 +2092,8 @@ class MapboxNavigationView: ExpoView {
     }
   }
 
-  /// Apply the `vehicle` prop. Metres and metric tons, matching `RouteOptions`'
-  /// own units so no conversion is needed beyond wrapping in `Measurement`.
   private func applyVehicleConstraints(to routeOptions: NavigationRouteOptions) {
     guard let vehicle, !vehicle.isEmpty else { return }
-    // `max_height`, `max_width` and `max_weight` are driving-only: the
-    // Directions API answers 422 "Invalid query param" for them on walking and
-    // cycling, which fails the whole request. Verified against the API.
     guard isDrivingProfile else {
       dispatchError([
         "code": "VEHICLE_NOT_SUPPORTED_BY_PROFILE",
@@ -1231,42 +2114,19 @@ class MapboxNavigationView: ExpoView {
     }
   }
 
-  // MARK: - Standard style configuration
 
-  /**
-   Re-apply `mapStyleConfig` every time a style finishes loading.
-
-   Writes to a style import are ignored while the style is still loading, so a
-   config supplied at mount lands too early, and switching `mapStyleUri` at
-   runtime replaces the import the previous config was written to. Subscribing
-   covers both. The SDK's own `StandardDayStyle` does exactly this for its
-   `lightPreset`.
-   */
   private func observeStyleLoads() {
     guard let mapboxMap = navigationViewController?.navigationMapView?.mapView.mapboxMap else {
       return
     }
     styleLoadedSubscription = mapboxMap.onStyleLoaded.sink { [weak self] _ in
+      self?.restoreCameraAfterStyleSwap()
       self?.applyMapStyleConfig(afterStyleLoad: true)
+      self?.renderedNavigationLineIds.removeAll()
+      self?.renderNavigationLinesIfPossible()
     }
   }
 
-  /**
-   Apply the `mapStyleConfig` prop to the basemap style import.
-
-   Standard styles expose their basemap as a configurable import rather than
-   fixed layers, which is what `setStyleImportConfigProperty` writes to. This is
-   the same mechanism the SDK's own `StandardDayStyle` uses to set `lightPreset`.
-
-   Classic styles (`navigation-day-v1`, `streets-v12`) have no `basemap` import,
-   so every write throws. That is not an error worth surfacing per property —
-   the consumer simply paired a config with a style that has nothing to
-   configure — so it is reported once through `onError` and then dropped.
-
-   Re-applied on `styleLoaded` as well as immediately, because writes are
-   silently ignored until the style is loaded and a `mapStyleConfig` set at
-   mount would otherwise land too early.
-   */
   private func applyMapStyleConfig(afterStyleLoad: Bool = false) {
     guard let config = mapStyleConfig, !config.isEmpty else { return }
     guard let mapboxMap = navigationViewController?.navigationMapView?.mapView.mapboxMap else {
@@ -1284,11 +2144,6 @@ class MapboxNavigationView: ExpoView {
     if let show = config["showTransitLabels"] as? Bool { values["showTransitLabels"] = show }
     guard !values.isEmpty else { return }
 
-    // Config properties live on style *imports*, and the import's id is
-    // whatever the style author chose — "basemap" is only the conventional name
-    // used by styles that import Standard (Mapbox's own navigation styles do).
-    // Writing to a hard-coded "basemap" therefore silently did nothing on
-    // styles that name it otherwise, so discover the ids instead.
     let importIds = mapboxMap.styleImports.map(\.id)
     let targets = importIds.isEmpty ? ["basemap"] : importIds
 
@@ -1307,9 +2162,6 @@ class MapboxNavigationView: ExpoView {
       if landed { applied.append(key) } else { failed.append(key) }
     }
 
-    // Only judge support once a style has finished loading. Before that the
-    // map reports no imports at all, so warning from the eager call produced a
-    // false "unsupported" that then latched and hid the later success.
     if !failed.isEmpty, afterStyleLoad, !hasWarnedAboutMapStyleConfig {
       hasWarnedAboutMapStyleConfig = true
       dispatchError([
@@ -1360,7 +2212,6 @@ class MapboxNavigationView: ExpoView {
       navigationMapView.maneuverArrowStrokeColor = arrowStroke
     }
 
-    // Explicit congestion overrides last, so they beat `routeLine`.
     var congestion = navigationMapView.congestionConfiguration
     if let low = color("congestionLow") { congestion.colors.mainRouteColors.low = low }
     if let moderate = color("congestionModerate") { congestion.colors.mainRouteColors.moderate = moderate }
@@ -1371,22 +2222,6 @@ class MapboxNavigationView: ExpoView {
 
     guard redraw else { return }
 
-    // None of the above repaints anything on its own. `congestionConfiguration`
-    // is a plain `var` with no observer, and every property above writes into
-    // it; the values are only read when the route's map features are rebuilt,
-    // which normally happens on the next route refresh. So a `colors` change
-    // mid-trip appeared to do nothing until the driver moved, and nothing at
-    // all while stationary.
-    //
-    // `show(_:routeAnnotationKinds:)` is the SDK's own way to rebuild them. The
-    // annotation kinds are derived exactly as `NavigationMapView` derives them
-    // internally when it re-shows routes after an alternatives update, so the
-    // alternative-route ETA callouts survive the rebuild.
-    //
-    // This resets the traversed-line offset, so a vanishing route line shows
-    // whole again until the next location update calls back into
-    // `travelAlongRouteLine`. That is a momentary blip on an explicit theme
-    // change, which is a better trade than the colour not applying.
     guard let routes = navigationViewController?.navigationRoutes else { return }
     navigationMapView.show(
       routes,
@@ -1410,23 +2245,23 @@ class MapboxNavigationView: ExpoView {
       guard let self, self.puckApplyToken == token else { return }
       guard let mapView = self.navigationViewController?.navigationMapView else { return }
 
-      // v2 assigned `NavigationMapView.userLocationStyle`. v3 removed
-      // `UserLocationStyle` and takes the Maps `PuckType` through `puckType`.
       switch resolution {
       case .style(let puckType):
         mapView.puckType = puckType
       case .hidden:
-        // Still means "transparent puck, location updates continue": v3's
-        // NavigationMapView substitutes an all-clear 2D puck for a nil
-        // `puckType` rather than disabling location.
         mapView.puckType = nil
       case .sdkDefault:
-        // Deliberately `.puck2D()` and not v3's `.puck3D(.navigationDefault)`.
-        // v2's default here was the plain 2D puck, and this migration must not
-        // silently change what existing consumers see.
         mapView.puckType = .puck2D()
       }
     }
+  }
+
+  private func applyBannerChange() {
+    if navigationViewController != nil, usesEmptyBanners, showsManeuverView || showsTripProgress {
+      restartRouteRequestIfNeeded()
+      return
+    }
+    applyDynamicUIOptionsIfPossible()
   }
 
   private func applyDynamicUIOptionsIfPossible() {
@@ -1449,13 +2284,31 @@ class MapboxNavigationView: ExpoView {
   @objc
   private func handleMapPanGesture(_ gesture: UIPanGestureRecognizer) {
     let translation = gesture.translation(in: self)
-    if gesture.state == .changed && abs(translation.y) + abs(translation.x) > 8 {
+    guard gesture.state == .changed, abs(translation.y) + abs(translation.x) > 8 else { return }
+    guard let navigationCamera = navigationViewController?.navigationMapView?.navigationCamera,
+          navigationCamera.currentCameraState != .idle else {
       setCameraFollowingState(false, reason: "gesture")
+      return
     }
+    pendingCameraReason = "gesture"
+    navigationCamera.stop()
+    setCameraFollowingState(false, reason: "gesture")
   }
 
-  private func setCameraFollowingState(_ next: Bool, reason: String) {
-    if isCameraFollowing == next { return }
+  private func observeCameraStates(of viewController: NavigationViewController) {
+    guard let navigationCamera = viewController.navigationMapView?.navigationCamera else { return }
+    cameraStateSubscription = navigationCamera.cameraStates
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] state in
+        guard let self else { return }
+        let reason = self.pendingCameraReason ?? "camera"
+        self.pendingCameraReason = nil
+        self.setCameraFollowingState(state == .following, reason: reason)
+      }
+  }
+
+  private func setCameraFollowingState(_ next: Bool, reason: String, force: Bool = false) {
+    if isCameraFollowing == next, !force { return }
     isCameraFollowing = next
     dispatchCameraFollowingStateChange([
       "isCameraFollowing": next,
@@ -1465,17 +2318,29 @@ class MapboxNavigationView: ExpoView {
   }
 
   private func resumeCameraFollowingInternal(reason: String) {
-    navigationViewController?.navigationMapView?.navigationCamera.update(cameraState: .following)
+    if let navigationCamera = navigationViewController?.navigationMapView?.navigationCamera,
+       navigationCamera.currentCameraState != .following {
+      pendingCameraReason = reason
+      navigationCamera.update(cameraState: .following)
+    }
     setCameraFollowingState(true, reason: reason)
   }
 
   private func applyEmbeddedBannerVisibility(to viewController: NavigationViewController) {
-    // Best-effort: Mapbox iOS v2 exposes top/bottom banner controllers internally.
-    // We access them via KVC to avoid hard dependencies across SDK patch versions.
     let showManeuver = showsManeuverView
     let showTripProgress = showsTripProgress
     let showActionButtons = showsActionButtons
     let showCancel = showCancelButton
+
+    if usesEmptyBanners {
+      applyBottomBannerVisibility(
+        to: viewController,
+        showTripProgress: showTripProgress,
+        showActionButtons: showActionButtons,
+        showCancel: showCancel
+      )
+      return
+    }
 
     if let top = resolveTopBannerController(from: viewController) {
       top.view.isHidden = !showManeuver
@@ -1488,7 +2353,6 @@ class MapboxNavigationView: ExpoView {
         )
       }
     }
-    // Fallback for SDK builds where top banner controller isn't exposed via KVC.
     if !showManeuver {
       hideSubtreeByHints(
         root: viewController.view,
@@ -1539,32 +2403,12 @@ class MapboxNavigationView: ExpoView {
       )
     }
 
-    if let bottom = resolveBottomBannerController(from: viewController) {
-      let showBottom = showTripProgress || (showActionButtons && showCancel)
-      bottom.view.isHidden = !showBottom
-      bottom.view.alpha = showBottom ? 1 : 0
-      bottom.view.isUserInteractionEnabled = showBottom
-
-      bottom.distanceRemainingLabel?.isHidden = !showTripProgress
-      bottom.timeRemainingLabel?.isHidden = !showTripProgress
-      bottom.arrivalTimeLabel?.isHidden = !showTripProgress
-
-      let cancelVisible = showActionButtons && showCancel
-      bottom.cancelButton?.isHidden = !cancelVisible
-      bottom.cancelButton?.alpha = cancelVisible ? 1 : 0
-      bottom.cancelButton?.isUserInteractionEnabled = cancelVisible
-    }
-    // The cancel button lives in this bar, so the bar has to stay up while it
-    // is wanted. `showsActionButtons` alone used to gate that, which meant
-    // hiding the bar also meant giving up every other action button; keying it
-    // on `showCancelButton` lets `showsTripProgress={false}` +
-    // `showCancelButton={false}` hide just this bar.
-    let showBottom = showTripProgress || (showActionButtons && showCancel)
-
-    // `NavigationView.bottomBannerContainerView` is public, so prefer it over
-    // the class-name heuristics below — those are a fallback for SDK builds
-    // that do not expose the banner controllers through KVC.
-    viewController.navigationView.bottomBannerContainerView.isHidden = !showBottom
+    let showBottom = applyBottomBannerVisibility(
+      to: viewController,
+      showTripProgress: showTripProgress,
+      showActionButtons: showActionButtons,
+      showCancel: showCancel
+    )
 
     if !showBottom {
       hideSubtreeByHints(
@@ -1595,7 +2439,37 @@ class MapboxNavigationView: ExpoView {
     }
   }
 
+  @discardableResult
+  private func applyBottomBannerVisibility(
+    to viewController: NavigationViewController,
+    showTripProgress: Bool,
+    showActionButtons: Bool,
+    showCancel: Bool
+  ) -> Bool {
+    let showBottom = showTripProgress || (showActionButtons && showCancel)
+
+    if let bottom = resolveBottomBannerController(from: viewController) {
+      bottom.view.isHidden = !showBottom
+      bottom.view.alpha = showBottom ? 1 : 0
+      bottom.view.isUserInteractionEnabled = showBottom
+
+      bottom.distanceRemainingLabel?.isHidden = !showTripProgress
+      bottom.timeRemainingLabel?.isHidden = !showTripProgress
+      bottom.arrivalTimeLabel?.isHidden = !showTripProgress
+
+      let cancelVisible = showActionButtons && showCancel
+      bottom.cancelButton?.isHidden = !cancelVisible
+      bottom.cancelButton?.alpha = cancelVisible ? 1 : 0
+      bottom.cancelButton?.isUserInteractionEnabled = cancelVisible
+    }
+
+    viewController.navigationView.bottomBannerContainerView.isHidden = !showBottom
+    viewController.navigationView.wayNameView.isHidden = !showsWayNameLabel
+    return showBottom
+  }
+
   private func applySpeedLimitVisibility(to viewController: NavigationViewController) {
+    guard !usesEmptyBanners else { return }
     if showsSpeedLimits {
       showSubtreeByHints(
         root: viewController.view,
@@ -1617,9 +2491,7 @@ class MapboxNavigationView: ExpoView {
         view.isHidden = true
         view.alpha = 0
       }
-      if let nested = view as? UIView {
-        hideSubtreeLabelsByHints(root: nested, hints: hints)
-      }
+      hideSubtreeLabelsByHints(root: view, hints: hints)
     }
   }
 
@@ -1630,7 +2502,6 @@ class MapboxNavigationView: ExpoView {
         if textHints.contains(where: { text.contains($0) }) {
           label.isHidden = true
           label.alpha = 0
-          // Hide small parent stack/card that usually hosts this label.
           var parent = label.superview
           var steps = 0
           while let p = parent, steps < 2 {
@@ -1642,9 +2513,7 @@ class MapboxNavigationView: ExpoView {
           }
         }
       }
-      if let nested = view as? UIView {
-        hideSubtreeByLabelTextHints(root: nested, textHints: textHints)
-      }
+      hideSubtreeByLabelTextHints(root: view, textHints: textHints)
     }
   }
 
@@ -1657,9 +2526,7 @@ class MapboxNavigationView: ExpoView {
         view.alpha = 0
         view.isUserInteractionEnabled = false
       }
-      if let nested = view as? UIView {
-        hideSubtreeByHints(root: nested, hints: hints)
-      }
+      hideSubtreeByHints(root: view, hints: hints)
     }
   }
 
@@ -1672,9 +2539,7 @@ class MapboxNavigationView: ExpoView {
         view.alpha = 1
         view.isUserInteractionEnabled = true
       }
-      if let nested = view as? UIView {
-        showSubtreeByHints(root: nested, hints: hints)
-      }
+      showSubtreeByHints(root: view, hints: hints)
     }
   }
 
@@ -1684,11 +2549,8 @@ class MapboxNavigationView: ExpoView {
     let showAudio = (options["showAudioGuidanceButton"] as? Bool) ?? true
     let showFeedback = (options["showFeedbackButton"] as? Bool) ?? true
 
-    // Honour both switches: the dedicated prop and the floating-button toggle.
     viewController.showsReportFeedback = showsReportFeedback && showFeedback
-    // Was accepted as a prop and never applied — the end-of-route feedback card
-    // showed regardless.
-    viewController.showsEndOfRouteFeedback = showsEndOfRouteFeedback
+    viewController.showsEndOfRouteFeedback = false
     viewController.loadViewIfNeeded()
 
     let existingButtons = viewController.floatingButtons ?? []
@@ -1714,6 +2576,21 @@ class MapboxNavigationView: ExpoView {
     viewController.floatingButtons = filteredButtons
   }
 
+  private func applyNativeResumeButtonVisibility(to viewController: NavigationViewController) {
+    let visible = showsActionButtons
+    func walk(_ view: UIView) {
+      for subview in view.subviews {
+        if let resume = subview as? ResumeButton {
+          resume.alpha = visible ? 1 : 0
+          resume.isUserInteractionEnabled = visible
+        } else {
+          walk(subview)
+        }
+      }
+    }
+    walk(viewController.navigationView)
+  }
+
   private func resolveTopBannerController(from viewController: NavigationViewController) -> UIViewController? {
     let selector = NSSelectorFromString("topBannerViewController")
     guard viewController.responds(to: selector) else {
@@ -1730,28 +2607,7 @@ class MapboxNavigationView: ExpoView {
     return viewController.value(forKey: "bottomBannerViewController") as? BottomBannerViewController
   }
 
-  // MARK: -
 
-  /// Apply `cameraMode` / `cameraPitch` / `cameraZoom`.
-  ///
-  /// v3 reshaped the camera: `NavigationViewportDataSource` became
-  /// `MobileViewportDataSource`, the separate `followingMobileCamera` /
-  /// `overviewMobileCamera` properties collapsed into one
-  /// `currentNavigationCameraOptions` struct holding `followingCamera` and
-  /// `overviewCamera`, and `follow()` / `moveToOverview()` became a single
-  /// `update(cameraState:)`. The `options` gates kept both their name and their
-  /// type (`NavigationViewportDataSourceOptions`).
-  ///
-  /// - Note: A pre-existing bug is preserved here rather than silently changed.
-  ///   In the following branch the `*UpdatesAllowed` gates are left `true`
-  ///   while `cameraPitch` / `cameraZoom` are written. Mapbox documents that a
-  ///   manual value "will be overriden" unless the matching gate is disabled
-  ///   first, so those two props have almost certainly never taken effect in
-  ///   following mode — the overview branch below gets this right and disables
-  ///   the gate. Fixing it would start honouring a pitch/zoom that consumers
-  ///   have been setting to no effect, which is a behaviour change and belongs
-  ///   in its own release rather than buried in a migration. Tracked in
-  ///   docs/v3-migration.md.
   private func applyCameraConfiguration(to viewController: NavigationViewController) {
     guard
       let navigationMapView = viewController.navigationMapView,
@@ -1761,19 +2617,13 @@ class MapboxNavigationView: ExpoView {
     }
 
     let normalizedMode = cameraMode.lowercased()
-    // Read-modify-write once: `currentNavigationCameraOptions` publishes on
-    // every set, so mutating it field by field would emit needless updates.
     var cameraOptions = viewportDataSource.currentNavigationCameraOptions
 
     if normalizedMode == "overview" {
-      // Overview is a distinct NavigationCamera state. This branch previously
-      // mutated the *following* viewport and then called follow(), so overview
-      // never actually engaged.
       viewportDataSource.options.overviewCameraOptions.pitchUpdatesAllowed = false
       cameraOptions.overviewCamera.pitch = 0
 
       if let zoom = cameraZoom {
-        // Pin the caller's zoom, otherwise let the SDK frame the whole route.
         viewportDataSource.options.overviewCameraOptions.zoomUpdatesAllowed = false
         cameraOptions.overviewCamera.zoom = CGFloat(zoom.clamped(to: 1...22))
       }
@@ -1784,8 +2634,6 @@ class MapboxNavigationView: ExpoView {
       return
     }
 
-    // Keep dynamic camera updates in following mode so turn-by-turn camera
-    // behavior (zoom/pitch/bearing adaptation) stays managed by the SDK.
     viewportDataSource.options.followingCameraOptions.pitchUpdatesAllowed = true
     viewportDataSource.options.followingCameraOptions.zoomUpdatesAllowed = true
     viewportDataSource.options.followingCameraOptions.bearingUpdatesAllowed = true
@@ -1803,13 +2651,6 @@ class MapboxNavigationView: ExpoView {
     setCameraFollowingState(true, reason: "config")
   }
 
-  /// Build the v3 `NavigationOptions`.
-  ///
-  /// v2 built this around a `NavigationService` it was handed. v3 replaced that
-  /// single argument with three collaborators taken from the provider —
-  /// `mapboxNavigation`, `voiceController` and `eventsManager` — so the options
-  /// are now assembled from `MapboxNavigationSession` instead of a per-call
-  /// service. `DayStyle` / `NightStyle` and `Style.mapStyleURL` are unchanged.
   private func buildNavigationOptions() -> NavigationOptions {
     let provider = MapboxNavigationSession.shared.provider
 
@@ -1822,14 +2663,8 @@ class MapboxNavigationView: ExpoView {
       fallback: mapStyleUriDay ?? mapStyleUri
     )
 
-    // The palette has to be recorded before the view controller is built: the
-    // chrome reads its colours from `UIAppearance` proxies at view-creation
-    // time, and `ThemedDayStyle.apply()` is what populates them.
     MapboxNavigationTheme.configure(with: colors)
 
-    // Supplying styles at all is what gets `apply()` called, so the themed pair
-    // is needed whenever there is either a custom map style or a chrome colour.
-    // With neither, leaving `styles` nil keeps the SDK's own defaults.
     let styles: [Style]?
     if dayStyleURL == nil && nightStyleURL == nil && MapboxNavigationTheme.palette.isEmpty {
       styles = nil
@@ -1849,14 +2684,18 @@ class MapboxNavigationView: ExpoView {
       styles = [dayStyle, nightStyle]
     }
 
+    usesEmptyBanners = !showsManeuverView && !showsTripProgress
+    let keepsBottomBanner = showsActionButtons && showCancelButton
+
     return NavigationOptions(
       mapboxNavigation: provider.mapboxNavigation,
       voiceController: provider.routeVoiceController,
       eventsManager: provider.eventsManager(),
       styles: styles,
-      // Carrying the provider's predictive cache manager through is what keeps
-      // v3's map-tile prefetching active for the embedded map; omitting it
-      // silently disables caching.
+      topBanner: usesEmptyBanners ? EmptyBannerViewController() : nil,
+      bottomBanner: usesEmptyBanners && !keepsBottomBanner
+        ? EmptyBannerViewController()
+        : nil,
       predictiveCacheManager: provider.predictiveCacheManager
     )
   }
@@ -1884,20 +2723,56 @@ class MapboxNavigationView: ExpoView {
     }
   }
 
-  private func emitRouteChange(route: Route) {
-    guard let shape = route.shape else { return }
-    emitRouteChange(coordinates: shape.coordinates)
+  private static func routeIdString(_ routeId: RouteId) -> String? {
+    guard let data = try? JSONEncoder().encode([routeId]) else { return nil }
+    return (try? JSONDecoder().decode([String].self, from: data))?.first
   }
 
-  private func emitRouteChange(coordinates: [CLLocationCoordinate2D]) {
-    guard !coordinates.isEmpty else { return }
-    let coords = coordinates.map { coordinate in
-      [
-        "latitude": coordinate.latitude,
-        "longitude": coordinate.longitude
-      ]
+  private func emitRouteChange(navigationRoute: NavigationRoute) {
+    guard let coordinates = navigationRoute.route.shape?.coordinates, !coordinates.isEmpty else { return }
+    let routeId = Self.routeIdString(navigationRoute.routeId)
+    let key = routeId ?? {
+      let first = coordinates[0]
+      let last = coordinates[coordinates.count - 1]
+      return "\(coordinates.count):\(first.latitude),\(first.longitude):\(last.latitude),\(last.longitude)"
+    }()
+    guard key != lastEmittedRouteKey else { return }
+    lastEmittedRouteKey = key
+
+    var payload: [String: Any] = [
+      "coordinates": coordinates.map { coordinate in
+        [
+          "latitude": coordinate.latitude,
+          "longitude": coordinate.longitude
+        ]
+      }
+    ]
+    if let routeId {
+      payload["routeId"] = routeId
     }
-    dispatchRouteChange(["coordinates": coords])
+    dispatchRouteChange(payload)
+  }
+
+  private func observeRoutes(of viewController: NavigationViewController) {
+    routesSubscription = viewController.mapboxNavigation.tripSession().navigationRoutes
+      .compactMap { $0?.mainRoute }
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self, weak viewController] mainRoute in
+        guard let self, let viewController, self.navigationViewController === viewController else { return }
+        let remainingStops = max(0, mainRoute.route.legs.count - 1)
+        if remainingStops < self.routedIntermediateWaypoints.count {
+          self.routedIntermediateWaypoints = Array(self.routedIntermediateWaypoints.suffix(remainingStops))
+        }
+        self.emitRouteChange(navigationRoute: mainRoute)
+      }
+    sessionStateSubscription = viewController.mapboxNavigation.tripSession().session
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self, weak viewController] session in
+        guard let self, let viewController, self.navigationViewController === viewController else { return }
+        guard case .activeGuidance(.tracking) = session.state else { return }
+        guard !self.isTargetRerouteFailing else { return }
+        self.reportBackOnRoute()
+      }
   }
 
   private func nearestViewController() -> UIViewController? {
@@ -1912,15 +2787,36 @@ class MapboxNavigationView: ExpoView {
   }
 }
 
-// MARK: - NavigationViewControllerDelegate
 extension MapboxNavigationView: NavigationViewControllerDelegate {
-  // v3 narrowed this callback: v2 also passed `at location: CLLocation?` and
-  // `proactive: Bool`. Neither was used here, so nothing is lost.
+  func navigationViewController(
+    _ navigationViewController: NavigationViewController,
+    waypointCircleLayerWithIdentifier identifier: String,
+    sourceIdentifier: String
+  ) -> CircleLayer? {
+    guard !showsWaypoints else { return nil }
+    var layer = CircleLayer(id: identifier, source: sourceIdentifier)
+    layer.visibility = .constant(.none)
+    return layer
+  }
+
+  func navigationViewController(
+    _ navigationViewController: NavigationViewController,
+    waypointSymbolLayerWithIdentifier identifier: String,
+    sourceIdentifier: String
+  ) -> SymbolLayer? {
+    guard !showsWaypoints else { return nil }
+    var layer = SymbolLayer(id: identifier, source: sourceIdentifier)
+    layer.visibility = .constant(.none)
+    return layer
+  }
+
   func navigationViewController(
     _ navigationViewController: NavigationViewController,
     didRerouteAlong route: Route
   ) {
-    emitRouteChange(route: route)
+    reportBackOnRoute()
+    guard let mainRoute = navigationViewController.navigationRoutes?.mainRoute else { return }
+    emitRouteChange(navigationRoute: mainRoute)
   }
 
   func navigationViewController(
@@ -1929,10 +2825,12 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
     with location: CLLocation,
     rawLocation: CLLocation
   ) {
-    // Mapbox rebuilds parts of its banner hierarchy as guidance proceeds, so
-    // the visibility pass has to run more than once — but it walks the entire
-    // view tree, so throttle it instead of running it on every update.
-    if !showsManeuverView || !showsTripProgress || !showsActionButtons || !showsSpeedLimits || !showsWayNameLabel {
+    if !hasReceivedRouteProgress {
+      hasReceivedRouteProgress = true
+      cancelGuidanceWatchdog()
+    }
+    if !usesEmptyBanners,
+       !showsManeuverView || !showsTripProgress || !showsActionButtons || !showsSpeedLimits || !showsWayNameLabel {
       let now = CACurrentMediaTime()
       if now - lastDynamicUIRefreshAt >= Self.dynamicUIRefreshInterval {
         lastDynamicUIRefreshAt = now
@@ -1940,11 +2838,6 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
       }
     }
 
-    if cameraMode.lowercased() == "following" && isCameraFollowing {
-      navigationViewController.navigationMapView?.navigationCamera.update(cameraState: .following)
-    }
-
-    // Throttle the continuous stream; banner/arrival below are unaffected.
     let nowTime = CACurrentMediaTime()
     let throttleSeconds = max(0, min(eventThrottleMs, 10_000)) / 1000
     let shouldEmitContinuous =
@@ -1955,34 +2848,23 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
     }
 
     guard shouldEmitContinuous else {
-      dispatchBannerInstruction([
-        "primaryText": progress.currentLegProgress.currentStep.instructions,
-        "stepDistanceRemaining": progress.currentLegProgress.currentStepProgress.distanceRemaining
-      ])
+      dispatchBannerInstructionIfChanged(for: progress)
       return
     }
 
-    dispatchLocationChange([
-      "latitude": location.coordinate.latitude,
-      "longitude": location.coordinate.longitude,
-      "bearing": location.course,
-      "speed": location.speed,
-      "altitude": location.altitude,
-      "accuracy": location.horizontalAccuracy
-    ])
-    
     dispatchRouteProgressChange([
       "distanceTraveled": progress.distanceTraveled,
       "distanceRemaining": progress.distanceRemaining,
       "durationRemaining": progress.durationRemaining,
       "fractionTraveled": progress.fractionTraveled,
-      "legIndex": progress.legIndex
+      "legIndex": progress.legIndex,
+      "legDistanceRemaining": progress.currentLegProgress.distanceRemaining,
+      "legDurationRemaining": progress.currentLegProgress.durationRemaining
     ])
 
-    dispatchBannerInstruction([
-      "primaryText": progress.currentLegProgress.currentStep.instructions,
-      "stepDistanceRemaining": progress.currentLegProgress.currentStepProgress.distanceRemaining
-    ])
+    dispatchBannerInstructionIfChanged(for: progress)
+
+    guard journeyDataEnabled else { return }
 
     let secondaryInstruction = progress.currentLegProgress.currentStep.names?.first
       ?? progress.currentLegProgress.currentStep.description
@@ -2006,35 +2888,23 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
     ])
   }
   
-  /// v3 changed this from `-> Bool` to `Void`.
-  ///
-  /// In v2 the return value decided whether the SDK auto-advanced to the next
-  /// leg, and this returned `true` to keep the default behaviour. v3 moved that
-  /// decision to `CoreConfig.multilegAdvancing`, whose default is
-  /// `.automatically` — so leg advance still happens on its own and the
-  /// behaviour is unchanged. `MapboxNavigationSession` leaves that field at its
-  /// default deliberately.
   func navigationViewController(
     _ navigationViewController: NavigationViewController,
     didArriveAt waypoint: Waypoint
   ) {
-    // This fires for EVERY leg destination, not just the final one. Previously
-    // an intermediate stop emitted a plain `onArrive`, so on a multi-stop route
-    // the JS end-of-route flow triggered at the first waypoint.
-    // `navigationService` is gone in v3; route progress now comes off the
-    // navigator via the view controller's `mapboxNavigation`.
     guard let progress = navigationViewController.mapboxNavigation.navigation()
       .currentRouteProgress?.routeProgress
     else { return }
     let isFinal = progress.isFinalLeg
     let payload: [String: Any] = [
-      "index": progress.legIndex,
+      "index": max(0, routedWaypointsProp.count - routedIntermediateWaypoints.count) + progress.legIndex,
       "name": waypoint.name ?? "",
       "isFinalDestination": isFinal,
       "remainingWaypoints": progress.remainingWaypoints.count
     ]
 
     if isFinal {
+      guard inPlaceRerouteTarget == nil else { return }
       applyLocationPuck(for: .arrival)
       dispatchArrive(payload)
     } else {
@@ -2046,11 +2916,12 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
     _ navigationViewController: NavigationViewController,
     willRerouteFrom location: CLLocation?
   ) {
-    var payload: [String: Any] = [:]
+    var payload: [String: Any] = ["offRoute": true, "reason": "deviation"]
     if let location {
       payload["latitude"] = location.coordinate.latitude
       payload["longitude"] = location.coordinate.longitude
     }
+    isReportedOffRoute = true
     dispatchOffRoute(payload)
   }
 
@@ -2058,6 +2929,8 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
     _ navigationViewController: NavigationViewController,
     didFailToRerouteWith error: Error
   ) {
+    isReportedOffRoute = true
+    dispatchOffRoute(["offRoute": true, "rerouteFailed": true, "reason": "deviation"])
     dispatchError([
       "code": "REROUTE_FAILED",
       "message": error.localizedDescription
@@ -2068,23 +2941,21 @@ extension MapboxNavigationView: NavigationViewControllerDelegate {
     _ navigationViewController: NavigationViewController,
     byCanceling canceled: Bool
   ) {
-    if canceled {
-      dispatchCancelNavigation([:])
-    }
+    guard canceled else { return }
+    dispatchCancelNavigation([:])
     cleanupNavigation()
   }
 }
 
-// MARK: - CLLocationManagerDelegate
 extension MapboxNavigationView: CLLocationManagerDelegate {
   func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-    guard isWaitingForOriginFix, locations.last != nil else { return }
-    stopWaitingForOriginFix()
-    startNavigationIfReady()
+    guard isWaitingForOriginFix else { return }
+    handleOriginFixes(locations)
   }
 
   func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
     guard isWaitingForOriginFix else { return }
+    if (error as? CLError)?.code == .locationUnknown { return }
     stopWaitingForOriginFix()
     dispatchError([
       "code": "START_ORIGIN_UNAVAILABLE",
@@ -2102,7 +2973,7 @@ extension MapboxNavigationView: CLLocationManagerDelegate {
     }
 
     if status == .authorizedWhenInUse || status == .authorizedAlways {
-      manager.requestLocation()
+      beginOriginUpdates()
     } else if status != .notDetermined {
       stopWaitingForOriginFix()
       dispatchError([

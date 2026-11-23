@@ -1,0 +1,16 @@
+appId: com.expomapboxnavigationexample
+name: The 3D puck is drawn above the route line
+tags:
+  - navigation
+  - puck
+---
+- runFlow: subflows/launch.yaml
+- scrollUntilVisible:
+    element: 'Location Puck.*'
+    direction: DOWN
+    centerElement: true
+- tapOn: 'Location Puck.*'
+- assertVisible: 'Remote glTF model, scaled by a zoom expression.*'
+- waitForAnimationToEnd:
+    timeout: 15000
+- takeScreenshot: .maestro-artifacts/location-puck-3d

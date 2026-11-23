@@ -6,7 +6,6 @@ import expo.modules.kotlin.modules.ModuleDefinition
 
 class MapboxNavigationModule : Module() {
   companion object {
-    /** Events forwarded to JS module listeners via `add*Listener`. */
     val MODULE_EVENT_NAMES = listOf(
       "onLocationChange",
       "onRouteProgressChange",
@@ -45,8 +44,6 @@ class MapboxNavigationModule : Module() {
       MapboxNavigationEventBridge.clearEmitter()
     }
 
-    // Track subscriptions per event so the bridge can skip emitting entirely
-    // when nothing is listening.
     MODULE_EVENT_NAMES.forEach { eventName ->
       OnStartObserving(eventName) {
         MapboxNavigationEventBridge.startObserving(eventName)
@@ -155,6 +152,10 @@ class MapboxNavigationModule : Module() {
         view.setNavigationMarkers(markers)
       }
 
+      Prop("navigationLines") { view: MapboxNavigationView, lines: List<Map<String, Any>>? ->
+        view.setNavigationLines(lines)
+      }
+
       Prop("shouldSimulateRoute") { view: MapboxNavigationView, simulate: Boolean ->
         view.setShouldSimulateRoute(simulate)
       }
@@ -211,6 +212,14 @@ class MapboxNavigationModule : Module() {
         view.setShowsWayNameLabel(value)
       }
 
+      Prop("showsWaypoints") { view: MapboxNavigationView, value: Boolean ->
+        view.setShowsWaypoints(value)
+      }
+
+      Prop("waypointAdvance") { view: MapboxNavigationView, value: String? ->
+        view.setWaypointAdvance(value)
+      }
+
       Prop("showsTripProgress") { view: MapboxNavigationView, value: Boolean ->
         view.setShowsTripProgress(value)
       }
@@ -227,9 +236,6 @@ class MapboxNavigationModule : Module() {
         view.setShowsReportFeedback(value)
       }
 
-      Prop("showsEndOfRouteFeedback") { view: MapboxNavigationView, value: Boolean ->
-        view.setShowsEndOfRouteFeedback(value)
-      }
 
       Prop("showsContinuousAlternatives") { view: MapboxNavigationView, value: Boolean ->
         view.setShowsContinuousAlternatives(value)
@@ -289,6 +295,26 @@ class MapboxNavigationModule : Module() {
 
       Prop("eventThrottleMs") { view: MapboxNavigationView, value: Double ->
         view.setEventThrottleMs(value)
+      }
+
+      Prop("cameraPadding") { view: MapboxNavigationView, value: Map<String, Any>? ->
+        view.setCameraPadding(value)
+      }
+
+      Prop("ornamentBottomMargin") { view: MapboxNavigationView, value: Double? ->
+        view.setOrnamentBottomMargin(value)
+      }
+
+      Prop("journeyDataEnabled") { view: MapboxNavigationView, value: Boolean ->
+        view.setJourneyDataEnabled(value)
+      }
+
+      Prop("keepAliveWhenDetached") { view: MapboxNavigationView, value: Boolean ->
+        view.setKeepAliveWhenDetached(value)
+      }
+
+      OnViewDestroys { view: MapboxNavigationView ->
+        view.destroyFromReact()
       }
     }
   }

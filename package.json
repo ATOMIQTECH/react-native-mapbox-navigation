@@ -1,19 +1,23 @@
 {
   "name": "@atomiqlab/react-native-mapbox-navigation",
-  "version": "3.1.0",
+  "version": "4.0.0",
   "description": "Native Mapbox turn-by-turn navigation for Expo and React Native (iOS + Android)",
-  "main": "src/index.tsx",
-  "types": "src/index.tsx",
-  "react-native": "src/index.tsx",
-  "exports": {
-    ".": {
-      "types": "./src/index.tsx",
-      "default": "./src/index.tsx"
-    },
-    "./app.plugin.js": "./app.plugin.js",
-    "./package.json": "./package.json"
+  "keywords": [
+    "expo",
+    "mapbox",
+    "navigation",
+    "react-native",
+    "turn-by-turn"
+  ],
+  "homepage": "https://github.com/ATOMIQTECH/react-native-mapbox-navigation#readme",
+  "bugs": {
+    "url": "https://github.com/ATOMIQTECH/react-native-mapbox-navigation/issues"
   },
-  "sideEffects": false,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ATOMIQTECH/react-native-mapbox-navigation"
+  },
   "files": [
     "android/src",
     "android/build.gradle",
@@ -22,7 +26,7 @@
     "ios/*.swift",
     "ios/*.rb",
     "src",
-    "app.plugin.js",
+    "app.plugin.ts",
     "expo-module.config.json",
     "README.md",
     "QUICKSTART.md",
@@ -30,56 +34,66 @@
     "SECURITY.md",
     "docs"
   ],
-  "scripts": {
-    "build": "expo-module build",
-    "clean": "expo-module clean",
-    "format": "biome format --write",
-    "biome:check": "biome check",
-    "lint": "expo-module lint -- --ext .ts,.tsx",
-    "test": "expo-module test --passWithNoTests",
-    "verify": "node ./scripts/verify-release.mjs",
-    "verify:parity": "node ./scripts/verify-parity.mjs"
-  },
-  "keywords": [
-    "react-native",
-    "expo",
-    "mapbox",
-    "navigation",
-    "turn-by-turn"
-  ],
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/ATOMIQTECH/react-native-mapbox-navigation"
-  },
-  "homepage": "https://github.com/ATOMIQTECH/react-native-mapbox-navigation#readme",
-  "bugs": {
-    "url": "https://github.com/ATOMIQTECH/react-native-mapbox-navigation/issues"
+  "sideEffects": false,
+  "main": "src/index.tsx",
+  "types": "src/index.tsx",
+  "react-native": "src/index.tsx",
+  "exports": {
+    ".": {
+      "types": "./src/index.tsx",
+      "default": "./src/index.tsx"
+    },
+    "./package.json": "./package.json",
+    "./app.plugin": "./app.plugin.ts",
+    "./app.plugin.ts": "./app.plugin.ts"
   },
   "publishConfig": {
     "access": "public"
   },
-  "engines": {
-    "node": ">=18"
+  "scripts": {
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm check:source && pnpm knip && pnpm verify:parity",
+    "check:source": "node scripts/check-source.mjs",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "knip": "knip",
+    "lint": "node scripts/lint.mjs",
+    "lint:commit": "commitlint --edit",
+    "lint:fix": "oxlint --type-aware --fix",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "verify": "node ./scripts/verify-release.mjs",
+    "verify:parity": "node ./scripts/verify-parity.mjs"
   },
-  "mapbox": {
-    "navigation": "3.30.1",
-    "maps": "11.30.1",
-    "turf": "4.0.0"
-  },
-  "expo": {
-    "plugins": [
-      "./app.plugin.js"
-    ]
+  "devDependencies": {
+    "@commitlint/cli": "^21.2.4",
+    "@commitlint/config-conventional": "^21.2.4",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.2.14",
+    "expo-module-scripts": "^56.0.3",
+    "expo-modules-core": "~57.0.17",
+    "knip": "^6.47.0",
+    "oxfmt": "^0.79.0",
+    "oxlint": "^1.94.0",
+    "oxlint-tsgolint": "^7.0.2008",
+    "typescript": "^5.9.3"
   },
   "peerDependencies": {
-    "expo": ">=50",
+    "expo": ">=56",
     "react": "*",
     "react-native": "*"
   },
-  "devDependencies": {
-    "@biomejs/biome": "^2.4.5",
-    "expo-module-scripts": "^56.0.3",
-    "typescript": "^5.9.3"
+  "engines": {
+    "node": ">=18"
+  },
+  "packageManager": "pnpm@12.21.0",
+  "expo": {
+    "plugins": [
+      "./app.plugin.ts"
+    ]
+  },
+  "mapbox": {
+    "navigation": "3.35.2",
+    "maps": "11.35.2",
+    "turf": "4.1.0"
   }
 }
