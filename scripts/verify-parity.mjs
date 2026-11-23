@@ -23,7 +23,7 @@ const PLATFORM_SPECIFIC_PROPS = {
 const matchAll = (src, re) => [...src.matchAll(re)].map((m) => m[1])
 
 function extractProps(src) {
-  return new Set(matchAll(src, /\bProp\(\s*"([A-Za-z0-9_]+)"\s*\)/g))
+  return new Set(matchAll(src, /\bProp\(\s*"([A-Za-z0-9_]+)"\s*(?:,[^){]*)?\)/g))
 }
 
 function extractAsyncFunctions(src) {

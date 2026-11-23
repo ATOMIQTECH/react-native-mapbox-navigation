@@ -141,6 +141,21 @@ The rest of this release upstreams a downstream app's production patch against
 
 ### Fixed
 
+- **Android: with `keepAliveWhenDetached`, the map came back black** after a
+  screen was pushed over it and popped. The session kept running, but the
+  `MapView` had bound to the covered screen fragment's lifecycle and was
+  destroyed with it. It now follows the activity, so it only stops and restarts.
+- **Clearing a prop left the old value in place**, and on Android threw
+  "Cannot set prop". Going from a value to `undefined` — `mute={x || undefined}`,
+  or turning the overlay bottom sheet off, which hands back the caller's own
+  `showsTripProgress`/`showsManeuverView`/`showsActionButtons`/`showCancelButton`
+  — now resets the prop to its default on both platforms.
+- **iOS: `showsTripProgress={false}` and `showsManeuverView={false}` were
+  ignored** whenever the other banner stayed up: the time, distance and arrival
+  labels stayed beside the cancel button, and the maneuver banner could not be
+  hidden. Both banners were looked up by names Navigation SDK v3 no longer uses.
+- **`onRouteChange` fired again for the same route** when a kept-alive view
+  came back, contradicting "only a new route geometry emits an event".
 - **iOS: toggling `shouldSimulateRoute` crashed** with "MapboxNavigationProvider
   was instantiated twice".
 - **iOS: the JS banner showed the maneuver already driven**, paired with the

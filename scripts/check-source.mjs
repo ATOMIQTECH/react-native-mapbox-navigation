@@ -7,8 +7,8 @@ import process from 'node:process'
 const MAX_LINES = 500
 
 const LINE_ALLOWANCES = {
-  'android/src/main/java/expo/modules/mapboxnavigation/MapboxNavigationView.kt': 3011,
-  'ios/MapboxNavigationView.swift': 2709,
+  'android/src/main/java/expo/modules/mapboxnavigation/MapboxNavigationView.kt': 3010,
+  'ios/MapboxNavigationView.swift': 2701,
 }
 
 const ALLOWED_COMMENT = /^(?:WARNING:|frozen_string_literal:)/

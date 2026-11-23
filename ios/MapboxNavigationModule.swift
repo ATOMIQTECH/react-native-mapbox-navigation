@@ -215,7 +215,7 @@ public class MapboxNavigationModule: Module {
         view.startOrigin = origin
       }
 
-      Prop("enabled") { (view: MapboxNavigationView, enabled: Bool) in
+      Prop("enabled", false) { (view: MapboxNavigationView, enabled: Bool) in
         view.enabled = enabled
       }
 
@@ -235,63 +235,63 @@ public class MapboxNavigationModule: Module {
         view.navigationLines = lines
       }
 
-      Prop("shouldSimulateRoute") { (view: MapboxNavigationView, simulate: Bool) in
+      Prop("shouldSimulateRoute", false) { (view: MapboxNavigationView, simulate: Bool) in
         view.shouldSimulateRoute = simulate
       }
 
-      Prop("showCancelButton") { (view: MapboxNavigationView, show: Bool) in
+      Prop("showCancelButton", true) { (view: MapboxNavigationView, show: Bool) in
         view.showCancelButton = show
       }
 
-      Prop("mute") { (view: MapboxNavigationView, mute: Bool) in
+      Prop("mute", false) { (view: MapboxNavigationView, mute: Bool) in
         view.mute = mute
       }
 
-      Prop("voiceVolume") { (view: MapboxNavigationView, volume: Double) in
+      Prop("voiceVolume", 1.0) { (view: MapboxNavigationView, volume: Double) in
         view.voiceVolume = volume
       }
 
-      Prop("cameraPitch") { (view: MapboxNavigationView, pitch: Double) in
+      Prop("cameraPitch") { (view: MapboxNavigationView, pitch: Double?) in
         view.cameraPitch = pitch
       }
 
-      Prop("cameraZoom") { (view: MapboxNavigationView, zoom: Double) in
+      Prop("cameraZoom") { (view: MapboxNavigationView, zoom: Double?) in
         view.cameraZoom = zoom
       }
 
-      Prop("cameraMode") { (view: MapboxNavigationView, mode: String) in
+      Prop("cameraMode", "following") { (view: MapboxNavigationView, mode: String) in
         view.cameraMode = mode
       }
 
-      Prop("mapStyleUri") { (view: MapboxNavigationView, mapStyleUri: String) in
+      Prop("mapStyleUri") { (view: MapboxNavigationView, mapStyleUri: String?) in
         view.mapStyleUri = mapStyleUri
       }
 
-      Prop("mapStyleUriDay") { (view: MapboxNavigationView, mapStyleUriDay: String) in
+      Prop("mapStyleUriDay") { (view: MapboxNavigationView, mapStyleUriDay: String?) in
         view.mapStyleUriDay = mapStyleUriDay
       }
 
-      Prop("mapStyleUriNight") { (view: MapboxNavigationView, mapStyleUriNight: String) in
+      Prop("mapStyleUriNight") { (view: MapboxNavigationView, mapStyleUriNight: String?) in
         view.mapStyleUriNight = mapStyleUriNight
       }
 
-      Prop("uiTheme") { (view: MapboxNavigationView, uiTheme: String) in
+      Prop("uiTheme", "system") { (view: MapboxNavigationView, uiTheme: String) in
         view.uiTheme = uiTheme
       }
 
-      Prop("routeAlternatives") { (view: MapboxNavigationView, routeAlternatives: Bool) in
+      Prop("routeAlternatives", false) { (view: MapboxNavigationView, routeAlternatives: Bool) in
         view.routeAlternatives = routeAlternatives
       }
 
-      Prop("showsSpeedLimits") { (view: MapboxNavigationView, showsSpeedLimits: Bool) in
+      Prop("showsSpeedLimits", true) { (view: MapboxNavigationView, showsSpeedLimits: Bool) in
         view.showsSpeedLimits = showsSpeedLimits
       }
 
-      Prop("showsWayNameLabel") { (view: MapboxNavigationView, showsWayNameLabel: Bool) in
+      Prop("showsWayNameLabel", true) { (view: MapboxNavigationView, showsWayNameLabel: Bool) in
         view.showsWayNameLabel = showsWayNameLabel
       }
 
-      Prop("showsWaypoints") { (view: MapboxNavigationView, showsWaypoints: Bool) in
+      Prop("showsWaypoints", true) { (view: MapboxNavigationView, showsWaypoints: Bool) in
         view.showsWaypoints = showsWaypoints
       }
 
@@ -299,40 +299,40 @@ public class MapboxNavigationModule: Module {
         view.waypointAdvance = waypointAdvance ?? "automatic"
       }
 
-      Prop("showsTripProgress") { (view: MapboxNavigationView, showsTripProgress: Bool) in
+      Prop("showsTripProgress", true) { (view: MapboxNavigationView, showsTripProgress: Bool) in
         view.showsTripProgress = showsTripProgress
       }
 
-      Prop("showsManeuverView") { (view: MapboxNavigationView, showsManeuverView: Bool) in
+      Prop("showsManeuverView", true) { (view: MapboxNavigationView, showsManeuverView: Bool) in
         view.showsManeuverView = showsManeuverView
       }
 
-      Prop("showsActionButtons") { (view: MapboxNavigationView, showsActionButtons: Bool) in
+      Prop("showsActionButtons", true) { (view: MapboxNavigationView, showsActionButtons: Bool) in
         view.showsActionButtons = showsActionButtons
       }
 
-      Prop("showsReportFeedback") { (view: MapboxNavigationView, showsReportFeedback: Bool) in
+      Prop("showsReportFeedback", true) { (view: MapboxNavigationView, showsReportFeedback: Bool) in
         view.showsReportFeedback = showsReportFeedback
       }
 
 
-      Prop("showsContinuousAlternatives") { (view: MapboxNavigationView, showsContinuousAlternatives: Bool) in
+      Prop("showsContinuousAlternatives", true) { (view: MapboxNavigationView, showsContinuousAlternatives: Bool) in
         view.showsContinuousAlternatives = showsContinuousAlternatives
       }
 
-      Prop("usesNightStyleWhileInTunnel") { (view: MapboxNavigationView, usesNightStyleWhileInTunnel: Bool) in
+      Prop("usesNightStyleWhileInTunnel", true) { (view: MapboxNavigationView, usesNightStyleWhileInTunnel: Bool) in
         view.usesNightStyleWhileInTunnel = usesNightStyleWhileInTunnel
       }
 
-      Prop("routeLineTracksTraversal") { (view: MapboxNavigationView, routeLineTracksTraversal: Bool) in
+      Prop("routeLineTracksTraversal", false) { (view: MapboxNavigationView, routeLineTracksTraversal: Bool) in
         view.routeLineTracksTraversal = routeLineTracksTraversal
       }
 
-      Prop("annotatesIntersectionsAlongRoute") { (view: MapboxNavigationView, annotatesIntersectionsAlongRoute: Bool) in
+      Prop("annotatesIntersectionsAlongRoute", false) { (view: MapboxNavigationView, annotatesIntersectionsAlongRoute: Bool) in
         view.annotatesIntersectionsAlongRoute = annotatesIntersectionsAlongRoute
       }
 
-      Prop("distanceUnit") { (view: MapboxNavigationView, unit: String) in
+      Prop("distanceUnit", "metric") { (view: MapboxNavigationView, unit: String) in
         view.distanceUnit = unit
       }
 
@@ -340,7 +340,7 @@ public class MapboxNavigationModule: Module {
         view.nativeFloatingButtons = value
       }
 
-      Prop("language") { (view: MapboxNavigationView, language: String) in
+      Prop("language", "") { (view: MapboxNavigationView, language: String) in
         view.language = language
       }
 
@@ -371,7 +371,7 @@ public class MapboxNavigationModule: Module {
         view.locationPuck = value
       }
 
-      Prop("eventThrottleMs") { (view: MapboxNavigationView, value: Double) in
+      Prop("eventThrottleMs", 0.0) { (view: MapboxNavigationView, value: Double) in
         view.eventThrottleMs = value
       }
 

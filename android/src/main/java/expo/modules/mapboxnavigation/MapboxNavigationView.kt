@@ -654,7 +654,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         "reason" to "reattach"
       )
     )
-    lastEmittedRouteSignature = null
     lastBannerSignature = null
     lastBannerDistance = Double.NaN
     runCatching { mapboxNavigation?.getNavigationRoutes()?.firstOrNull() }
@@ -1371,6 +1370,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       ViewGroup.LayoutParams.MATCH_PARENT,
       ViewGroup.LayoutParams.MATCH_PARENT
     )
+    // WARNING: must precede addView, or the MapView binds to the screen fragment's lifecycle and is destroyed when a screen covers it.
+    attachViewTreeOwnersIfPossible(this, activity)
     nativeLayer.addView(mapView)
     attachedMapView = mapView
     appliedStyleUri = resolveStyleUri()
@@ -1382,8 +1383,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         armLayerOrderGuard()
       }
     }.getOrNull()
-
-    attachViewTreeOwnersIfPossible(this, activity)
 
     val sound = MapboxAudioGuidanceButton(activity).also { soundButton = it }
     addSoundButton(sound)

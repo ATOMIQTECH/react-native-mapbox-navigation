@@ -395,7 +395,6 @@ class MapboxNavigationView: ExpoView {
     viewController.view.frame = bounds
     applyCameraPadding()
     resumeCameraFollowingInternal(reason: "reattach")
-    lastEmittedRouteKey = nil
     if let mainRoute = viewController.mapboxNavigation.tripSession().currentNavigationRoutes?.mainRoute {
       emitRouteChange(navigationRoute: mainRoute)
     }
@@ -579,8 +578,9 @@ class MapboxNavigationView: ExpoView {
       navigationOptions: navigationOptions
     )
     viewController.extraOrnamentBottomMargin = resolvedOrnamentBottomMargin
-    viewController.onViewDidAppear = { [weak self] in
+    viewController.onViewDidAppear = { [weak self, weak viewController] in
       self?.applyCameraPadding()
+      if let viewController { self?.applyEmbeddedBannerVisibility(to: viewController) }
     }
 
     viewController.delegate = self
@@ -2592,19 +2592,11 @@ class MapboxNavigationView: ExpoView {
   }
 
   private func resolveTopBannerController(from viewController: NavigationViewController) -> UIViewController? {
-    let selector = NSSelectorFromString("topBannerViewController")
-    guard viewController.responds(to: selector) else {
-      return nil
-    }
-    return viewController.value(forKey: "topBannerViewController") as? UIViewController
+    viewController.children.first { $0 is TopBannerViewController }
   }
 
   private func resolveBottomBannerController(from viewController: NavigationViewController) -> BottomBannerViewController? {
-    let selector = NSSelectorFromString("bottomBannerViewController")
-    guard viewController.responds(to: selector) else {
-      return nil
-    }
-    return viewController.value(forKey: "bottomBannerViewController") as? BottomBannerViewController
+    viewController.children.lazy.compactMap { $0 as? BottomBannerViewController }.first
   }
 
 
