@@ -1,0 +1,121 @@
+{
+  "example/app.config.js": {
+    "typescript(prefer-nullish-coalescing)": 1
+  },
+  "example/metro.config.js": {
+    "eslint(require-await)": 1,
+    "eslint(require-unicode-regexp)": 2,
+    "typescript(require-await)": 1
+  },
+  "example/src/Navigation.tsx": {
+    "import(max-dependencies)": 1
+  },
+  "example/src/hooks/useNavigationLocation.ts": {
+    "eslint(max-lines-per-function)": 1,
+    "unicorn(no-useless-undefined)": 1
+  },
+  "example/src/screens/AppearanceScenarioScreen.tsx": {
+    "eslint(complexity)": 1,
+    "eslint(max-lines-per-function)": 1
+  },
+  "example/src/screens/CoreScenarioScreen.tsx": {
+    "eslint(complexity)": 1,
+    "eslint(max-lines-per-function)": 1,
+    "typescript(strict-boolean-expressions)": 3,
+    "unicorn(no-useless-undefined)": 4
+  },
+  "example/src/screens/EventsScenarioScreen.tsx": {
+    "eslint(eqeqeq)": 1,
+    "eslint(max-lines-per-function)": 1,
+    "typescript(no-base-to-string)": 1,
+    "typescript(no-deprecated)": 1
+  },
+  "example/src/screens/HomeScreen.tsx": {
+    "typescript(no-explicit-any)": 1,
+    "typescript(no-unsafe-assignment)": 1,
+    "typescript(no-unsafe-call)": 1,
+    "typescript(no-unsafe-member-access)": 1
+  },
+  "example/src/screens/LocationPuckScenarioScreen.tsx": {
+    "eslint(max-lines-per-function)": 1
+  },
+  "example/src/screens/MapCoexistenceScenarioScreen.tsx": {
+    "eslint(max-lines-per-function)": 1,
+    "typescript(no-floating-promises)": 1,
+    "typescript(no-unsafe-argument)": 1
+  },
+  "example/src/screens/OverlayScenarioScreen.tsx": {
+    "eslint(eqeqeq)": 1,
+    "eslint(max-lines-per-function)": 1,
+    "react(no-unstable-nested-components)": 2,
+    "typescript(strict-boolean-expressions)": 1
+  },
+  "example/src/screens/RoutingScenarioScreen.tsx": {
+    "eslint(complexity)": 1,
+    "eslint(max-lines-per-function)": 1,
+    "unicorn(consistent-function-scoping)": 1
+  },
+  "example/src/screens/RuntimeScenarioScreen.tsx": {
+    "eslint(max-lines-per-function)": 1
+  },
+  "lint-rules/no-comments.mjs": {
+    "eslint(complexity)": 2,
+    "eslint(require-unicode-regexp)": 3
+  },
+  "scripts/check-source.mjs": {
+    "eslint(complexity)": 3,
+    "eslint(max-depth)": 2,
+    "eslint(max-lines-per-function)": 2,
+    "eslint(require-unicode-regexp)": 3
+  },
+  "scripts/lint.mjs": {
+    "eslint(max-depth)": 1
+  },
+  "scripts/verify-parity.mjs": {
+    "eslint(no-unused-vars)": 1,
+    "eslint(require-unicode-regexp)": 11,
+    "typescript(require-array-sort-compare)": 1,
+    "typescript(restrict-template-expressions)": 2,
+    "unicorn(no-array-sort)": 1
+  },
+  "scripts/verify-release.mjs": {
+    "eslint(complexity)": 2,
+    "eslint(no-underscore-dangle)": 1,
+    "eslint(no-unused-vars)": 2,
+    "eslint(require-unicode-regexp)": 1,
+    "typescript(prefer-nullish-coalescing)": 4
+  },
+  "src/MapboxNavigation.types.ts": {
+    "typescript(no-deprecated)": 1,
+    "typescript(no-explicit-any)": 1,
+    "typescript(no-redundant-type-constituents)": 3
+  },
+  "src/index.tsx": {
+    "eslint(complexity)": 5,
+    "eslint(eqeqeq)": 7,
+    "eslint(max-lines-per-function)": 7,
+    "package(max-file-lines)": 1,
+    "react(static-components)": 2,
+    "react-hooks(exhaustive-deps)": 1,
+    "typescript(no-deprecated)": 2,
+    "typescript(no-explicit-any)": 7,
+    "typescript(no-unnecessary-type-parameters)": 1,
+    "typescript(no-unsafe-argument)": 4,
+    "typescript(no-unsafe-assignment)": 1,
+    "typescript(no-unsafe-member-access)": 1,
+    "typescript(no-unsafe-type-assertion)": 9,
+    "typescript(prefer-nullish-coalescing)": 4,
+    "typescript(strict-boolean-expressions)": 14,
+    "unicorn(consistent-function-scoping)": 2,
+    "unicorn(no-lonely-if)": 1,
+    "unicorn(no-useless-undefined)": 5
+  },
+  "src/resolveLocationPuck.ts": {
+    "eslint(complexity)": 1,
+    "eslint(eqeqeq)": 10,
+    "eslint(require-unicode-regexp)": 1,
+    "typescript(no-unsafe-assignment)": 1,
+    "typescript(no-unsafe-type-assertion)": 2,
+    "typescript(strict-boolean-expressions)": 4
+  }
+}

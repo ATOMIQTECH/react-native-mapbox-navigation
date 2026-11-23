@@ -1,25 +1,24 @@
-// Learn more https://docs.expo.io/guides/customizing-metro
 const { getDefaultConfig } = require('expo/metro-config')
 const path = require('path')
 
 const config = getDefaultConfig(__dirname)
 
-// npm v7+ will install ../node_modules/react and ../node_modules/react-native because of peerDependencies.
-// To prevent the incompatible react-native between ./node_modules/react-native and ../node_modules/react-native,
-// excludes the one from the parent folder when bundling.
+const escapeRegExp = (s) => s.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 config.resolver.blockList = [
   ...Array.from(config.resolver.blockList ?? []),
-  new RegExp(path.resolve('..', 'node_modules', 'react')),
-  new RegExp(path.resolve('..', 'node_modules', 'react-native')),
+  new RegExp(`^${escapeRegExp(path.resolve(__dirname, '..', 'node_modules'))}/`),
 ]
 
-config.resolver.nodeModulesPaths = [
-  path.resolve(__dirname, './node_modules'),
-  path.resolve(__dirname, '../node_modules'),
-]
+config.resolver.nodeModulesPaths = [path.resolve(__dirname, './node_modules')]
+
+const expoDir = path.dirname(require.resolve('expo/package.json', { paths: [__dirname] }))
 
 config.resolver.extraNodeModules = {
-  '@atomiqlab/react-native-mapbox-navigation': '..',
+  '@atomiqlab/react-native-mapbox-navigation': path.resolve(__dirname, '..'),
+  'expo-modules-core': path.dirname(
+    require.resolve('expo-modules-core/package.json', { paths: [expoDir] })
+  ),
 }
 
 config.watchFolders = [path.resolve(__dirname, '..')]

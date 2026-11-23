@@ -12,3 +12,6 @@ node_modules
 # env files (added by remove-malware script)
 .env*
 !.env.example
+
+# Maestro screenshots
+.maestro-artifacts/

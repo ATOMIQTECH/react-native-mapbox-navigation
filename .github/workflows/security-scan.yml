@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # range scans need history
+          fetch-depth: 0 # range scans need history
 
       - name: Scan the changes in this PR
         if: github.event_name == 'pull_request'

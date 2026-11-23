@@ -1,20 +1,3 @@
-// Assert the whole app resolves exactly one Mapbox Maps artifact variant, on an
-// app whose targetSdkVersion is below 35.
-//
-// Why the override: @rnmapbox/maps picks its Maps variant from
-// `rootProject.ext.targetSdkVersion` and only uses `-ndk27` at 35 and above,
-// while this package is always on `-ndk27`. The plain and `-ndk27` artifacts
-// carry the same classes, so an app resolving one of each dies in
-// `checkDebugDuplicateClasses`. Expo's own defaults are 35+, so without forcing
-// a lower value CI would never exercise the case the config plugin fixes.
-//
-// `beforeProject` is the hook that works: Expo's `expo-root-project` plugin sets
-// targetSdkVersion while the root project evaluates, so the override has to land
-// after that and before the @rnmapbox/maps project is evaluated.
-//
-// The assertion reads the *resolved* graph, not `dependencyInsight` output —
-// that prints requested coordinates alongside substituted ones, so grepping it
-// reports a plain-variant "failure" even when substitution worked.
 gradle.beforeProject { project ->
   if (project.name == 'rnmapbox_maps') {
     project.rootProject.ext.targetSdkVersion = 34
