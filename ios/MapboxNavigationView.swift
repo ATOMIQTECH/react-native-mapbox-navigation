@@ -252,8 +252,10 @@ class MapboxNavigationView: ExpoView {
   private var lastBannerPayload: [String: Any]?
   private var isReportedOffRoute = false
   private var isDetachedWhileAlive = false
-  private var detachedTeardown: DispatchWorkItem?
+  private let detachedTeardown = DeferredWork()
   private static let detachedSessionLifetime: TimeInterval = 10 * 60
+  private let windowGraceTeardown = DeferredWork()
+  private static let windowGrace: TimeInterval = 0.5
   private var sdkViewportPadding: UIEdgeInsets?
 
 
@@ -358,6 +360,7 @@ class MapboxNavigationView: ExpoView {
     super.didMoveToWindow()
 
     if window != nil && enabled {
+      windowGraceTeardown.cancel()
       shouldRestartWhenWindowAppears = false
       if isDetachedWhileAlive {
         resumeDetachedSession()
@@ -366,6 +369,11 @@ class MapboxNavigationView: ExpoView {
       }
     } else if window == nil, enabled, keepAliveWhenDetached, navigationViewController != nil {
       pauseForDetach()
+    } else if window == nil, enabled {
+      windowGraceTeardown.schedule(after: Self.windowGrace) { [weak self] in
+        guard let self, self.window == nil else { return }
+        self.cleanupNavigation()
+      }
     } else {
       cleanupNavigation()
     }
@@ -374,20 +382,16 @@ class MapboxNavigationView: ExpoView {
   private func pauseForDetach() {
     guard !isDetachedWhileAlive else { return }
     isDetachedWhileAlive = true
-    detachedTeardown?.cancel()
-    let teardown = DispatchWorkItem { [weak self] in
+    detachedTeardown.schedule(after: Self.detachedSessionLifetime) { [weak self] in
       guard let self, self.isDetachedWhileAlive, self.window == nil else { return }
       self.endDetachedSession()
       self.dispatchCancelNavigation([:])
     }
-    detachedTeardown = teardown
-    DispatchQueue.main.asyncAfter(deadline: .now() + Self.detachedSessionLifetime, execute: teardown)
   }
 
   private func resumeDetachedSession() {
     isDetachedWhileAlive = false
-    detachedTeardown?.cancel()
-    detachedTeardown = nil
+    detachedTeardown.cancel()
     guard let viewController = navigationViewController else {
       startNavigationIfReady()
       return
@@ -571,6 +575,8 @@ class MapboxNavigationView: ExpoView {
   }
   
   private func embedNavigation(navigationRoutes: NavigationRoutes, routeOptions: NavigationRouteOptions) {
+    isRouteCalculationInProgress = true
+    defer { isRouteCalculationInProgress = false }
     let navigationOptions = buildNavigationOptions()
 
     let viewController = EmbeddedNavigationViewController(
@@ -661,8 +667,8 @@ class MapboxNavigationView: ExpoView {
   private func cleanupNavigation() {
     routeRequestToken = UUID()
     isDetachedWhileAlive = false
-    detachedTeardown?.cancel()
-    detachedTeardown = nil
+    detachedTeardown.cancel()
+    windowGraceTeardown.cancel()
     lastBannerPayload = nil
     isReportedOffRoute = false
     isRouteCalculationInProgress = false
@@ -962,12 +968,12 @@ class MapboxNavigationView: ExpoView {
       .trimmingCharacters(in: .whitespacesAndNewlines)
       .nilIfEmpty?
       .prefix(3)
-    let variant = normalizeMarkerVariant(value["variant"] as? String)
+    let variant = NavigationMarkerOptions.variant(value["variant"] as? String)
     let customColor = HexColor.parse(value["color"])
     let customBadgeColor = HexColor.parse(value["badgeColor"])
     let customOpacity = (value["opacity"] as? NSNumber).map { CGFloat($0.doubleValue).clamped(to: 0...1) }
-    let size = normalizeMarkerSize(value["size"] as? String)
-    let markerStyle = normalizeMarkerStyle(value["markerStyle"] as? String)
+    let size = NavigationMarkerOptions.size(value["size"] as? String)
+    let markerStyle = NavigationMarkerOptions.style(value["markerStyle"] as? String)
     let showTail = (value["showTail"] as? Bool) ?? (markerStyle == "pin")
     let selected = (value["selected"] as? Bool) ?? (variant == "primary" || variant == "success")
     let allowOverlap = (value["allowOverlap"] as? Bool) ?? true
@@ -1139,32 +1145,6 @@ class MapboxNavigationView: ExpoView {
       badgeLabel.backgroundColor = badgeColor
     } else {
       badgeLabel.isHidden = true
-    }
-  }
-
-  private func normalizeMarkerVariant(_ raw: String?) -> String {
-    switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-    case "primary": return "primary"
-    case "success": return "success"
-    case "warning": return "warning"
-    case "danger":  return "danger"
-    case "muted":   return "muted"
-    default:        return "default"
-    }
-  }
-
-  private func normalizeMarkerSize(_ raw: String?) -> String {
-    switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-    case "small": return "small"
-    case "large": return "large"
-    default:      return "medium"
-    }
-  }
-
-  private func normalizeMarkerStyle(_ raw: String?) -> String {
-    switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-    case "dot": return "dot"
-    default:    return "pin"
     }
   }
 

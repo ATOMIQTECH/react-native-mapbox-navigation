@@ -156,6 +156,14 @@ The rest of this release upstreams a downstream app's production patch against
   hidden. Both banners were looked up by names Navigation SDK v3 no longer uses.
 - **`onRouteChange` fired again for the same route** when a kept-alive view
   came back, contradicting "only a new route geometry emits an event".
+- **iOS: opening a navigation screen made up to three billed Directions
+  requests** and fired `onRouteChange` up to three times. A navigation stack's
+  push animation takes the view out of the window for a moment while the
+  first route is being embedded, and every detach tore the session down at once,
+  so the route was requested again and then re-routed in place. A detach now
+  waits half a second before tearing down, and a view that returns in time keeps
+  its route; leaving for good still ends the session, and unmounting or
+  `enabled={false}` still ends it immediately.
 - **iOS: toggling `shouldSimulateRoute` crashed** with "MapboxNavigationProvider
   was instantiated twice".
 - **iOS: the JS banner showed the maneuver already driven**, paired with the

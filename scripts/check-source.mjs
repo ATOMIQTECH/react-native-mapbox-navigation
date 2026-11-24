@@ -8,7 +8,7 @@ const MAX_LINES = 500
 
 const LINE_ALLOWANCES = {
   'android/src/main/java/expo/modules/mapboxnavigation/MapboxNavigationView.kt': 3010,
-  'ios/MapboxNavigationView.swift': 2701,
+  'ios/MapboxNavigationView.swift': 2684,
 }
 
 const ALLOWED_COMMENT = /^(?:WARNING:|frozen_string_literal:)/
