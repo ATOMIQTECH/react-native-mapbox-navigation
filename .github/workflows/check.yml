@@ -20,8 +20,16 @@ jobs:
         with:
           node-version: '22'
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            example/pnpm-lock.yaml
 
       - run: pnpm install --frozen-lockfile
+
+      # Type-aware lint covers example/, whose imports only resolve once its
+      # own dependencies are installed; without them they type as `error`.
+      - run: pnpm install --frozen-lockfile
+        working-directory: example
 
       - run: pnpm check
 
