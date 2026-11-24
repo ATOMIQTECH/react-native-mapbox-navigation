@@ -156,6 +156,10 @@ The rest of this release upstreams a downstream app's production patch against
   hidden. Both banners were looked up by names Navigation SDK v3 no longer uses.
 - **`onRouteChange` fired again for the same route** when a kept-alive view
   came back, contradicting "only a new route geometry emits an event".
+- **Android: `navigationMarkers` without an `image` were never drawn.** Maps
+  SDK 11.35 rejects a view annotation whose view has no layout params, and the
+  built-in pin and dot views were created without any, so every such marker
+  failed with only a log warning.
 - **iOS: opening a navigation screen made up to three billed Directions
   requests** and fired `onRouteChange` up to three times. A navigation stack's
   push animation takes the view out of the window for a moment while the

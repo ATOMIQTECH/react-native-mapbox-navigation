@@ -2639,12 +2639,12 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     val label = (value["label"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
     val glyph = (value["glyph"] as? String)?.trim()?.takeIf { it.isNotEmpty() }?.take(2) ?: "•"
     val badge = (value["badge"] as? String)?.trim()?.takeIf { it.isNotEmpty() }?.take(3)
-    val variant = normalizeMarkerVariant(value["variant"] as? String)
+    val variant = NavigationMarkerOptions.variant(value["variant"] as? String)
     val customColor = HexColor.parse(value["color"])
     val customBadgeColor = HexColor.parse(value["badgeColor"])
     val customOpacity = (value["opacity"] as? Number)?.toFloat()?.coerceIn(0f, 1f)
-    val size = normalizeMarkerSize(value["size"] as? String)
-    val markerStyle = normalizeMarkerStyle(value["markerStyle"] as? String)
+    val size = NavigationMarkerOptions.size(value["size"] as? String)
+    val markerStyle = NavigationMarkerOptions.style(value["markerStyle"] as? String)
     val showTail = (value["showTail"] as? Boolean) ?: (markerStyle == "pin")
     val selected = (value["selected"] as? Boolean) ?: (variant == "primary" || variant == "success")
     val allowOverlap = (value["allowOverlap"] as? Boolean) ?: true
@@ -2702,6 +2702,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private fun createNavigationMarkerView(marker: NavigationMarkerPayload): View {
     val markerRoot = LinearLayout(context).apply {
+      layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
       orientation = LinearLayout.VERTICAL
       gravity = Gravity.CENTER_HORIZONTAL
       clipChildren = false
@@ -2819,26 +2820,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
     root.alpha = alpha
     root.contentDescription = marker.label ?: marker.id
-  }
-
-  private fun normalizeMarkerVariant(raw: String?): String = when (raw?.trim()?.lowercase()) {
-    "primary" -> "primary"
-    "success" -> "success"
-    "warning" -> "warning"
-    "danger" -> "danger"
-    "muted" -> "muted"
-    else -> "default"
-  }
-
-  private fun normalizeMarkerSize(raw: String?): String = when (raw?.trim()?.lowercase()) {
-    "small" -> "small"
-    "large" -> "large"
-    else -> "medium"
-  }
-
-  private fun normalizeMarkerStyle(raw: String?): String = when (raw?.trim()?.lowercase()) {
-    "dot" -> "dot"
-    else -> "pin"
   }
 
   private fun resolveNavigationMarkerMetrics(size: String): NavigationMarkerMetrics = when (size) {

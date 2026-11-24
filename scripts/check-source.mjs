@@ -7,7 +7,7 @@ import process from 'node:process'
 const MAX_LINES = 500
 
 const LINE_ALLOWANCES = {
-  'android/src/main/java/expo/modules/mapboxnavigation/MapboxNavigationView.kt': 3010,
+  'android/src/main/java/expo/modules/mapboxnavigation/MapboxNavigationView.kt': 2994,
   'ios/MapboxNavigationView.swift': 2684,
 }
 
