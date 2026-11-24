@@ -1,0 +1,13 @@
+appId: com.expomapboxnavigationexample
+name: Drive from the start to Stop A and wait there, like a driver at a pickup
+---
+- travel:
+    points:
+      - '37.7739,-122.46173'
+      - '37.77359,-122.46415'
+    speed: 10
+- runFlow:
+    file: hold-at.yaml
+    env:
+      LAT: '37.77359'
+      LNG: '-122.46415'

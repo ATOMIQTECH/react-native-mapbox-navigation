@@ -1,0 +1,47 @@
+appId: com.expomapboxnavigationexample
+name: With automatic advance, both stops are reported by their waypoint index, then arrival
+tags:
+  - navigation
+  - waypoints
+---
+- runFlow: subflows/open-journey.yaml
+- runFlow: subflows/drive-to-stop-a.yaml
+- extendedWaitUntil:
+    visible:
+      id: journey-stops
+      text: 'Stops: 0'
+    timeout: 30000
+- travel:
+    points:
+      - '37.77359,-122.46415'
+      - '37.77336,-122.46687'
+    speed: 10
+- runFlow:
+    file: subflows/hold-at.yaml
+    env:
+      LAT: '37.77336'
+      LNG: '-122.46687'
+- extendedWaitUntil:
+    visible:
+      id: journey-stops
+      text: 'Stops: 0,1'
+    timeout: 30000
+- travel:
+    points:
+      - '37.77336,-122.46687'
+      - '37.77326,-122.46912'
+    speed: 10
+- runFlow:
+    file: subflows/hold-at.yaml
+    env:
+      LAT: '37.77326'
+      LNG: '-122.46912'
+- extendedWaitUntil:
+    visible:
+      id: journey-arrived
+      text: 'Arrived: yes'
+    timeout: 30000
+- assertNotVisible:
+    id: journey-error
+    text: '.*\(fatal\).*'
+- takeScreenshot: .maestro-artifacts/waypoints-automatic

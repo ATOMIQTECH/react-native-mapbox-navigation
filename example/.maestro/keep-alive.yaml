@@ -1,0 +1,56 @@
+appId: com.expomapboxnavigationexample
+name: A screen pushed over a kept-alive view leaves its session running; coming back needs no new route and keeps tracking
+tags:
+  - navigation
+  - keep-alive
+---
+- runFlow: subflows/open-journey.yaml
+- waitForAnimationToEnd:
+    timeout: 6000
+- assertVisible:
+    id: journey-routes
+    text: 'Routes: 1'
+- tapOn:
+    id: journey-cover
+- extendedWaitUntil:
+    visible:
+      id: journey-cover-screen
+    timeout: 10000
+- waitForAnimationToEnd:
+    timeout: 6000
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - back
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn:
+          id: BackButton
+- extendedWaitUntil:
+    visible:
+      id: journey-leg
+      text: 'Leg: [0-9]+ \| [0-9]+m left'
+    timeout: 20000
+- assertVisible:
+    id: journey-routes
+    text: 'Routes: 1'
+- travel:
+    points:
+      - '37.7739,-122.46173'
+      - '37.77375,-122.46300'
+    speed: 8
+- extendedWaitUntil:
+    visible:
+      id: journey-leg
+      text: 'Leg: 0 \| [1-5][0-9][0-9]m left'
+    timeout: 20000
+- assertVisible:
+    id: journey-camera
+    text: 'Camera: following'
+- assertNotVisible:
+    id: journey-error
+    text: '.*\(fatal\).*'
+- takeScreenshot: .maestro-artifacts/keep-alive

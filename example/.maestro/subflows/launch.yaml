@@ -18,8 +18,8 @@ name: Launch the example with location granted and open the scenario list
           permissions:
             location: allow
 - setLocation:
-    latitude: 37.7749
-    longitude: -122.4194
+    latitude: 37.7739
+    longitude: -122.46173
 - extendedWaitUntil:
     visible: 'Mapbox Module Test Lab'
     timeout: 180000

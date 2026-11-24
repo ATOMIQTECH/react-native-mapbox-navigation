@@ -1,0 +1,25 @@
+appId: com.expomapboxnavigationexample
+name: '@rnmapbox/maps and the navigation SDK share one Maps SDK without crashing'
+tags:
+  - coexistence
+---
+- runFlow: subflows/launch.yaml
+- scrollUntilVisible:
+    element:
+      id: scenario-MapCoexistenceScenario
+    direction: DOWN
+    centerElement: true
+- tapOn:
+    id: scenario-MapCoexistenceScenario
+- waitForAnimationToEnd:
+    timeout: 10000
+- takeScreenshot: .maestro-artifacts/coexistence-rnmapbox
+- tapOn: 'navigation SDK'
+- waitForAnimationToEnd:
+    timeout: 20000
+- assertVisible: 'navigation SDK'
+- takeScreenshot: .maestro-artifacts/coexistence-navigation
+- tapOn: '@rnmapbox/maps'
+- waitForAnimationToEnd:
+    timeout: 10000
+- assertVisible: '@rnmapbox/maps'

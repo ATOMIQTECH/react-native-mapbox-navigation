@@ -1,0 +1,30 @@
+appId: com.expomapboxnavigationexample
+name: Setting optional props and then clearing them resets them instead of failing natively
+tags:
+  - navigation
+  - props
+---
+- runFlow: subflows/open-journey.yaml
+- tapOn:
+    id: journey-overrides-toggle
+- assertVisible:
+    id: journey-overrides
+    text: 'Overrides: set'
+- waitForAnimationToEnd:
+    timeout: 3000
+- tapOn:
+    id: journey-overrides-toggle
+- assertVisible:
+    id: journey-overrides
+    text: 'Overrides: unset'
+- waitForAnimationToEnd:
+    timeout: 3000
+- assertNotVisible:
+    text: '.*Cannot set prop.*'
+- assertNotVisible:
+    id: journey-error
+    text: '.*\(fatal\).*'
+- assertVisible:
+    id: journey-routes
+    text: 'Routes: [1-9].*'
+- takeScreenshot: .maestro-artifacts/prop-reset
