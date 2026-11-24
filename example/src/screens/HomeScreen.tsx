@@ -12,6 +12,7 @@ type ScenarioRoute =
   | 'RoutingScenario'
   | 'MapCoexistenceScenario'
   | 'JourneyScenario'
+  | 'MarkersScenario'
 
 const SCENARIOS: { route: ScenarioRoute; title: string; description: string }[] = [
   {
@@ -64,6 +65,12 @@ const SCENARIOS: { route: ScenarioRoute; title: string; description: string }[] 
     title: 'Stops, Reroute + Keep-alive',
     description:
       'Live-location route through two stops: arrival indices, manual advance, destination changes and a covering screen.',
+  },
+  {
+    route: 'MarkersScenario',
+    title: 'Navigation Markers',
+    description:
+      'Custom markers with default, untrimmed and unknown option values, to check how each is normalised.',
   },
 ]
 

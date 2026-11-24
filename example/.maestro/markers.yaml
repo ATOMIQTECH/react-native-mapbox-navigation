@@ -1,0 +1,21 @@
+appId: com.expomapboxnavigationexample
+name: Navigation markers render defaults, normalise untrimmed option values, and fall back on unknown ones
+tags:
+  - navigation
+  - markers
+---
+- runFlow: subflows/launch.yaml
+- scrollUntilVisible:
+    element:
+      id: scenario-MarkersScenario
+    direction: DOWN
+    visibilityPercentage: 50
+- tapOn:
+    id: scenario-MarkersScenario
+- extendedWaitUntil:
+    visible:
+      id: markers-legend
+    timeout: 30000
+- waitForAnimationToEnd:
+    timeout: 45000
+- takeScreenshot: .maestro-artifacts/markers
