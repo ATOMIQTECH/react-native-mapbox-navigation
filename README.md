@@ -193,8 +193,22 @@ export function EmbeddedNavigation() {
 
 ## Platform Behavior
 
-- Android can start without `startOrigin`; it falls back to the device location.
-- iOS currently requires `startOrigin` to begin routing.
+- Either platform can start without `startOrigin`; both fall back to the device
+  location, requesting a fix if none is cached.
+- Guidance needs a live position even once a route resolves. If no route
+  progress arrives within 20s of guidance starting, the view reports through
+  `onError` — and which code you get tells you where to look:
+  - `NO_LOCATION_FIX` — the device has no position at all, usually a simulator
+    or emulator with no location set. Give it one (iOS: Features > Location, or
+    `xcrun simctl location <udid> start ...`; Android: Extended controls >
+    Location, or `adb emu geo fix <lon> <lat>`), or pass `shouldSimulateRoute`
+    to replay the route without device fixes.
+  - `GUIDANCE_NOT_PROGRESSING` — fixes *are* arriving but the navigator is not
+    consuming them, so this is not a location problem. The usual cause is a
+    second `MapboxNavigationView` mounted at the same time, which stops the
+    billing session out from under the first; Mapbox logs
+    "billing session is not running". See `NAVIGATION_SESSION_CONFLICT` and the
+    one-session rule below.
 - Only one embedded navigation session should be active at a time.
 - The package uses native UI for the main map/navigation chrome and React overlays for custom controls.
 
@@ -319,12 +333,11 @@ locationPuck={{ type: '3d', modelUri: { uri: 'asset://car.glb' } }}
 Remote models are downloaded once and cached on disk on both platforms.
 
 > **On `require()` and release builds.** A `require()`'d model resolves through
-> React Native's asset registry, which returns a Metro packager URL in
-> development and a bundled asset reference in release builds. The dev path
-> works out of the box; for production builds the most predictable options are a
-> remote `https://` URL or a model placed in the native bundle and referenced
-> explicitly (`asset://car.glb` on Android, a bundle resource name on iOS).
-> Verify your release build before shipping a `require()`'d model.
+> React Native's asset registry: a Metro packager URL in development, a bundled
+> resource name in release. Neither is a URI Mapbox can load a model from, so
+> the package copies the model to a cached `.glb` file before handing it over
+> (iOS always did; Android does as of this release). Verify your release build
+> before shipping a `require()`'d model.
 
 ### 2D images
 
@@ -731,11 +744,17 @@ instruction language is fixed per route request there.
 
 On a multi-stop route the SDK normally advances a leg when the driver physically
 arrives. When a stop is instead completed by an app event — a passenger marked
-picked up, a parcel handed over — advance it explicitly:
+picked up, a parcel handed over — set `waypointAdvance="manual"` so the SDK
+holds the leg on arrival, then advance it explicitly:
 
 ```tsx
+<MapboxNavigationView waypointAdvance="manual" /* ... */ />
+
 await advanceToNextWaypoint()
 ```
+
+Without `manual`, the SDK and your call both advance and race, and a stop can be
+skipped.
 
 The native SDK removes the completed leg, recomputes the ETA and re-focuses the
 next waypoint, all without tearing down the session. Resolves `false` when there
@@ -878,9 +897,9 @@ additive — none require breaking changes.
 
 These are important review findings from the current codebase and the docs below reflect them intentionally:
 
-- The package targets the Mapbox Navigation **v3** SDKs (iOS `3.30.1`, Android `3.30.1`) and Maps SDK `11.30.1`. See [CHANGELOG.md](./CHANGELOG.md) for the `3.0.0` breaking changes.
+- The package targets the Mapbox Navigation **v3** SDKs at `3.35.2` (iOS and Android, pinned exactly) and Maps SDK `11.35.2`. It needs Expo SDK 56 or newer, and iOS builds need Xcode 26.5 or newer. See [CHANGELOG.md](./CHANGELOG.md) for the `3.0.0` breaking changes.
 - `androidActionButtons` is ignored on both platforms and is marked `@deprecated` — use `nativeFloatingButtons`, or render your own with `floatingButtons`.
-- Navigation SDK v3 removed Android's Drop-In UI, so the Android chrome is assembled from discrete widgets. Consequences: `showsTripProgress` and `showsSpeedLimits` have no Android effect (use the themeable `bottomSheet` overlay for trip progress), and neither do `showsReportFeedback`, `showsEndOfRouteFeedback`, `showsWayNameLabel`, `showsContinuousAlternatives`, `usesNightStyleWhileInTunnel` or `annotatesIntersectionsAlongRoute`. Each is logged once at runtime rather than silently ignored.
+- Navigation SDK v3 removed Android's Drop-In UI, so the Android chrome is assembled from discrete widgets. Consequences: `showsTripProgress` and `showsSpeedLimits` have no Android effect (use the themeable `bottomSheet` overlay for trip progress), and neither do `showsReportFeedback`, `showsWayNameLabel`, `usesNightStyleWhileInTunnel` or `annotatesIntersectionsAlongRoute`. Each is logged once at runtime rather than silently ignored. `showsContinuousAlternatives` is honoured: off, the navigator stops looking for alternatives at runtime, without a new route request. (`showsEndOfRouteFeedback` controls the package's React modal on both platforms; Mapbox's native rating card is never shown.)
 - `nativeFloatingButtons` controls only the voice toggle on Android; v3 ships no widget for the camera, recenter or compass buttons there.
 - `onDestinationPreview` no longer fires on either platform — it mirrored a Drop-In preview phase that v3 removed. `onDestinationChanged` is unaffected.
 - `locationPuck` accepts per-state pointers on both platforms, but only the `activeNavigation` / `default` entry has a visible effect on Android; v3's puck component takes a single puck.
@@ -894,6 +913,10 @@ These are important review findings from the current codebase and the docs below
 - [docs/USAGE.md](./docs/USAGE.md)
 - [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)
 - [CHANGELOG.md](./CHANGELOG.md)
+
+## Contributing
+
+Read [CONVENTIONS.md](./CONVENTIONS.md) first. `pnpm install`, `git config core.hooksPath .githooks`, and `pnpm check` before you push.
 
 ## Contributors
 

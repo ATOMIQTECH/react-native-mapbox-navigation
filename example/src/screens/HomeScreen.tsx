@@ -11,6 +11,8 @@ type ScenarioRoute =
   | 'LocationPuckScenario'
   | 'RoutingScenario'
   | 'MapCoexistenceScenario'
+  | 'JourneyScenario'
+  | 'MarkersScenario'
 
 const SCENARIOS: { route: ScenarioRoute; title: string; description: string }[] = [
   {
@@ -58,6 +60,18 @@ const SCENARIOS: { route: ScenarioRoute; title: string; description: string }[] 
     description:
       'Renders an @rnmapbox/maps MapView beside navigation, proving both packages share one Mapbox Maps SDK with no Podfile or Gradle edits.',
   },
+  {
+    route: 'JourneyScenario',
+    title: 'Stops, Reroute + Keep-alive',
+    description:
+      'Live-location route through two stops: arrival indices, manual advance, destination changes and a covering screen.',
+  },
+  {
+    route: 'MarkersScenario',
+    title: 'Navigation Markers',
+    description:
+      'Custom markers with default, untrimmed and unknown option values, to check how each is normalised.',
+  },
 ]
 
 export default function HomeScreen() {
@@ -76,6 +90,7 @@ export default function HomeScreen() {
         {SCENARIOS.map((scenario) => (
           <Pressable
             key={scenario.route}
+            testID={`scenario-${scenario.route}`}
             onPress={() => {
               navigation.navigate(scenario.route)
             }}

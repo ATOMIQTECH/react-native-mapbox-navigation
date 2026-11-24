@@ -10,6 +10,8 @@ internal object NavigationSessionRegistry {
   private val resumeCameraHandlers = mutableMapOf<String, () -> Unit>()
   private val cameraFollowingProviders = mutableMapOf<String, () -> Boolean>()
   private val advanceLegHandlers = mutableMapOf<String, () -> Boolean>()
+  private val pausedProviders = mutableMapOf<String, () -> Boolean>()
+  private val yieldHandlers = mutableMapOf<String, () -> Unit>()
 
   fun acquire(newOwner: String): Boolean {
     return lock.withLock {
@@ -22,6 +24,18 @@ internal object NavigationSessionRegistry {
     }
   }
 
+  fun acquireOrTakeOver(newOwner: String): Boolean {
+    if (acquire(newOwner)) return true
+    val yieldHandler = lock.withLock {
+      val current = owner ?: return@withLock null
+      if (current == newOwner) return@withLock null
+      val paused = pausedProviders[current]?.invoke() ?: false
+      if (paused) yieldHandlers[current] else null
+    } ?: return acquire(newOwner)
+    runCatching { yieldHandler.invoke() }
+    return acquire(newOwner)
+  }
+
   fun release(releasingOwner: String) {
     lock.withLock {
       if (owner == releasingOwner) {
@@ -31,6 +45,20 @@ internal object NavigationSessionRegistry {
       resumeCameraHandlers.remove(releasingOwner)
       cameraFollowingProviders.remove(releasingOwner)
       advanceLegHandlers.remove(releasingOwner)
+      pausedProviders.remove(releasingOwner)
+      yieldHandlers.remove(releasingOwner)
+    }
+  }
+
+  fun registerPausedProvider(owner: String, provider: () -> Boolean) {
+    lock.withLock {
+      pausedProviders[owner] = provider
+    }
+  }
+
+  fun registerYieldHandler(owner: String, handler: () -> Unit) {
+    lock.withLock {
+      yieldHandlers[owner] = handler
     }
   }
 
@@ -84,12 +112,6 @@ internal object NavigationSessionRegistry {
     return handler.invoke()
   }
 
-  /**
-   * Whether an embedded navigation session currently holds the registry.
-   *
-   * Backs `getNavigationSettings().isNavigating`, which previously reported a
-   * hardcoded `false`.
-   */
   fun isSessionActive(): Boolean = lock.withLock { owner != null }
 
   fun isCurrentCameraFollowing(): Boolean {

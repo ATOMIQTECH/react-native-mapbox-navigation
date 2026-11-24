@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Last local gate before code leaves the machine. A commit can be made with
-# --no-verify; this catches it on the way out. Both are bypassable, which is
-# why .github/workflows/security-scan.yml + branch protection is the real gate.
 set -uo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 SCAN="$ROOT/scripts/security-scan.sh"
@@ -16,16 +13,11 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 
   case "$remote_ref" in
     refs/heads/main|refs/heads/master|refs/heads/production)
-      # Anything landing on a protected branch gets the full-tree scan, not
-      # just the diff: a payload merged in earlier must not ride along unseen.
       echo "pre-push: $remote_ref is protected — running full-tree scan"
       "$SCAN" tree || STATUS=1
       ;;
   esac
 
-  # The remote tip may not exist locally at all (remote ahead of us, or a fresh
-  # clone). Using it as a range base fails outright, so fall back to a base we
-  # actually have.
   if [ "$remote_sha" != "$ZERO" ] \
      && ! git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
     echo "pre-push: remote tip $remote_sha is not in this clone (run: git fetch);" \

@@ -5,8 +5,10 @@ import AppearanceScenarioScreen from './screens/AppearanceScenarioScreen'
 import CoreScenarioScreen from './screens/CoreScenarioScreen'
 import EventsScenarioScreen from './screens/EventsScenarioScreen'
 import HomeScreen from './screens/HomeScreen'
+import JourneyScenarioScreen, { JourneyCoverScreen } from './screens/JourneyScenarioScreen'
 import LocationPuckScenarioScreen from './screens/LocationPuckScenarioScreen'
 import MapCoexistenceScenarioScreen from './screens/MapCoexistenceScenarioScreen'
+import MarkersScenarioScreen from './screens/MarkersScenarioScreen'
 import OverlayScenarioScreen from './screens/OverlayScenarioScreen'
 import RoutingScenarioScreen from './screens/RoutingScenarioScreen'
 import RuntimeScenarioScreen from './screens/RuntimeScenarioScreen'
@@ -78,6 +80,24 @@ const RootStack = createNativeStackNavigator({
       screen: MapCoexistenceScenarioScreen,
       options: {
         title: 'With @rnmapbox/maps',
+      },
+    },
+    JourneyScenario: {
+      screen: JourneyScenarioScreen,
+      options: {
+        title: 'Stops, Reroute + Keep-alive',
+      },
+    },
+    JourneyCover: {
+      screen: JourneyCoverScreen,
+      options: {
+        title: 'Covering Screen',
+      },
+    },
+    MarkersScenario: {
+      screen: MarkersScenarioScreen,
+      options: {
+        title: 'Navigation Markers',
       },
     },
   },

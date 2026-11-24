@@ -1,15 +1,9 @@
 import CoreGraphics
+import CryptoKit
 import Foundation
-// v3 drops `UserLocationStyle`; the puck is described with `PuckType` straight
-// from MapboxMaps, so the Navigation SDK import is no longer needed here.
 import MapboxMaps
 import UIKit
 
-/// Navigation states a custom puck can be bound to.
-///
-/// Mirrors the JS `LocationPuckStates` keys. iOS has no equivalent of Android's
-/// `LocationPuckOptions`, so the view swaps `userLocationStyle` as the session
-/// moves between these states.
 enum LocationPuckState: String, CaseIterable {
   case `default`
   case freeDrive
@@ -20,31 +14,12 @@ enum LocationPuckState: String, CaseIterable {
   case idle
 }
 
-/// The outcome of resolving one puck appearance.
 enum LocationPuckResolution {
-  /// Apply this puck to `NavigationMapView.puckType`.
-  ///
-  /// v2 assigned a `UserLocationStyle`; v3 removed that type and takes the Maps
-  /// `PuckType` directly.
   case style(PuckType)
-  /// Hide the puck while keeping location updates flowing.
-  ///
-  /// v3 keeps this behaviour: `NavigationMapView` maps a nil `puckType` to an
-  /// all-transparent 2D puck rather than switching location off. Mapbox does
-  /// this deliberately, because Maps stops delivering location data entirely if
-  /// the underlying `LocationOptions.puckType` is nil.
   case hidden
-  /// Leave the Mapbox SDK default in place.
   case sdkDefault
 }
 
-/// Loads remote/bundled assets and builds `UserLocationStyle` values from the
-/// normalized dictionaries produced by the JS `resolveLocationPuck` helper.
-///
-/// Asset loading is asynchronous (React Native `require()` resolves to a
-/// packager URL in development), so resolution is completion-based. Downloads
-/// are cached on disk and decoded images are cached in memory, which keeps
-/// per-state pucks from refetching the same file.
 final class LocationPuckFactory {
   static let shared = LocationPuckFactory()
 
@@ -65,9 +40,7 @@ final class LocationPuckFactory {
     try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
   }
 
-  // MARK: - Parsing
 
-  /// Split a normalized `locationPuck` payload into per-state dictionaries.
   static func parseStates(_ payload: [String: Any]?) -> [LocationPuckState: [String: Any]] {
     guard let payload else { return [:] }
 
@@ -80,11 +53,7 @@ final class LocationPuckFactory {
     return result
   }
 
-  // MARK: - Resolution
 
-  /// Build a `UserLocationStyle` for one appearance dictionary.
-  ///
-  /// The completion is always invoked on the main queue.
   func resolve(
     appearance: [String: Any],
     completion: @escaping (LocationPuckResolution) -> Void
@@ -113,39 +82,13 @@ final class LocationPuckFactory {
     }
   }
 
-  // MARK: - Tinted
 
-  /// Base edge length, in points, that the tint images are rasterised at.
-  ///
-  /// v2 sized the course view directly (`scale * 75pt`). The v3 puck is
-  /// image-based and scales through `Puck2DConfiguration.scale`, so the images
-  /// are drawn once at this size and scaled by the SDK. Drawing larger than the
-  /// 75pt v2 default keeps them crisp when scaled up.
   private static let tintedPuckBaseSide: CGFloat = 96
 
-  /// Recolour the navigation puck.
-  ///
-  /// v2 did this with `UserPuckCourseView`, a `UIView` exposing `puckColor`,
-  /// `fillColor` and `shadowColor`. v3 removed both `UserLocationStyle` and
-  /// `UserPuckCourseView`, and its 2D puck is described entirely by three
-  /// images — so the tint is now rasterised here instead of configured on a
-  /// view. The JS-facing keys (`color`, `bearingColor`, `haloColor`, `opacity`,
-  /// `scale`) are unchanged.
-  ///
-  /// The three images map onto v2's colours as follows:
-  ///   - `shadowImage`  — the outer halo circle, v2's `fillColor`
-  ///   - `topImage`     — the inner body dot, v2's `puckColor`
-  ///   - `bearingImage` — the heading arrow, also v2's `puckColor`
-  ///
-  /// `bearingImage` is the layer the SDK rotates to the course, matching how
-  /// the course view's arrow tracked heading in v2.
   private func makeTintedStyle(_ appearance: [String: Any]) -> PuckType {
     let rawScale = (appearance["scale"] as? NSNumber)?.doubleValue ?? 1
     let scale = (rawScale.isFinite ? rawScale : 1).clamped(to: 0.2...4)
 
-    // `color` paints the puck body/arrow; `haloColor` paints the surrounding
-    // circle. Fall back to `bearingColor` so a caller supplying only that key
-    // still gets a visibly tinted puck.
     let body = HexColor.parse(appearance["color"])
       ?? HexColor.parse(appearance["bearingColor"])
       ?? UIColor(red: 0.22, green: 0.49, blue: 0.96, alpha: 1)
@@ -162,8 +105,6 @@ final class LocationPuckFactory {
         bearingImage: Self.bearingArrowImage(side: side, fill: body),
         shadowImage: Self.circleImage(diameter: side, fill: halo, border: nil, borderWidth: 0),
         scale: .constant(scale),
-        // Disambiguates the two Puck2DConfiguration overloads that would
-        // otherwise both match these argument labels.
         pulsing: nil,
         showsAccuracyRing: false,
         opacity: opacity
@@ -171,7 +112,6 @@ final class LocationPuckFactory {
     )
   }
 
-  /// Rasterise a filled circle, optionally with a border ring.
   private static func circleImage(
     diameter: CGFloat,
     fill: UIColor,
@@ -195,10 +135,6 @@ final class LocationPuckFactory {
     }
   }
 
-  /// Rasterise the heading arrow.
-  ///
-  /// Drawn on a square canvas with the arrow pointing up and centred, so the
-  /// SDK's rotation about the image centre produces the right heading.
   private static func bearingArrowImage(side: CGFloat, fill: UIColor) -> UIImage {
     let size = CGSize(width: side, height: side)
     return UIGraphicsImageRenderer(size: size).image { context in
@@ -220,8 +156,6 @@ final class LocationPuckFactory {
     }
   }
 
-  // MARK: - 2D
-
   private func make2DStyle(
     _ appearance: [String: Any],
     completion: @escaping (LocationPuckResolution) -> Void
@@ -239,8 +173,6 @@ final class LocationPuckFactory {
       let bearing = images[1]
       let shadow = images[2]
 
-      // Every image failed to load — better to keep the SDK puck than to render
-      // an invisible pointer.
       guard top != nil || bearing != nil || shadow != nil else {
         completion(.sdkDefault)
         return
@@ -255,8 +187,6 @@ final class LocationPuckFactory {
           scale: appearance["scale"],
           expression: appearance["scaleExpression"]
         ),
-        // Disambiguates the two Puck2DConfiguration overloads that would
-        // otherwise both match these argument labels.
         pulsing: nil,
         showsAccuracyRing: false,
         opacity: opacity.isFinite ? opacity.clamped(to: 0...1) : 1
@@ -265,8 +195,6 @@ final class LocationPuckFactory {
       completion(.style(.puck2D(configuration)))
     }
   }
-
-  // MARK: - 3D
 
   private func make3DStyle(
     _ appearance: [String: Any],
@@ -284,8 +212,6 @@ final class LocationPuckFactory {
         return
       }
 
-      // `orientation` is the model's own axis correction, applied before the
-      // course bearing rotates it.
       let orientation = Self.doubleArray(appearance["modelRotation"]) ?? [0, 0, 0]
       let model = Model(uri: url, orientation: orientation)
 
@@ -305,17 +231,13 @@ final class LocationPuckFactory {
     }
   }
 
-  // MARK: - Asset loading
 
-  /// Load several images, preserving index order. Missing entries stay `nil`.
   private func loadImages(
     _ sources: [String?],
     completion: @escaping ([UIImage?]) -> Void
   ) {
     var results = [UIImage?](repeating: nil, count: sources.count)
     let group = DispatchGroup()
-    // Image loads complete on arbitrary URLSession queues, so guard the shared
-    // results buffer rather than writing to it concurrently.
     let lock = NSLock()
 
     for (index, source) in sources.enumerated() {
@@ -347,7 +269,6 @@ final class LocationPuckFactory {
       completion(image)
     }
 
-    // A bare name refers to an asset catalog entry or a bundled file.
     guard let url = URL(string: source), let scheme = url.scheme?.lowercased() else {
       store(UIImage(named: source))
       return
@@ -365,11 +286,6 @@ final class LocationPuckFactory {
     }
   }
 
-  /// Resolve a model reference to a local file URL.
-  ///
-  /// Remote models are downloaded and cached so that the Maps SDK always reads
-  /// from disk — this keeps model loading working offline after first use and
-  /// avoids repeated fetches when several states share a model.
   private func resolveModelURL(_ source: String, completion: @escaping (URL?) -> Void) {
     let finish: (URL?) -> Void = { url in
       if Thread.isMainThread {
@@ -380,7 +296,6 @@ final class LocationPuckFactory {
     }
 
     guard let url = URL(string: source), let scheme = url.scheme?.lowercased() else {
-      // Treat as a bundled resource name, with or without an extension.
       let asURL = URL(fileURLWithPath: source)
       let ext = asURL.pathExtension
       let name = asURL.deletingPathExtension().lastPathComponent
@@ -402,10 +317,8 @@ final class LocationPuckFactory {
       return
     }
 
-    // Key the cache on the full URL so packager hashes and CDN versions produce
-    // distinct files, while preserving the extension for the Maps SDK.
     let ext = url.pathExtension.isEmpty ? "glb" : url.pathExtension
-    let key = String(format: "%08x", UInt32(bitPattern: Int32(truncatingIfNeeded: source.hashValue)))
+    let key = SHA256.hash(data: Data(source.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
     let destination = cacheDirectory.appendingPathComponent("puck-\(key).\(ext)")
 
     if fileManager.fileExists(atPath: destination.path) {
@@ -438,8 +351,6 @@ final class LocationPuckFactory {
     }.resume()
   }
 
-  // MARK: - Value helpers
-
   private static func doubleArray(_ raw: Any?) -> [Double]? {
     guard let numbers = raw as? [NSNumber], !numbers.isEmpty else {
       return nil
@@ -448,10 +359,6 @@ final class LocationPuckFactory {
     return values.allSatisfy(\.isFinite) ? values : nil
   }
 
-  /// Decode a JSON Mapbox style expression supplied from JS.
-  ///
-  /// Qualified because the iOS 26 SDK introduced `Foundation.Expression`, which
-  /// makes a bare `Expression` ambiguous here.
   private static func expression(_ raw: Any?) -> MapboxMaps.Expression? {
     guard let json = (raw as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
           !json.isEmpty,
@@ -461,7 +368,6 @@ final class LocationPuckFactory {
     return try? JSONDecoder().decode(MapboxMaps.Expression.self, from: data)
   }
 
-  /// Prefer an expression when present, otherwise a constant scale.
   private static func doubleValue(scale: Any?, expression rawExpression: Any?) -> Value<Double>? {
     if let expression = expression(rawExpression) {
       return .expression(expression)

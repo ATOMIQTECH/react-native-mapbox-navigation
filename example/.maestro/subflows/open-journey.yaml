@@ -1,0 +1,19 @@
+appId: com.expomapboxnavigationexample
+name: Open the stops, reroute and keep-alive scenario and wait for its first route
+---
+- runFlow: launch.yaml
+- scrollUntilVisible:
+    element:
+      id: scenario-JourneyScenario
+    direction: DOWN
+    visibilityPercentage: 50
+- tapOn:
+    id: scenario-JourneyScenario
+- extendedWaitUntil:
+    visible:
+      id: journey-routes
+      text: 'Routes: [1-9].*'
+    timeout: 90000
+- assertVisible:
+    id: journey-camera
+    text: 'Camera: following'

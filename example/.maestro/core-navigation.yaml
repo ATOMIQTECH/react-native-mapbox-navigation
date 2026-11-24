@@ -1,0 +1,33 @@
+appId: com.expomapboxnavigationexample
+name: Core navigation guides a simulated route through its stops
+tags:
+  - navigation
+  - smoke
+---
+- runFlow: subflows/launch.yaml
+- tapOn: 'Core Navigation.*'
+- extendedWaitUntil:
+    visible:
+      id: core-route
+      text: 'Route pts: [1-9][0-9]*.*'
+    timeout: 60000
+- extendedWaitUntil:
+    visible:
+      id: core-progress
+      text: 'Progress: [0-9]+m.*'
+    timeout: 60000
+- extendedWaitUntil:
+    visible:
+      id: core-banner
+      text: 'Banner: (?!Waiting).+'
+    timeout: 60000
+- assertVisible:
+    id: core-route
+    text: '.*Camera: Following'
+- assertVisible:
+    id: core-location
+    text: 'Last lat/lng: -?[0-9].*'
+- assertNotVisible:
+    id: core-error
+    text: '.*\(fatal\).*'
+- takeScreenshot: .maestro-artifacts/core-navigation

@@ -1,36 +1,8 @@
 #!/usr/bin/env bash
-# Repo guard — blocks the tampering class this codebase keeps getting hit by.
-#
-# Incident history: a real line of code, then ~1,300 spaces to push the payload
-# off-screen, then obfuscated JS in a build-time config file. The payload is
-# regenerated every time; the delivery shape is not. So this scans for SHAPE
-# first and known indicators second.
-#
-# The 2026-08 sample ("Pollin Ridder", version tag A8-3894) defeated the first
-# version of this script by splitting every indicator across string
-# concatenations: 'eth_blockN'+'umber' does not match /eth_blockNumber/ and
-# '.publicnod'+'e.com' does not match /publicnode/. Everything below therefore
-# matches a NORMALIZED view of the file, with quotes, commas, plus signs,
-# whitespace and \xNN escapes folded away, so split literals rejoin first.
-#
-# Two classes of indicator, because precision matters more than reach here —
-# a guard that cries wolf gets bypassed with --no-verify and then protects
-# nothing:
-#   HIGH    — meaningless outside this malware; blocks on its own.
-#   CONTEXT — legitimate in ordinary code (child_process, windowsHide); blocks
-#             only in a file that ALSO looks obfuscated.
-#
-# Modes:
-#   staged            — what is about to be committed (pre-commit)
-#   range <range>     — a commit range, e.g. origin/main...HEAD (CI / pre-push)
-#   tree              — every tracked file (scheduled audit / one-off)
-#
-# Exit 0 clean, 1 findings, 2 usage error.
 set -uo pipefail
 
 LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
 if [ ! -f "$LIBDIR/inspect-file.pl" ]; then
-  # Installed copies live at <repo>/scripts/security-scan.sh with lib alongside.
   LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/security-scan-lib"
 fi
 [ -f "$LIBDIR/inspect-file.pl" ] || { echo "missing $LIBDIR/inspect-file.pl" >&2; exit 2; }
@@ -72,7 +44,6 @@ content_of() {
   if [ "$MODE" = "staged" ]; then git show ":$1" 2>/dev/null; else cat "$1" 2>/dev/null; fi
 }
 
-# Minified vendor bundles legitimately have very long lines; source does not.
 is_scannable() {
   case "$1" in
     *.min.js|*.min.mjs|*.min.css|*-lock.json|package-lock.json|yarn.lock|pnpm-lock.yaml|bun.lockb) return 1 ;;
@@ -81,7 +52,6 @@ is_scannable() {
   esac
 }
 
-# Executed by the build => highest-value place to hide code.
 is_config() {
   case "$1" in
     *.config.js|*.config.mjs|*.config.cjs|*.config.ts|*.config.mts\
@@ -92,8 +62,6 @@ is_config() {
   esac
 }
 
-# The guard's own files legitimately contain every indicator. Shape checks still
-# apply to them, and any change to them raises the "modifies the guard" warning.
 is_guard_file() {
   case "$1" in
     */security-scan.sh|security-scan.sh|.githooks/*|.security-toolkit/*|*/IOCS.md|IOCS.md|"$ALLOWFILE") return 0 ;;
@@ -101,7 +69,6 @@ is_guard_file() {
   esac
 }
 
-# Allowlist: one path or sha256:<hex> per line. Reviewable because it is committed.
 is_allowed() {
   [ -f "$ALLOWFILE" ] || return 1
   local f="$1" sum
@@ -111,9 +78,6 @@ is_allowed() {
 }
 
 
-# BSD mktemp appends the random suffix to a bare -t prefix; GNU mktemp requires
-# at least three literal X's and errors with "too few X's in template". Use an
-# explicit template so this works on macOS and on Linux CI alike.
 LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/repoguard-list.XXXXXX")"
 trap 'rm -f "$LIST_FILE" "$LIST_FILE.err"' EXIT
 if ! files_to_check > "$LIST_FILE" 2>"$LIST_FILE.err"; then
@@ -133,8 +97,6 @@ CHECKED=0
 while IFS= read -r f; do
   [ -z "$f" ] && continue
 
-  # A real .env must never be committed. A previous incident also deleted the
-  # .gitignore rules that prevent it, so never rely on .gitignore alone.
   case "$f" in
     .env|.env.*)
       case "$f" in
@@ -148,8 +110,6 @@ while IFS= read -r f; do
       ;;
   esac
 
-  # Someone weakening the guard in the same change that adds a payload is the
-  # exact move the last incident used against .gitignore.
   if [ "$MODE" != "tree" ]; then
     case "$f" in
       "$ALLOWFILE"|scripts/security-scan.sh|.githooks/*|.github/workflows/security-scan.yml)
@@ -167,8 +127,6 @@ while IFS= read -r f; do
   g=0; is_guard_file "$f" && g=1
   c=0; is_config "$f"     && c=1
 
-  # One perl process per file does every content check. Anything it prints is a
-  # finding, tagged BLOCK or WARN.
   while IFS='|' read -r kind msg; do
     [ -z "${kind:-}" ] && continue
     case "$kind" in

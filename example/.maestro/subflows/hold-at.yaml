@@ -1,0 +1,11 @@
+appId: com.expomapboxnavigationexample
+name: Stay parked at LAT,LNG, re-sending the fix each second like a phone whose GPS keeps reporting while stopped
+---
+- repeat:
+    times: 8
+    commands:
+      - setLocation:
+          latitude: ${LAT}
+          longitude: ${LNG}
+      - waitForAnimationToEnd:
+          timeout: 1000

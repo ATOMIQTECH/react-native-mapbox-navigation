@@ -1,11 +1,4 @@
 #!/usr/bin/env perl
-# All per-file checks in ONE process. Content on stdin; emits findings as
-# "BLOCK|message" / "WARN|message" lines.
-#
-# Why one process: the previous version shelled out to awk, grep and perl about
-# eight times per file, which took over two minutes on an 806-file repo. The
-# pre-push hook runs a full-tree scan on protected branches, so that cost was
-# paid on every push.
 use strict; use warnings;
 
 my ($path, $is_guard, $is_config) = @ARGV;
@@ -26,9 +19,6 @@ my @found;
 sub block { push @found, "BLOCK|$_[0]" }
 sub warm  { push @found, "WARN|$_[0]"  }
 
-# ---------------------------------------------------------------- normalisation
-# Fold away the obfuscator's seams so split literals rejoin:
-# 'eth_blockN'+'umber' must compare equal to eth_blocknumber.
 my $norm = $raw;
 $norm =~ s/\\x([0-9a-fA-F]{2})/chr(hex($1))/ge;
 $norm =~ s/\\u\{?([0-9a-fA-F]{4})\}?/chr(hex($1))/ge;
@@ -36,15 +26,6 @@ $norm = lc $norm;
 $norm =~ s/['"`,+\s]//g;
 $norm =~ s/\\//g;
 
-# ------------------------------------------------------------ asset recognition
-# Icon components are long-line, big-base64 files by nature. Recognise them by
-# CONTENT, never by filename, so a payload cannot hide behind a path.
-#
-# The hard case is SVG path geometry stored as a bare string with no SVG tag in
-# sight: path: 'M6.17 5.004c-.553-.029-.814.107...'. Command letters (c, l, z,
-# a...) are interleaved with the numbers, so no character class spans it. Test
-# density instead: in real path data, essentially every character is a digit,
-# separator, or one of the ten SVG command letters.
 sub has_svg_path_data {
   my ($s) = @_;
   while ($s =~ /(['"])([MmZz][^'"]{80,}?)\1/gs) {
@@ -59,7 +40,6 @@ my $is_asset = ( $raw =~ m{data:(?:image|font)/}i
               || $raw =~ /\bd=["'{]\s*[Mm][\s0-9.,-]/
               || has_svg_path_data($raw) ) ? 1 : 0;
 
-# --------------------------------------------------------------- shape checks
 my $obfuscated = 0;
 
 my $longest = 0;
@@ -69,8 +49,6 @@ if ($longest > $MAX_LINE) {
   else           { block("$path — line of $longest chars (limit $MAX_LINE); padded-payload shape"); $obfuscated = 1 }
 }
 
-# The padding trick itself. Never downgraded for assets: no generated SVG puts
-# 100 consecutive spaces or tabs mid-line, so this stays a hard signal.
 if ($raw =~ /([ \t]{$MAX_RUN_SPACES,})/) {
   block("$path — run of " . length($1) . " whitespace chars; off-screen padding shape");
   $obfuscated = 1;
@@ -90,17 +68,11 @@ if (!$is_asset) {
   if ($b64max >= $MAX_B64) { block("$path — inline base64 blob of $b64max chars"); $obfuscated = 1 }
 }
 
-# The obfuscator's self-rotating string table is specifically
-#   _0xabc['push'](_0xabc['shift']())
-# — bracket notation, push wrapping shift on the same array. Merely finding
-# push( and shift() anywhere in the file matches every queue implementation
-# ever written, which is exactly what it did on two honest files here.
 if (!$is_guard && $norm =~ /\[push\]\([^)]{0,40}\[shift\]\(\)\)/) {
   block("$path — string-array rotation preamble (push/shift); obfuscator output");
   $obfuscated = 1;
 }
 
-# ------------------------------------------------------------------ indicators
 my @HIGH = qw(
   eth_blocknumber eth_gettransactioncount eth_getblockbynumber
   ethereum-rpc.publicnode.com eth.drpc.org public.blastapi.io
@@ -125,10 +97,8 @@ if (!$is_guard) {
   }
 }
 
-# ----------------------------------------------- config files execute at build
 if ($is_config) {
   my @ex;
-  # explicit list, not qw(): these contain parentheses
   for my $api ('child_process', 'eval(', 'newfunction(', 'spawnsync',
                'spawn(', 'atob(', 'frombase64') {
     push @ex, $api if index($norm, $api) >= 0;
@@ -136,12 +106,10 @@ if ($is_config) {
   block("$path — config file contains runtime/exec APIs: @ex") if @ex;
   warm("$path — config file uses createRequire; confirm it is yours")
     if index($norm, 'createrequire') >= 0;
-  # eval reached indirectly (obj[key](eval, src)) has no "eval(" to match.
   block("$path — config file passes eval as a value (indirect eval)")
     if $norm =~ /\(eval,|\[eval\]|=eval;/;
 }
 
-# --------------------------------- npm lifecycle: how this worm actually spreads
 if ($path eq 'package.json' && $raw =~ /"scripts"\s*:\s*\{(.*?)\}/s) {
   my $s = $1;
   while ($s =~ /"(preinstall|install|postinstall|prepare|prepublish|prepublishOnly)"\s*:\s*"((?:[^"\\]|\\.)*)"/g) {
@@ -154,7 +122,6 @@ if ($path eq 'package.json' && $raw =~ /"scripts"\s*:\s*\{(.*?)\}/s) {
   }
 }
 
-# ------------------------------------------ CI workflows: a second exec surface
 if ($path =~ m{^\.github/workflows/}
     && $raw =~ /(?:curl|wget)[^|\n]*\|\s*(?:sudo\s+)?(?:sh|bash)/) {
   block("$path — workflow pipes a download straight into a shell");

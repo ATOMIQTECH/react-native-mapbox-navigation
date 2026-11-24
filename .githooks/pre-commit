@@ -1,3 +1,15 @@
 #!/usr/bin/env bash
-# Enable for everyone on the team with:  git config core.hooksPath .githooks
-exec "$(git rev-parse --show-toplevel)/scripts/security-scan.sh" staged
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+"$ROOT/scripts/security-scan.sh" staged
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$STAGED" ] && exit 0
+FORMATTABLE=$(printf '%s\n' "$STAGED" | grep -E '\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc|ya?ml)$' || true)
+if [ -n "$FORMATTABLE" ]; then
+  printf '%s\n' "$FORMATTABLE" | xargs pnpm exec oxfmt --check --no-error-on-unmatched-pattern
+fi
+if printf '%s\n' "$STAGED" | grep -qE '\.(ts|tsx|js|jsx|mjs|cjs)$'; then
+  node scripts/lint.mjs
+fi
+node scripts/check-source.mjs

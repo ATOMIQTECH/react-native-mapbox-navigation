@@ -6,7 +6,6 @@ import expo.modules.kotlin.modules.ModuleDefinition
 
 class MapboxNavigationModule : Module() {
   companion object {
-    /** Events forwarded to JS module listeners via `add*Listener`. */
     val MODULE_EVENT_NAMES = listOf(
       "onLocationChange",
       "onRouteProgressChange",
@@ -45,8 +44,6 @@ class MapboxNavigationModule : Module() {
       MapboxNavigationEventBridge.clearEmitter()
     }
 
-    // Track subscriptions per event so the bridge can skip emitting entirely
-    // when nothing is listening.
     MODULE_EVENT_NAMES.forEach { eventName ->
       OnStartObserving(eventName) {
         MapboxNavigationEventBridge.startObserving(eventName)
@@ -139,7 +136,7 @@ class MapboxNavigationModule : Module() {
         view.setStartOrigin(origin)
       }
 
-      Prop("enabled") { view: MapboxNavigationView, enabled: Boolean ->
+      Prop("enabled", false) { view: MapboxNavigationView, enabled: Boolean ->
         view.setNavigationEnabled(enabled)
       }
 
@@ -155,95 +152,104 @@ class MapboxNavigationModule : Module() {
         view.setNavigationMarkers(markers)
       }
 
-      Prop("shouldSimulateRoute") { view: MapboxNavigationView, simulate: Boolean ->
+      Prop("navigationLines") { view: MapboxNavigationView, lines: List<Map<String, Any>>? ->
+        view.setNavigationLines(lines)
+      }
+
+      Prop("shouldSimulateRoute", false) { view: MapboxNavigationView, simulate: Boolean ->
         view.setShouldSimulateRoute(simulate)
       }
 
-      Prop("showCancelButton") { view: MapboxNavigationView, show: Boolean ->
+      Prop("showCancelButton", true) { view: MapboxNavigationView, show: Boolean ->
         view.setShowCancelButton(show)
       }
 
-      Prop("mute") { view: MapboxNavigationView, value: Boolean ->
+      Prop("mute", false) { view: MapboxNavigationView, value: Boolean ->
         view.setMute(value)
       }
 
-      Prop("voiceVolume") { view: MapboxNavigationView, value: Double ->
+      Prop("voiceVolume", 1.0) { view: MapboxNavigationView, value: Double ->
         view.setVoiceVolume(value)
       }
 
-      Prop("cameraPitch") { view: MapboxNavigationView, value: Double ->
+      Prop("cameraPitch", Double.NaN) { view: MapboxNavigationView, value: Double ->
         view.setCameraPitch(value)
       }
 
-      Prop("cameraZoom") { view: MapboxNavigationView, value: Double ->
+      Prop("cameraZoom", Double.NaN) { view: MapboxNavigationView, value: Double ->
         view.setCameraZoom(value)
       }
 
-      Prop("cameraMode") { view: MapboxNavigationView, value: String ->
+      Prop("cameraMode", "following") { view: MapboxNavigationView, value: String ->
         view.setCameraMode(value)
       }
 
-      Prop("mapStyleUri") { view: MapboxNavigationView, value: String ->
+      Prop("mapStyleUri", "") { view: MapboxNavigationView, value: String ->
         view.setMapStyleUri(value)
       }
 
-      Prop("mapStyleUriDay") { view: MapboxNavigationView, value: String ->
+      Prop("mapStyleUriDay", "") { view: MapboxNavigationView, value: String ->
         view.setMapStyleUriDay(value)
       }
 
-      Prop("mapStyleUriNight") { view: MapboxNavigationView, value: String ->
+      Prop("mapStyleUriNight", "") { view: MapboxNavigationView, value: String ->
         view.setMapStyleUriNight(value)
       }
 
-      Prop("uiTheme") { view: MapboxNavigationView, value: String ->
+      Prop("uiTheme", "system") { view: MapboxNavigationView, value: String ->
         view.setUiTheme(value)
       }
 
-      Prop("routeAlternatives") { view: MapboxNavigationView, value: Boolean ->
+      Prop("routeAlternatives", false) { view: MapboxNavigationView, value: Boolean ->
         view.setRouteAlternatives(value)
       }
 
-      Prop("showsSpeedLimits") { view: MapboxNavigationView, value: Boolean ->
+      Prop("showsSpeedLimits", true) { view: MapboxNavigationView, value: Boolean ->
         view.setShowsSpeedLimits(value)
       }
 
-      Prop("showsWayNameLabel") { view: MapboxNavigationView, value: Boolean ->
+      Prop("showsWayNameLabel", true) { view: MapboxNavigationView, value: Boolean ->
         view.setShowsWayNameLabel(value)
       }
 
-      Prop("showsTripProgress") { view: MapboxNavigationView, value: Boolean ->
+      Prop("showsWaypoints", true) { view: MapboxNavigationView, value: Boolean ->
+        view.setShowsWaypoints(value)
+      }
+
+      Prop("waypointAdvance") { view: MapboxNavigationView, value: String? ->
+        view.setWaypointAdvance(value)
+      }
+
+      Prop("showsTripProgress", true) { view: MapboxNavigationView, value: Boolean ->
         view.setShowsTripProgress(value)
       }
 
-      Prop("showsManeuverView") { view: MapboxNavigationView, value: Boolean ->
+      Prop("showsManeuverView", true) { view: MapboxNavigationView, value: Boolean ->
         view.setShowsManeuverView(value)
       }
 
-      Prop("showsActionButtons") { view: MapboxNavigationView, value: Boolean ->
+      Prop("showsActionButtons", true) { view: MapboxNavigationView, value: Boolean ->
         view.setShowsActionButtons(value)
       }
 
-      Prop("showsReportFeedback") { view: MapboxNavigationView, value: Boolean ->
+      Prop("showsReportFeedback", true) { view: MapboxNavigationView, value: Boolean ->
         view.setShowsReportFeedback(value)
       }
 
-      Prop("showsEndOfRouteFeedback") { view: MapboxNavigationView, value: Boolean ->
-        view.setShowsEndOfRouteFeedback(value)
-      }
 
-      Prop("showsContinuousAlternatives") { view: MapboxNavigationView, value: Boolean ->
+      Prop("showsContinuousAlternatives", true) { view: MapboxNavigationView, value: Boolean ->
         view.setShowsContinuousAlternatives(value)
       }
 
-      Prop("usesNightStyleWhileInTunnel") { view: MapboxNavigationView, value: Boolean ->
+      Prop("usesNightStyleWhileInTunnel", true) { view: MapboxNavigationView, value: Boolean ->
         view.setUsesNightStyleWhileInTunnel(value)
       }
 
-      Prop("routeLineTracksTraversal") { view: MapboxNavigationView, value: Boolean ->
+      Prop("routeLineTracksTraversal", false) { view: MapboxNavigationView, value: Boolean ->
         view.setRouteLineTracksTraversal(value)
       }
 
-      Prop("annotatesIntersectionsAlongRoute") { view: MapboxNavigationView, value: Boolean ->
+      Prop("annotatesIntersectionsAlongRoute", false) { view: MapboxNavigationView, value: Boolean ->
         view.setAnnotatesIntersectionsAlongRoute(value)
       }
 
@@ -255,11 +261,11 @@ class MapboxNavigationModule : Module() {
         view.setNativeFloatingButtons(value)
       }
 
-      Prop("distanceUnit") { view: MapboxNavigationView, value: String ->
+      Prop("distanceUnit", "metric") { view: MapboxNavigationView, value: String ->
         view.setDistanceUnit(value)
       }
 
-      Prop("language") { view: MapboxNavigationView, value: String ->
+      Prop("language", "") { view: MapboxNavigationView, value: String ->
         view.setLanguage(value)
       }
 
@@ -287,8 +293,28 @@ class MapboxNavigationModule : Module() {
         view.setLocationPuck(value)
       }
 
-      Prop("eventThrottleMs") { view: MapboxNavigationView, value: Double ->
+      Prop("eventThrottleMs", 0.0) { view: MapboxNavigationView, value: Double ->
         view.setEventThrottleMs(value)
+      }
+
+      Prop("cameraPadding") { view: MapboxNavigationView, value: Map<String, Any>? ->
+        view.setCameraPadding(value)
+      }
+
+      Prop("ornamentBottomMargin") { view: MapboxNavigationView, value: Double? ->
+        view.setOrnamentBottomMargin(value)
+      }
+
+      Prop("journeyDataEnabled", true) { view: MapboxNavigationView, value: Boolean ->
+        view.setJourneyDataEnabled(value)
+      }
+
+      Prop("keepAliveWhenDetached", false) { view: MapboxNavigationView, value: Boolean ->
+        view.setKeepAliveWhenDetached(value)
+      }
+
+      OnViewDestroys { view: MapboxNavigationView ->
+        view.destroyFromReact()
       }
     }
   }

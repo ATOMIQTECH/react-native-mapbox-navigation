@@ -3,8 +3,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const __filename = fileURLToPath(import.meta.url)
-const moduleDir = path.resolve(path.dirname(__filename), '..')
+const __filename = import.meta.filename
+const moduleDir = path.resolve(import.meta.dirname, '..')
 const repoRoot = moduleDir
 const androidDir = path.join(moduleDir, 'android')
 const envFilePath = path.join(moduleDir, '.env')
@@ -99,7 +99,7 @@ loadDotEnv(envFilePath)
 
 const tsconfigPath = path.join(moduleDir, 'tsconfig.json')
 if (existsSync(tsconfigPath)) {
-  run(`npx --no-install tsc -p ${tsconfigPath} --noEmit`, moduleDir)
+  run(`pnpm exec tsc -p ${tsconfigPath} --noEmit`, moduleDir)
 } else {
   console.log('\n> Skipping TypeScript check (tsconfig.json not found in package root).')
 }
@@ -117,6 +117,6 @@ if (existsSync(path.join(androidDir, 'gradlew'))) {
   console.log('\n> Skipping Android compile check (android/gradlew not found).')
 }
 
-run('npm pack --dry-run --cache /tmp/npm-cache-react-native-mapbox-navigation', moduleDir)
+run('pnpm pack --dry-run', moduleDir)
 
 console.log('\nRelease verification completed.')

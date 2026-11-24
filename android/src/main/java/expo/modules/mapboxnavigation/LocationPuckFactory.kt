@@ -25,19 +25,9 @@ import java.net.URL
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
-/**
- * Builds Mapbox [LocationPuck] instances from the normalized `locationPuck`
- * payload produced by the JS `resolveLocationPuck` helper.
- *
- * Drop-In consumes pucks through [LocationPuckOptions], which accepts a
- * different puck per navigation state. Remote images referenced by a
- * `require()`'d React Native asset (a packager URL in development) or by an
- * explicit `https://` URL are fetched off the main thread and cached.
- */
 internal object LocationPuckFactory {
   private const val TAG = "LocationPuckFactory"
 
-  /** Navigation states a puck can be bound to, mirroring the JS keys. */
   private val STATE_KEYS = listOf(
     "default",
     "freeDrive",
@@ -54,7 +44,6 @@ internal object LocationPuckFactory {
   private val mainHandler = Handler(Looper.getMainLooper())
   private val drawableCache = HashMap<String, Drawable>()
 
-  /** Split a normalized payload into per-state appearance maps. */
   fun parseStates(payload: Map<String, Any>?): Map<String, Map<String, Any>> {
     if (payload == null) return emptyMap()
 
@@ -67,12 +56,6 @@ internal object LocationPuckFactory {
     return result
   }
 
-  /**
-   * Resolve every referenced asset, then build [LocationPuckOptions].
-   *
-   * [onReady] is always invoked on the main thread. It is not called at all
-   * when nothing usable was configured, which leaves the SDK defaults in place.
-   */
   fun buildOptions(
     context: Context,
     states: Map<String, Map<String, Any>>,
@@ -80,7 +63,6 @@ internal object LocationPuckFactory {
   ) {
     if (states.isEmpty()) return
 
-    // Collect every image reference up front so shared assets are fetched once.
     val imageSources = LinkedHashSet<String>()
     for (appearance in states.values) {
       if ((appearance["type"] as? String)?.lowercase() != "2d") continue
@@ -89,22 +71,39 @@ internal object LocationPuckFactory {
       }
     }
 
+    val modelSources = LinkedHashSet<String>()
+    for (appearance in states.values) {
+      if ((appearance["type"] as? String)?.lowercase() != "3d") continue
+      (appearance["modelUri"] as? String)?.trim()?.takeIf { it.isNotEmpty() }?.let(modelSources::add)
+    }
+
+    ioExecutor.execute {
+      val models = modelSources.associateWith { localModelUri(context, it) }
+      buildWithModels(context, states, imageSources, models, onReady)
+    }
+  }
+
+  private fun buildWithModels(
+    context: Context,
+    states: Map<String, Map<String, Any>>,
+    imageSources: Set<String>,
+    models: Map<String, String?>,
+    onReady: (LocationPuckOptions) -> Unit
+  ) {
     loadDrawables(context, imageSources.toList()) { drawables ->
       val builder = LocationPuckOptions.Builder(context)
       var applied = false
 
       states["default"]?.let { appearance ->
-        makePuck(context, appearance, drawables)?.let {
+        makePuck(context, appearance, drawables, models)?.let {
           builder.defaultPuck(it)
           applied = true
         }
       }
 
-      // Per-state overrides. `defaultPuck` above already seeded every state, so
-      // these only need to replace the ones explicitly configured.
       for ((key, appearance) in states) {
         if (key == "default") continue
-        val puck = makePuck(context, appearance, drawables) ?: continue
+        val puck = makePuck(context, appearance, drawables, models) ?: continue
         when (key) {
           "freeDrive" -> builder.freeDrivePuck(puck)
           "destinationPreview" -> builder.destinationPreviewPuck(puck)
@@ -122,27 +121,28 @@ internal object LocationPuckFactory {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Puck construction
-  // ---------------------------------------------------------------------------
-
   private fun makePuck(
     context: Context,
     appearance: Map<String, Any>,
-    drawables: Map<String, Drawable>
+    drawables: Map<String, Drawable>,
+    models: Map<String, String?>
   ): LocationPuck? = when ((appearance["type"] as? String)?.lowercase()) {
-    "3d" -> make3D(appearance)
+    "3d" -> make3D(appearance, models)
     "2d" -> make2D(appearance, drawables)
     "tinted" -> makeTinted(context, appearance)
     "none" -> makeHidden()
-    // "default" and anything unrecognised fall through to the SDK default.
     else -> null
   }
 
-  private fun make3D(appearance: Map<String, Any>): LocationPuck? {
-    val modelUri = (appearance["modelUri"] as? String)?.trim()
-    if (modelUri.isNullOrEmpty()) {
+  private fun make3D(appearance: Map<String, Any>, models: Map<String, String?>): LocationPuck? {
+    val source = (appearance["modelUri"] as? String)?.trim()
+    if (source.isNullOrEmpty()) {
       Log.w(TAG, "3D puck requested without a modelUri; keeping the default puck.")
+      return null
+    }
+    val modelUri = models[source]
+    if (modelUri == null) {
+      Log.w(TAG, "3D puck model could not be loaded from $source; keeping the default puck.")
       return null
     }
 
@@ -167,7 +167,6 @@ internal object LocationPuckFactory {
     val bearing = drawableFor("bearingImage")
     val shadow = drawableFor("shadowImage")
 
-    // Nothing loaded — keep the SDK puck rather than rendering an invisible one.
     if (top == null && bearing == null && shadow == null) {
       Log.w(TAG, "2D puck images could not be loaded; keeping the default puck.")
       return null
@@ -175,14 +174,9 @@ internal object LocationPuckFactory {
 
     val scale = floatValue(appearance["scale"])
     val scaleExpression = (appearance["scaleExpression"] as? String)?.takeIf { it.isNotBlank() }
-      // LocationPuck2D only scales via an expression, so express a plain
-      // numeric scale as a constant literal.
       ?: scale?.let { "[\"literal\", ${it.coerceIn(0.05f, 20f)}]" }
 
     return LocationPuck2D(
-      // Maps 11 takes `ImageHolder` rather than `Drawable`, and `ImageHolder.from`
-      // accepts only a drawable resource id, a Bitmap or an Image — never a
-      // Drawable — so loaded drawables have to be rasterised first.
       topImage = top?.toImageHolder(),
       bearingImage = bearing?.toImageHolder(),
       shadowImage = shadow?.toImageHolder(),
@@ -191,12 +185,6 @@ internal object LocationPuckFactory {
     )
   }
 
-  /**
-   * Recolour the standard puck shape.
-   *
-   * Android's [LocationPuck2D] takes drawables rather than colours, so the
-   * puck is drawn here: a filled halo circle with a directional arrow on top.
-   */
   private fun makeTinted(context: Context, appearance: Map<String, Any>): LocationPuck {
     val body = HexColor.parse(appearance["color"]) ?: HexColor.parse(appearance["bearingColor"])
       ?: Color.parseColor("#263A57")
@@ -221,17 +209,7 @@ internal object LocationPuckFactory {
     )
   }
 
-  /**
-   * Fully transparent puck.
-   *
-   * The location component has to stay enabled for the navigation camera to
-   * track the user, so the puck is hidden by drawing nothing instead of by
-   * disabling the component.
-   */
   private fun makeHidden(): LocationPuck = LocationPuck2D(
-    // Maps 11 wants an ImageHolder; a 1x1 transparent bitmap is how Mapbox
-    // itself models an invisible puck (see Puck2DConfiguration.emptyPuck on
-    // iOS). Setting the puck to null instead would stop location updates.
     topImage = transparentImage(),
     bearingImage = transparentImage(),
     shadowImage = transparentImage(),
@@ -239,19 +217,7 @@ internal object LocationPuckFactory {
     opacity = 0f
   )
 
-  // ---------------------------------------------------------------------------
-  // Drawing helpers
-  // ---------------------------------------------------------------------------
 
-  /**
-   * Rasterise a [Drawable] so it can be handed to Maps 11 as an [ImageHolder].
-   *
-   * `ImageHolder.from` overloads cover a drawable *resource id*, a [Bitmap] and
-   * an `Image` — but not a [Drawable] instance, which is what the puck
-   * appearance loader produces for remote and bundled images. A
-   * [BitmapDrawable] can surrender its bitmap directly; anything else is drawn
-   * onto a canvas at its intrinsic size.
-   */
   private fun Drawable.toImageHolder(): ImageHolder {
     (this as? BitmapDrawable)?.bitmap?.let { return ImageHolder.from(it) }
 
@@ -264,7 +230,6 @@ internal object LocationPuckFactory {
     return ImageHolder.from(bitmap)
   }
 
-  /** A 1x1 fully transparent image, used to render an invisible puck. */
   private fun transparentImage(): ImageHolder =
     ImageHolder.from(Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888))
 
@@ -297,7 +262,6 @@ internal object LocationPuckFactory {
     return ImageHolder.from(bitmap)
   }
 
-  /** An upward-pointing triangle; Mapbox rotates it to the course bearing. */
   private fun arrowImage(size: Int, color: Int): ImageHolder {
     val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
@@ -319,14 +283,7 @@ internal object LocationPuckFactory {
     return ImageHolder.from(bitmap)
   }
 
-  // ---------------------------------------------------------------------------
-  // Asset loading
-  // ---------------------------------------------------------------------------
 
-  /**
-   * Load every source to a [Drawable], invoking [onReady] once all attempts
-   * finish. Sources that fail are simply absent from the result map.
-   */
   private fun loadDrawables(
     context: Context,
     sources: List<String>,
@@ -362,6 +319,77 @@ internal object LocationPuckFactory {
     }
   }
 
+  private val modelCache = HashMap<String, String>()
+
+  private fun localModelUri(context: Context, source: String): String? {
+    synchronized(modelCache) { modelCache[source]?.let { return it } }
+    val lower = source.lowercase()
+    val hasModelExtension = lower.endsWith(".glb") || lower.endsWith(".gltf")
+    if (hasModelExtension && (lower.startsWith("asset://") || lower.startsWith("file://"))) {
+      return source
+    }
+
+    val dir = File(context.cacheDir, "puck-models").apply { mkdirs() }
+    val target = File(dir, "model-${Integer.toHexString(source.hashCode())}.glb")
+    val file = File(dir, "${target.name}.${System.nanoTime()}.tmp")
+    val copied = try {
+      when {
+        lower.startsWith("http://") || lower.startsWith("https://") -> {
+          val connection = (URL(source).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            instanceFollowRedirects = true
+          }
+          try {
+            if (connection.responseCode !in 200..299) {
+              false
+            } else {
+              connection.inputStream.use { input -> file.outputStream().use { input.copyTo(it) } }
+              true
+            }
+          } finally {
+            connection.disconnect()
+          }
+        }
+        lower.startsWith("asset://") -> {
+          context.assets.open(source.removePrefix("asset://")).use { input ->
+            file.outputStream().use { input.copyTo(it) }
+          }
+          true
+        }
+        lower.startsWith("file://") || lower.startsWith("/") -> {
+          File(source.removePrefix("file://")).inputStream().use { input ->
+            file.outputStream().use { input.copyTo(it) }
+          }
+          true
+        }
+        else -> {
+          val name = source.substringAfterLast('/').substringBeforeLast('.')
+          val id = context.resources.getIdentifier(name, "raw", context.packageName)
+          if (id == 0) {
+            false
+          } else {
+            context.resources.openRawResource(id).use { input ->
+              file.outputStream().use { input.copyTo(it) }
+            }
+            true
+          }
+        }
+      }
+    } catch (error: Exception) {
+      Log.w(TAG, "Could not load the 3D puck model $source", error)
+      false
+    }
+
+    if (!copied || file.length() == 0L || !file.renameTo(target)) {
+      file.delete()
+      return null
+    }
+    val uri = "file://${target.absolutePath}"
+    synchronized(modelCache) { modelCache[source] = uri }
+    return uri
+  }
+
   private fun loadDrawable(context: Context, source: String): Drawable? {
     val trimmed = source.trim()
 
@@ -384,7 +412,6 @@ internal object LocationPuckFactory {
       }
 
       else -> {
-        // A bare name: a drawable resource shipped with the host app.
         val name = trimmed.substringAfterLast('/').substringBeforeLast('.')
         val id = context.resources.getIdentifier(name, "drawable", context.packageName)
         if (id != 0) ContextCompat.getDrawable(context, id) else null
@@ -411,10 +438,6 @@ internal object LocationPuckFactory {
       connection.disconnect()
     }
   }
-
-  // ---------------------------------------------------------------------------
-  // Value helpers
-  // ---------------------------------------------------------------------------
 
   private fun floatValue(raw: Any?): Float? = (raw as? Number)?.toFloat()?.takeIf { it.isFinite() }
 

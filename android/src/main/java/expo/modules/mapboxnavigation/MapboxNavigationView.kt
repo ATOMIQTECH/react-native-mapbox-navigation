@@ -1,4 +1,7 @@
-@file:OptIn(com.mapbox.navigation.base.ExperimentalPreviewMapboxNavigationAPI::class)
+@file:OptIn(
+  com.mapbox.navigation.base.ExperimentalPreviewMapboxNavigationAPI::class,
+  com.mapbox.navigation.base.ExperimentalMapboxNavigationAPI::class
+)
 
 package expo.modules.mapboxnavigation
 
@@ -30,9 +33,25 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistryOwner
 import com.mapbox.api.directions.v5.models.BannerInstructions
+import com.mapbox.api.directions.v5.models.Bearing
+import com.mapbox.maps.EdgeInsets
+import com.mapbox.navigation.core.directions.session.RoutesExtra
 import com.mapbox.api.directions.v5.models.RouteOptions
 import com.mapbox.bindgen.Value
+import com.mapbox.geojson.Feature
+import com.mapbox.geojson.LineString
 import com.mapbox.geojson.Point
+import com.mapbox.maps.Style
+import com.mapbox.maps.extension.style.layers.addLayer
+import com.mapbox.maps.extension.style.layers.generated.LineLayer
+import com.mapbox.maps.extension.style.layers.getLayerAs
+import com.mapbox.maps.extension.style.layers.generated.lineLayer
+import com.mapbox.maps.extension.style.layers.properties.generated.LineCap
+import com.mapbox.maps.extension.style.layers.properties.generated.LineJoin
+import com.mapbox.maps.extension.style.sources.addSource
+import com.mapbox.maps.extension.style.sources.generated.GeoJsonSource
+import com.mapbox.maps.extension.style.sources.generated.geoJsonSource
+import com.mapbox.maps.extension.style.sources.getSourceAs
 import com.mapbox.geojson.utils.PolylineUtils
 import com.mapbox.navigation.base.extensions.applyDefaultNavigationOptions
 import com.mapbox.navigation.base.extensions.applyLanguageAndVoiceUnitOptions
@@ -42,7 +61,17 @@ import com.mapbox.navigation.base.route.NavigationRouterCallback
 import com.mapbox.navigation.base.route.RouterFailure
 import com.mapbox.navigation.base.trip.model.RouteProgress
 import com.mapbox.navigation.core.MapboxNavigation
+import com.mapbox.navigation.core.arrival.ArrivalController
 import com.mapbox.navigation.core.arrival.ArrivalObserver
+import com.mapbox.navigation.core.reroute.RerouteController
+import com.mapbox.navigation.core.reroute.RerouteStateV2
+import com.mapbox.navigation.base.speed.model.SpeedLimitInfo
+import com.mapbox.navigation.base.speed.model.SpeedUnit
+import com.mapbox.navigation.base.road.model.Road
+import com.mapbox.navigation.base.trip.model.RouteLegProgress
+import com.mapbox.navigation.ui.maps.PredictiveCacheController
+import com.mapbox.api.directions.v5.models.BannerComponents
+import com.mapbox.api.directions.v5.models.LegStep
 import com.mapbox.navigation.core.directions.session.RoutesObserver
 import com.mapbox.navigation.core.lifecycle.MapboxNavigationApp
 import com.mapbox.navigation.core.trip.session.BannerInstructionsObserver
@@ -51,10 +80,6 @@ import com.mapbox.navigation.core.trip.session.LocationMatcherResult
 import com.mapbox.navigation.core.trip.session.LocationObserver
 import com.mapbox.navigation.core.trip.session.OffRouteObserver
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
-// v3 has no Drop-In UI. The navigation UI is assembled from `ui-components`
-// widgets and wired to the navigator through the `ui-base` installer, so the
-// former `com.mapbox.navigation.dropin.*` imports have no replacement — the
-// types below are their functional stand-ins.
 import com.mapbox.maps.MapInitOptions
 import com.mapbox.navigation.base.ExperimentalPreviewMapboxNavigationAPI
 import com.mapbox.api.directions.v5.DirectionsCriteria
@@ -76,6 +101,8 @@ import com.mapbox.navigation.ui.components.maneuver.view.MapboxTurnIconManeuver
 import com.mapbox.navigation.ui.components.voice.audioGuidanceButton
 import com.mapbox.navigation.ui.components.voice.view.MapboxAudioGuidanceButton
 import com.mapbox.maps.plugin.animation.camera
+import com.mapbox.maps.plugin.attribution.attribution
+import com.mapbox.maps.plugin.logo.logo
 import com.mapbox.maps.plugin.locationcomponent.location
 import com.mapbox.navigation.ui.maps.camera.NavigationCamera
 import com.mapbox.navigation.ui.maps.camera.data.MapboxNavigationViewportDataSource
@@ -104,12 +131,6 @@ import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
 import java.util.UUID
 
-/**
- * Android embedded navigation view using Mapbox's official Drop-In UI.
- *
- * This view exists specifically to match the look/feel of Mapbox's SDK UI (like iOS),
- * including the route preview info panel and the Start Navigation button.
- */
 class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
   private data class NavigationMarkerPayload(
     val id: String,
@@ -118,17 +139,20 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     val glyph: String,
     val badge: String?,
     val variant: String,
-    // Customization: custom colors/opacity override variant-based defaults
     val customColor: Int?,
     val customBadgeColor: Int?,
     val customOpacity: Float?,
     val size: String,
-    val markerStyle: String,  // "pin" | "dot"
+    val markerStyle: String,
     val showTail: Boolean,
     val selected: Boolean,
     val allowOverlap: Boolean,
-    val anchorOffsetY: Int?,  // custom dp offset, overrides size-preset
+    val anchorOffsetY: Int?,
+    val image: NavigationMarkerImage? = null,
+    val animatesMovement: Boolean = false,
   )
+
+  private data class NavigationMarkerImage(val uri: String, val scale: Float)
 
   private data class NavigationMarkerMetrics(
     val bubbleSizeDp: Int,
@@ -144,17 +168,35 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   )
 
   companion object {
+    private const val MATCHED_LOCATION_MAX_DRIFT_M = 30.0
+    private const val WAYPOINT_LAYER_ID = "mapbox-navigation-waypoint-layer"
+    private const val MARKER_GLIDE_MAX_DISTANCE_M = 500f
+    private const val MARKER_GLIDE_MIN_MS = 300L
+    private const val MARKER_GLIDE_MAX_MS = 3_000L
+    private const val RAW_FIX_MAX_AGE_MS = 5_000L
+    private const val ORNAMENT_EDGE_MARGIN_DP = 8.0
     private const val TAG = "MapboxNavigationView"
     private const val EMBEDDED_BUILD = "3.0.0-embedded-v3-r1"
-    /// `colors` keys that can only be applied by reinstalling the route-arrow
-    /// component; see `setColors`.
+    private const val GUIDANCE_WATCHDOG_TIMEOUT_MS = 20_000L
     private val ARROW_COLOR_KEYS = listOf("maneuverArrow", "maneuverArrowStroke")
-    /// v2 inherited these from Drop-In, which defaulted to Mapbox's navigation
-    /// styles. The first cut of this migration fell back to `Style.MAPBOX_STREETS`
-    /// instead, which silently changed the default look of every Android
-    /// consumer. These restore it. Standard/3D styles are opt-in via
-    /// `mapStyleUri` — both platforms place the route layers in the `middle`
-    /// slot, so they compose correctly with Standard's 3D content.
+    private const val ORIGIN_MAX_ACCURACY_M = 50.0
+    private const val ORIGIN_MAX_AGE_MS = 15_000L
+    private const val ORIGIN_WAIT_MS = 4_000L
+    private const val ORIGIN_HEADING_MIN_SPEED_MPS = 2.0
+    private const val ORIGIN_HEADING_TOLERANCE_DEG = 45.0
+    private const val BANNER_DISTANCE_STEP_M = 10.0
+    private const val BANNER_DISTANCE_MIN_GAP_MS = 250L
+    private const val REROUTE_MIN_TARGET_CHANGE_M = 15.0
+    private val REROUTE_RETRY_DELAYS_MS = longArrayOf(2_000L, 5_000L, 10_000L, 20_000L)
+    private const val LAYER_ORDER_GUARD_MAX_FRAMES = 180
+    private val SESSION_CONFLICT_RETRY_DELAYS_MS = longArrayOf(0L, 100L, 400L)
+    private const val TOP_LEVEL_ROUTE_LINE_LAYER_ID = "mapbox-top-level-route-layer"
+    private val PUCK_LAYER_IDS = listOf("mapbox-location-indicator-layer", "mapbox-location-model-layer")
+    private const val DETACHED_KEEP_ALIVE_MS = 10 * 60_000L
+    private const val WAYPOINT_NAMES_MAX_TOTAL_CHARS = 500
+    @Volatile private var lastKnownLatitude: Double? = null
+    @Volatile private var lastKnownLongitude: Double? = null
+    private var appliedDistanceUnit: String? = null
     private val BOOLEAN_STYLE_CONFIG_KEYS = listOf(
       "show3dObjects",
       "showRoadLabels",
@@ -179,11 +221,10 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private val expoAppContext: AppContext = appContext
   private val sessionOwner = "embedded-${UUID.randomUUID()}"
   private val mainHandler = Handler(Looper.getMainLooper())
+  private var guidanceWatchdog: Runnable? = null
+  private var hasReceivedRouteProgress = false
+  private var hasReceivedRawLocation = false
 
-  /**
-   * Internal native layer that stays as the first child.
-   * React Native children are added by the framework as siblings above this layer.
-   */
   private val nativeLayer: FrameLayout = FrameLayout(context).apply {
     layoutParams = FrameLayout.LayoutParams(
       ViewGroup.LayoutParams.MATCH_PARENT,
@@ -194,11 +235,35 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private var enabled = false
   private var ownsNavigationSession = false
+  private var keepAliveWhenDetached = false
+  private var paused = false
+  private val detachedTimeout = Runnable {
+    if (paused) {
+      Log.i(TAG, "Detached for ${DETACHED_KEEP_ALIVE_MS / 60_000} min; ending the kept-alive session")
+      paused = false
+      stopEmbedded(emitCancel = true)
+    }
+  }
+  private var sessionConflictRetries = 0
 
   private var startOrigin: Map<String, Any>? = null
   private var destination: Map<String, Any>? = null
   private var waypoints: List<Map<String, Any>>? = null
+  private var routedDestination: Point? = null
+  private var routedWaypointsProp: List<Map<String, Any>>? = null
+  private var routedIntermediates: List<Map<String, Any>> = emptyList()
+  private var pendingDestination: Point? = null
+  private var pendingWaypointsProp: List<Map<String, Any>>? = null
+  private var pendingIntermediates: List<Map<String, Any>> = emptyList()
+  private var rerouteRetryAttempt = 0
+  private var isTargetRerouteFailing = false
+  private val rerouteRetry = Runnable {
+    if (!enabled || !hasActiveRoute || pendingDestination == null) return@Runnable
+    if (!hasRequestedRoute) scheduleStart()
+  }
   private var navigationMarkers: List<Map<String, Any>>? = null
+  private var navigationLines: List<Map<String, Any>>? = null
+  private val renderedNavigationLineIds = linkedSetOf<String>()
 
   private var shouldSimulateRoute = false
   private var mute = false
@@ -224,7 +289,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private var showsManeuverView = true
   private var showsActionButtons = true
   private var showsReportFeedback = true
-  private var showsEndOfRouteFeedback = true
   private var usesNightStyleWhileInTunnel = true
   private var routeLineTracksTraversal = false
   private var annotatesIntersectionsAlongRoute = false
@@ -236,89 +300,64 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private var cameraPitch: Double? = null
   private var cameraZoom: Double? = null
   private var colorOverrides: Map<String, Any> = emptyMap()
-  /**
-   * Runtime colour updates for the route line.
-   *
-   * The route line component takes its options once at install time, so without
-   * this a `colors` change after mount could not reach the live line. v3
-   * provides `RouteLineConfig.viewOptionsUpdates` precisely for this, which
-   * lets Android match iOS instead of requiring a remount.
-   */
   private val routeLineOptionsUpdates =
     MutableStateFlow<MapboxRouteLineViewDynamicOptionsBuilderBlock>({})
-  /**
-   * The route-arrow installation, kept apart from the rest.
-   *
-   * `RouteArrowConfig` has no equivalent of the route line's
-   * `viewOptionsUpdates` — its options are read once, when the component is
-   * installed — so the only way to recolour the on-map turn arrow after mount is
-   * to install that one component again. Holding its handle separately keeps
-   * that from disturbing the others.
-   */
   private var routeArrowInstallation: Installation? = null
   private var locationPuckStates: Map<String, Map<String, Any>> = emptyMap()
   private var appliedLocationPuckStates: Map<String, Map<String, Any>>? = null
 
   private var placeholderView: TextView? = null
   private var immersiveNavBarsHidden = false
-  /// The MapView we now own outright. Under Drop-In this was whatever MapView
-  /// the SDK happened to attach, surfaced through a `MapViewObserver`.
   private var attachedMapView: MapView? = null
-  /// The style currently loaded, so a re-apply with no change is a no-op.
+  private var ornamentBottomMargin: Double? = null
   private var appliedStyleUri: String? = null
-  /// Keeps the style-loaded subscription alive; cancelled at teardown.
   private var styleLoadedCancelable: com.mapbox.common.Cancelable? = null
-  /// The unit the process-wide NavigationOptions were built with.
-  private var appliedDistanceUnit: String? = null
+  private var layerOrderGuard: com.mapbox.common.Cancelable? = null
+  private var layerOrderGuardFrames = 0
+  private var hasGuardedArrowLayers = false
 
-  // The navigation UI, which v3 requires us to build and own.
   private var maneuverView: MapboxManeuverView? = null
   private var soundButton: MapboxAudioGuidanceButton? = null
-  /// Handles returned by the individual component installers.
-  ///
-  /// `installComponents` itself returns Unit and ties teardown to the lifecycle
-  /// owner's ON_DESTROY — but this view can be unmounted while its host activity
-  /// lives on, so the components would outlive it. Keeping each `Installation`
-  /// lets teardown detach them at unmount instead of leaking observers across
-  /// remounts.
   private val componentInstallations = mutableListOf<Installation>()
 
-  /// We construct these rather than letting the installer make its own, because
-  /// the camera props (`cameraMode`, `cameraPitch`, `cameraZoom`) and
-  /// `resumeCameraFollowing()` need a handle to drive them. Drop-In hid both
-  /// behind its own camera API.
   private var viewportDataSource: MapboxNavigationViewportDataSource? = null
   private var navigationCamera: NavigationCamera? = null
   private var warnedUnsupportedChrome = false
   private val navigationMarkerViews = linkedMapOf<String, View>()
+  private val markerShownAt = mutableMapOf<String, Point>()
+  private val markerUpdatedAt = mutableMapOf<String, Long>()
+  private val markerAnimators = mutableMapOf<String, android.animation.ValueAnimator>()
 
-  private var mapboxNavigation: MapboxNavigation? = null
+  @Volatile private var mapboxNavigation: MapboxNavigation? = null
+  private var predictiveCacheController: PredictiveCacheController? = null
+  private var maneuverInstallation: Installation? = null
+  private var rerouteController: RerouteController? = null
+  private var lastOffRouteKey: String? = null
+  private var lastWaypointArrivalLeg: Int? = null
+  private var lastRoadName: String? = null
   private var hasRequestedRoute = false
-  /// Set while free drive runs purely to obtain a first location fix, because
-  /// `startOrigin` was omitted. Drop-In used to resolve the device location
-  /// itself; v3 leaves that to the host.
+  private var routeRequestId: Long? = null
+  private var routeGeneration = 0
+  private var startScheduled = false
+  private var hasActiveRoute = false
+  private var originWaitStartedAtMs = 0L
+  private var lastEmittedRouteSignature: String? = null
+  private var lastBannerSignature: String? = null
+  private var lastBannerDistance = Double.NaN
+  private var lastBannerEmitAtMs = 0L
+  private var languageExplicit = false
+  private var cameraPadding: Map<String, Any>? = null
+  private var journeyDataEnabled = true
   private var awaitingOriginFix = false
   private var hasEmittedArrival = false
   private var isCameraFollowing = true
   private var touchStartX = 0f
   private var touchStartY = 0f
   private val touchSlopPx = 8f * context.resources.displayMetrics.density
-  /**
-   * Minimum gap between the continuous, high-frequency events
-   * (`onLocationChange`, `onRouteProgressChange`, `onJourneyDataChange`).
-   *
-   * Mapbox emits these on every location fix, and each one crosses the bridge
-   * with a payload. On a long drive that is a meaningful amount of avoidable
-   * CPU, garbage and battery. Discrete events (arrival, banner, errors) are
-   * never throttled.
-   */
   private var eventThrottleMs = 0L
   private var lastLocationEmitAtMs = 0L
   private var lastProgressEmitAtMs = 0L
   private var lastJourneyEmitAtMs = 0L
-  /// v3 reports `com.mapbox.common.location.Location`, not
-  /// `android.location.Location`. Latitude/longitude are non-null; everything
-  /// else is a nullable `Double`, and `accuracy` is now `horizontalAccuracy`.
   private var lastJourneyLocation: com.mapbox.common.location.Location? = null
   private var lastJourneyProgress: RouteProgress? = null
   private var lastJourneyBanner: BannerInstructions? = null
@@ -344,16 +383,23 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
 
 
+  private var lastRawLocation: com.mapbox.common.location.Location? = null
+
   private val locationObserver = object : LocationObserver {
-    override fun onNewRawLocation(rawLocation: com.mapbox.common.location.Location) = Unit
+    override fun onNewRawLocation(rawLocation: com.mapbox.common.location.Location) {
+      lastRawLocation = rawLocation
+      hasReceivedRawLocation = true
+    }
 
     override fun onNewLocationMatcherResult(locationMatcherResult: LocationMatcherResult) {
-      val location = locationMatcherResult.enhancedLocation
-      // Always keep the latest fix for the journey snapshot, even when the
-      // outgoing event itself is throttled.
+      val matched = locationMatcherResult.enhancedLocation
+      val location = reportedLocation(matched, lastRawLocation)
       lastJourneyLocation = location
-      if (awaitingOriginFix) {
-        // We were only in free drive to learn where we are; now we can route.
+      lastKnownLatitude = location.latitude
+      lastKnownLongitude = location.longitude
+      val roadName = roadNameOf(locationMatcherResult.road)
+      lastRoadName = roadName
+      if (awaitingOriginFix && (isUsableOrigin(location) || originWaitExpired())) {
         awaitingOriginFix = false
         mainHandler.post { startIfReady() }
       }
@@ -363,17 +409,53 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         mapOf(
           "latitude" to location.latitude,
           "longitude" to location.longitude,
-          // These are nullable in v3; the JS payload keys and their numeric
-          // shape are part of the public contract, so absent values become 0.0
-          // rather than null.
           "bearing" to (location.bearing ?: 0.0),
           "speed" to (location.speed ?: 0.0),
           "altitude" to (location.altitude ?: 0.0),
-          "accuracy" to (location.horizontalAccuracy ?: 0.0)
+          "accuracy" to (location.horizontalAccuracy ?: 0.0),
+          "timestamp" to location.timestamp.toDouble(),
+          "speedLimit" to speedLimit(locationMatcherResult.speedLimitInfo),
+          "roadName" to roadName,
+          "matched" to (location === matched)
         )
       )
       emitJourneySnapshot()
     }
+  }
+
+  private fun reportedLocation(
+    matched: com.mapbox.common.location.Location,
+    raw: com.mapbox.common.location.Location?
+  ): com.mapbox.common.location.Location {
+    if (raw == null) return matched
+    if (kotlin.math.abs(raw.timestamp - matched.timestamp) > RAW_FIX_MAX_AGE_MS) return matched
+    val accuracy = raw.horizontalAccuracy ?: return matched
+    if (accuracy < 0) return matched
+    val distance = FloatArray(1)
+    android.location.Location.distanceBetween(
+      matched.latitude, matched.longitude, raw.latitude, raw.longitude, distance
+    )
+    val allowed = maxOf(MATCHED_LOCATION_MAX_DRIFT_M, accuracy * 2)
+    return if (distance[0].toDouble() > allowed) raw else matched
+  }
+
+  private fun speedLimit(info: SpeedLimitInfo?): Map<String, Any>? {
+    val speed = info?.speed?.takeIf { it > 0 } ?: return null
+    return when (info.unit) {
+      SpeedUnit.MILES_PER_HOUR -> mapOf("value" to speed, "unit" to "mph")
+      SpeedUnit.METERS_PER_SECOND -> mapOf("value" to Math.round(speed * 3.6).toInt(), "unit" to "km/h")
+      else -> mapOf("value" to speed, "unit" to "km/h")
+    }
+  }
+
+
+  private fun roadNameOf(road: Road?): String? {
+    val text = road?.components
+      ?.mapNotNull { it.text.trim().takeIf { part -> part.isNotEmpty() } }
+      ?.joinToString(" ")
+      ?.replace(Regex("\\s+"), " ")
+      ?.trim()
+    return text?.takeIf { it.isNotEmpty() }
   }
 
   private val bannerInstructionsObserver = BannerInstructionsObserver { banner ->
@@ -382,13 +464,18 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     emitJourneySnapshot()
   }
 
+  private fun hostWaypointIndex(legIndex: Int): Int {
+    val passed = (routedWaypointsProp?.size ?: routedIntermediates.size) - routedIntermediates.size
+    return passed.coerceAtLeast(0) + legIndex
+  }
+
   private fun emitArrivalIfNeeded(routeProgress: RouteProgress? = null) {
-    if (hasEmittedArrival) return
+    if (hasEmittedArrival || routeRequestId != null || pendingDestination != null) return
     hasEmittedArrival = true
     val name = (destination?.get("name") as? String)?.trim()?.takeIf { it.isNotEmpty() }
     dispatchArrive(
       mapOf(
-        "index" to routeProgress?.currentLegProgress?.legIndex,
+        "index" to routeProgress?.currentLegProgress?.legIndex?.let(::hostWaypointIndex),
         "name" to (name ?: "Destination"),
         "isFinalDestination" to true,
         "remainingWaypoints" to (routeProgress?.remainingWaypoints ?: 0)
@@ -397,8 +484,16 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   }
 
   private val routeProgressObserver = RouteProgressObserver { progress: RouteProgress ->
+    if (!hasReceivedRouteProgress) {
+      hasReceivedRouteProgress = true
+      cancelGuidanceWatchdog()
+    }
     lastJourneyProgress = progress
     lastJourneyBanner = progress.bannerInstructions ?: lastJourneyBanner
+    if (!hasGuardedArrowLayers) {
+      hasGuardedArrowLayers = true
+      armLayerOrderGuard()
+    }
 
     if (shouldEmitThrottled(lastProgressEmitAtMs)) {
       lastProgressEmitAtMs = nowMs()
@@ -408,12 +503,13 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
           "distanceRemaining" to progress.distanceRemaining.toDouble(),
           "durationRemaining" to progress.durationRemaining,
           "fractionTraveled" to progress.fractionTraveled.toDouble(),
-          "legIndex" to (progress.currentLegProgress?.legIndex ?: 0)
+          "legIndex" to (progress.currentLegProgress?.legIndex ?: 0),
+          "legDistanceRemaining" to progress.currentLegProgress?.distanceRemaining?.toDouble(),
+          "legDurationRemaining" to progress.currentLegProgress?.durationRemaining
         )
       )
     }
 
-    // Arrival and banner changes are discrete and must never be throttled.
     if (!hasEmittedArrival && progress.distanceRemaining <= 5.0) {
       emitArrivalIfNeeded(progress)
     }
@@ -421,14 +517,36 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     emitJourneySnapshot()
   }
 
-  /**
-   * Emits when the user leaves (or rejoins) the active route.
-   *
-   * Mapbox detects this and reroutes internally, but the app had no way to
-   * observe it — useful for showing a "rerouting" indicator.
-   */
   private val offRouteObserver = OffRouteObserver { offRoute ->
-    dispatchOffRoute(mapOf("offRoute" to offRoute))
+    emitOffRoute(offRoute, rerouteFailed = false)
+  }
+
+  private val rerouteStateObserver = RerouteController.RerouteStateV2Observer { state ->
+    when (state) {
+      is RerouteStateV2.FetchingRoute -> emitOffRoute(true, rerouteFailed = false)
+      is RerouteStateV2.Failed -> emitOffRoute(true, rerouteFailed = true)
+      is RerouteStateV2.Deviation.RouteIgnored -> emitOffRoute(false, rerouteFailed = false)
+      else -> Unit
+    }
+  }
+
+  private fun emitOffRoute(
+    offRoute: Boolean,
+    rerouteFailed: Boolean,
+    reason: String = "deviation",
+  ) {
+    if (!offRoute && isTargetRerouteFailing) return
+    val key = "$offRoute|$rerouteFailed|$reason"
+    if (key == lastOffRouteKey) return
+    if (!offRoute && lastOffRouteKey == null) return
+    lastOffRouteKey = key
+    val payload = mutableMapOf<String, Any?>("offRoute" to offRoute, "reason" to reason)
+    if (rerouteFailed) payload["rerouteFailed"] = true
+    dispatchOffRoute(payload)
+  }
+
+  private val holdLegArrivalController = object : ArrivalController {
+    override fun navigateNextRouteLeg(routeLegProgress: RouteLegProgress): Boolean = false
   }
 
   private val arrivalObserver = object : ArrivalObserver {
@@ -436,14 +554,13 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       emitArrivalIfNeeded(routeProgress)
     }
 
-    /**
-     * Intermediate stop reached. Previously a no-op, so multi-stop routes had no
-     * way to observe waypoint arrivals at all.
-     */
     override fun onWaypointArrival(routeProgress: RouteProgress) {
+      val legIndex = routeProgress.currentLegProgress?.legIndex
+      if (legIndex != null && legIndex == lastWaypointArrivalLeg) return
+      lastWaypointArrivalLeg = legIndex
       dispatchWaypointArrive(
         mapOf(
-          "index" to routeProgress.currentLegProgress?.legIndex,
+          "index" to routeProgress.currentLegProgress?.legIndex?.let(::hostWaypointIndex),
           "name" to (currentLegDestinationName(routeProgress) ?: ""),
           "isFinalDestination" to false,
           "remainingWaypoints" to routeProgress.remainingWaypoints
@@ -451,37 +568,32 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       )
     }
 
-    /**
-     * Intentionally not surfaced as an event.
-     *
-     * This fires right after `onWaypointArrival` (and after a programmatic
-     * `advanceToNextWaypoint()`), so emitting here would double-report a single
-     * stop. Leg transitions are observable via `RouteProgress.legIndex`.
-     */
     override fun onNextRouteLegStart(
       routeLegProgress: com.mapbox.navigation.base.trip.model.RouteLegProgress
     ) = Unit
   }
 
-  /** Best-effort name for the stop that was just reached. */
   private fun currentLegDestinationName(routeProgress: RouteProgress): String? {
     val legIndex = routeProgress.currentLegProgress?.legIndex ?: return null
-    val wps = waypoints
-    // `waypoints` holds the intermediate stops, so leg N ends at index N.
-    return (wps?.getOrNull(legIndex)?.get("name") as? String)?.trim()?.takeIf { it.isNotEmpty() }
+    return (routedIntermediates.getOrNull(legIndex)?.get("name") as? String)?.trim()?.takeIf { it.isNotEmpty() }
   }
 
   private val routesObserver = RoutesObserver { routeUpdateResult ->
+    if (routeUpdateResult.navigationRoutes.isNotEmpty()) {
+      hasGuardedArrowLayers = false
+      armLayerOrderGuard()
+    }
     routeUpdateResult.navigationRoutes.firstOrNull()?.let { route ->
-      emitRouteChangeFrom(route)
-      // Feed the camera's viewport the new route.
-      //
-      // The installed navigationCamera component forwards route *progress* to
-      // the viewport data source but not route *changes*, so without this the
-      // SDK logs "You're calling #onRouteProgressChanged but you didn't call
-      // #onRouteChanged" and the viewport has no geometry to frame — overview
-      // mode in particular then points somewhere arbitrary rather than at the
-      // route. Drop-In owned this wiring in v2.
+      if (routeUpdateResult.reason != RoutesExtra.ROUTES_UPDATE_REASON_REFRESH) {
+        emitRouteChangeFrom(route)
+      }
+      if (routeUpdateResult.reason == RoutesExtra.ROUTES_UPDATE_REASON_REROUTE) {
+        runCatching { (route.directionsRoute.legs()?.size ?: 0) - 1 }.getOrNull()?.let { remaining ->
+          routedIntermediates = routedIntermediates.takeLast(remaining.coerceAtLeast(0))
+        }
+        lastWaypointArrivalLeg = null
+        emitOffRoute(false, rerouteFailed = false)
+      }
       viewportDataSource?.let { dataSource ->
         runCatching {
           dataSource.onRouteChanged(route)
@@ -495,52 +607,222 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
-    Log.i(TAG, "Embedded navigation view attached ($EMBEDDED_BUILD)")
+    Log.i(TAG, "Embedded navigation view attached ($EMBEDDED_BUILD) paused=$paused")
+    if (paused) {
+      resumeEmbedded()
+      return
+    }
     if (enabled) startIfReady()
   }
 
   override fun onDetachedFromWindow() {
-    stopEmbedded(emitCancel = false)
+    if (shouldPauseOnDetach()) pauseEmbedded() else stopEmbedded(emitCancel = false)
     super.onDetachedFromWindow()
   }
 
-  fun setNavigationEnabled(next: Boolean) {
-    enabled = next
-    if (next) startIfReady() else stopEmbedded(emitCancel = false)
+  private fun shouldPauseOnDetach(): Boolean =
+    keepAliveWhenDetached && enabled && ownsNavigationSession &&
+      mapboxNavigation != null && attachedMapView != null
+
+  private fun pauseEmbedded() {
+    if (paused) return
+    paused = true
+    Log.i(TAG, "Detached with keepAliveWhenDetached; keeping the navigation session running")
+    keepScreenOn = false
+    setNavigationBarsHidden(false)
+    mainHandler.removeCallbacks(detachedTimeout)
+    mainHandler.postDelayed(detachedTimeout, DETACHED_KEEP_ALIVE_MS)
   }
 
-  fun setStartOrigin(origin: Map<String, Any>?) {
-    startOrigin = origin
-    hasRequestedRoute = false
-    if (enabled) startIfReady()
+  private fun resumeEmbedded() {
+    paused = false
+    mainHandler.removeCallbacks(detachedTimeout)
+    if (!enabled || mapboxNavigation == null || attachedMapView == null) {
+      stopEmbedded(emitCancel = false)
+      if (enabled) startIfReady()
+      return
+    }
+    keepScreenOn = true
+    setNavigationBarsHidden(true)
+    scheduleLayoutNudges()
+    applyCameraPadding()
+    if (isCameraFollowing) resumeCameraFollowingInternal("reattach")
+    dispatchCameraFollowingStateChange(
+      mapOf(
+        "isCameraFollowing" to isCameraFollowing,
+        "isCameraNotFollowing" to !isCameraFollowing,
+        "reason" to "reattach"
+      )
+    )
+    lastBannerSignature = null
+    lastBannerDistance = Double.NaN
+    runCatching { mapboxNavigation?.getNavigationRoutes()?.firstOrNull() }
+      .getOrNull()
+      ?.let { emitRouteChangeFrom(it) }
+    emitBannerInstructionFrom(lastJourneyBanner)
   }
 
-  fun setDestination(dest: Map<String, Any>?) {
-    destination = dest
-    hasEmittedArrival = false
-    hasRequestedRoute = false
-    if (enabled) {
-      dispatchDestinationChanged(dest.toAnyPointOrNull()?.let { mapOf("latitude" to it.latitude(), "longitude" to it.longitude()) } ?: emptyMap())
-      startIfReady()
+  fun destroyFromReact() {
+    enabled = false
+    paused = false
+    stopEmbedded(emitCancel = false)
+  }
+
+  fun setKeepAliveWhenDetached(value: Boolean) {
+    keepAliveWhenDetached = value
+    if (!value && paused) {
+      paused = false
+      stopEmbedded(emitCancel = false)
     }
   }
 
-  fun setWaypoints(wps: List<Map<String, Any>>?) {
-    waypoints = wps
-    hasRequestedRoute = false
-    if (enabled) startIfReady()
+  fun setNavigationEnabled(next: Boolean) {
+    if (next == enabled) return
+    enabled = next
+    if (next) scheduleStart() else {
+      paused = false
+      stopEmbedded(emitCancel = false)
+    }
   }
 
-  /**
-   * Advance the active route to the next leg on a multi-waypoint route without
-   * restarting the session. Driven by a business event (e.g. a passenger is
-   * picked up/dropped off) rather than physical arrival. Runs the SDK call on
-   * the main thread; returns whether a session was present to accept it.
-   *
-   * `navigateNextRouteLeg` advances relative to the SDK's own current leg and
-   * reports success via the callback (false when already on the final leg), so
-   * sequential calls advance correctly and no manual leg-count guard is needed.
-   */
+  fun setStartOrigin(origin: Map<String, Any>?) {
+    val changed = !samePoint(startOrigin, origin)
+    startOrigin = origin
+    if (changed && !hasActiveRoute) requestNewRoute()
+  }
+
+  fun setDestination(dest: Map<String, Any>?) {
+    val reference = pendingDestination ?: routedDestination ?: destination.toAnyPointOrNull()
+    val next = dest.toAnyPointOrNull()
+    val changed = !samePlace(reference, next) ||
+      approachOf(destination) != approachOf(dest)
+    destination = dest
+    if (!changed) return
+    if (enabled) {
+      dispatchDestinationChanged(dest.toAnyPointOrNull()?.let { mapOf("latitude" to it.latitude(), "longitude" to it.longitude()) } ?: emptyMap())
+    }
+    requestNewRoute()
+  }
+
+  fun setWaypoints(wps: List<Map<String, Any>>?) {
+    val changed = !sameWaypointList(pendingWaypointsProp ?: routedWaypointsProp ?: waypoints, wps)
+    waypoints = wps
+    if (changed) requestNewRoute()
+  }
+
+  private fun approachOf(value: Map<String, Any>?): String? =
+    (value?.get("approach") as? String)?.trim()?.lowercase()?.takeIf { it == "curb" }
+
+  private fun samePlace(a: Point?, b: Point?): Boolean {
+    if (a == null || b == null) return a == null && b == null
+    return distanceMeters(a, b) < REROUTE_MIN_TARGET_CHANGE_M
+  }
+
+  private fun sameWaypointList(a: List<Map<String, Any>>?, b: List<Map<String, Any>>?): Boolean {
+    val la = validWaypoints(a)
+    val lb = validWaypoints(b)
+    if (la.size != lb.size) return false
+    return la.zip(lb).all { (x, y) ->
+      samePlace(x.toAnyPointOrNull(), y.toAnyPointOrNull()) && approachOf(x) == approachOf(y)
+    }
+  }
+
+  private fun distanceMeters(a: Point, b: Point): Double {
+    val r = 6_371_000.0
+    val lat1 = Math.toRadians(a.latitude())
+    val lat2 = Math.toRadians(b.latitude())
+    val dLat = lat2 - lat1
+    val dLng = Math.toRadians(b.longitude() - a.longitude())
+    val h = kotlin.math.sin(dLat / 2).let { it * it } +
+      kotlin.math.cos(lat1) * kotlin.math.cos(lat2) * kotlin.math.sin(dLng / 2).let { it * it }
+    return 2 * r * kotlin.math.asin(kotlin.math.sqrt(h.coerceIn(0.0, 1.0)))
+  }
+
+  fun setOrnamentBottomMargin(margin: Double?) {
+    ornamentBottomMargin = margin?.takeIf { it.isFinite() && it >= 0.0 }
+    applyOrnamentMargins()
+  }
+
+  private fun applyOrnamentMargins() {
+    val mapView = attachedMapView ?: return
+    val bottom = ornamentBottomMargin ?: return
+    val px = ((bottom + ORNAMENT_EDGE_MARGIN_DP) * context.resources.displayMetrics.density).toFloat()
+    runCatching {
+      mapView.logo.marginBottom = px
+      mapView.attribution.marginBottom = px
+    }.onFailure { throwable -> Log.w(TAG, "Failed to move the map ornaments", throwable) }
+  }
+
+  fun setCameraPadding(padding: Map<String, Any>?) {
+    cameraPadding = padding
+    applyCameraPadding()
+  }
+
+  fun setJourneyDataEnabled(value: Boolean) {
+    journeyDataEnabled = value
+  }
+
+  private fun requestNewRoute() {
+    cancelRouteRequest()
+    mainHandler.removeCallbacks(rerouteRetry)
+    rerouteRetryAttempt = 0
+    hasRequestedRoute = false
+    scheduleStart()
+  }
+
+  private fun scheduleStart() {
+    if (!enabled || startScheduled) return
+    startScheduled = true
+    mainHandler.post {
+      startScheduled = false
+      if (enabled) startIfReady()
+    }
+  }
+
+  private fun cancelRouteRequest() {
+    routeGeneration += 1
+    val id = routeRequestId ?: return
+    routeRequestId = null
+    runCatching { mapboxNavigation?.cancelRouteRequest(id) }
+  }
+
+  private fun samePoint(a: Map<String, Any>?, b: Map<String, Any>?): Boolean {
+    val pa = a.toAnyPointOrNull()
+    val pb = b.toAnyPointOrNull()
+    if (pa == null || pb == null) return pa == null && pb == null
+    return pa.latitude() == pb.latitude() && pa.longitude() == pb.longitude()
+  }
+
+  private fun isUsableOrigin(location: com.mapbox.common.location.Location): Boolean {
+    val accuracy = location.horizontalAccuracy
+    if (accuracy != null && accuracy > ORIGIN_MAX_ACCURACY_M) return false
+    val ageMs = System.currentTimeMillis() - location.timestamp
+    if (ageMs < -60_000L || ageMs > 86_400_000L) return true
+    return ageMs <= ORIGIN_MAX_AGE_MS
+  }
+
+  private fun originWaitExpired(): Boolean =
+    originWaitStartedAtMs > 0L && nowMs() - originWaitStartedAtMs >= ORIGIN_WAIT_MS
+
+  private fun originHeading(location: com.mapbox.common.location.Location): Double? {
+    val bearing = location.bearing ?: return null
+    val speed = location.speed ?: return null
+    if (!bearing.isFinite() || speed < ORIGIN_HEADING_MIN_SPEED_MPS) return null
+    return ((bearing % 360.0) + 360.0) % 360.0
+  }
+
+  private data class RouteOrigin(val point: Point, val heading: Double?)
+
+  private fun resolveRouteOrigin(): RouteOrigin? {
+    val explicit = startOrigin.toAnyPointOrNull()
+    if (explicit != null && !hasActiveRoute) return RouteOrigin(explicit, null)
+    val fix = lastJourneyLocation
+    if (fix != null && (isUsableOrigin(fix) || originWaitExpired())) {
+      return RouteOrigin(Point.fromLngLat(fix.longitude, fix.latitude), originHeading(fix))
+    }
+    return explicit?.let { RouteOrigin(it, null) }
+  }
+
   private fun advanceToNextLeg(): Boolean {
     if (mapboxNavigation == null) return false
     mainHandler.post {
@@ -569,19 +851,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     applyLocationPuck()
   }
 
-  /**
-   * Colour overrides for the route line, the on-map turn arrow and the chrome.
-   *
-   * Applied live, including after mount. Each group reaches the SDK by a
-   * different route, so they are dispatched separately:
-   *
-   *  - route line: through the `viewOptionsUpdates` flow the component watches;
-   *  - turn arrow: by reinstalling that one component, which has no such flow;
-   *  - chrome: straight onto the views, which we own.
-   *
-   * The arrow is the expensive one, so it is only reinstalled when an arrow
-   * colour actually changed rather than on every `colors` update.
-   */
   fun setColors(colors: Map<String, Any>?) {
     val next = colors ?: emptyMap()
     if (next == colorOverrides) return
@@ -605,12 +874,13 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     renderNavigationMarkersIfPossible()
   }
 
+  fun setNavigationLines(lines: List<Map<String, Any>>?) {
+    navigationLines = lines
+    renderNavigationLinesIfPossible()
+  }
+
   fun setShouldSimulateRoute(simulate: Boolean) {
     shouldSimulateRoute = simulate
-    // v2 could toggle Drop-In's replay at any time via `api.routeReplayEnabled`.
-    // In v3 simulation is chosen when the trip session starts
-    // (`startReplayTripSession` vs `startTripSession`), so the flag is just
-    // recorded here and read by startSession().
   }
 
   fun setShowCancelButton(show: Boolean) {
@@ -619,14 +889,16 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
   }
 
+  private fun mayDriveSharedVoice(): Boolean = ownsNavigationSession || activeInstance == null
+
   fun setMute(muted: Boolean) {
     mute = muted
-    MapboxAudioGuidanceController.setMuted(muted)
+    if (mayDriveSharedVoice()) MapboxAudioGuidanceController.setMuted(muted)
   }
 
   fun setVoiceVolume(volume: Double) {
     voiceVolume = volume
-    MapboxAudioGuidanceController.setVoiceVolume(volume)
+    if (mayDriveSharedVoice()) MapboxAudioGuidanceController.setVoiceVolume(volume)
   }
 
   fun setDistanceUnit(unit: String) {
@@ -636,7 +908,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   fun setLanguage(lang: String) {
     language = lang
-    MapboxAudioGuidanceController.setLanguage(lang)
+    languageExplicit = lang.isNotBlank()
+    if (mayDriveSharedVoice()) MapboxAudioGuidanceController.setLanguage(lang)
   }
 
   fun setCameraMode(mode: String) {
@@ -646,8 +919,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   }
   fun setCameraPitch(pitch: Double) {
     cameraPitch = pitch.takeIf { it.isFinite() }?.coerceIn(0.0, 85.0)
-    // Only nudge the camera itself — going through applyCameraMode() would also
-    // recenter, overriding a manual pan the user is in the middle of.
     applyCameraPitchZoom("pitch")
   }
 
@@ -680,7 +951,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     applyUiVisibility()
   }
 
-  /** Directions profile. Changing it re-requests the route. */
   fun setRouteProfile(profile: String?) {
     val next = profile?.trim()?.ifEmpty { null } ?: "driving-traffic"
     if (next == routeProfile) return
@@ -688,43 +958,32 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     restartRouteRequest()
   }
 
-  /** Road classes and points to route around. Changing it re-requests. */
   fun setRouteExclusions(exclusions: Map<String, Any>?) {
     if (exclusions == routeExclusions) return
     routeExclusions = exclusions
     restartRouteRequest()
   }
 
-  /** Vehicle dimensions. Changing them re-requests. */
   fun setVehicle(constraints: Map<String, Any>?) {
     if (constraints == vehicleConstraints) return
     vehicleConstraints = constraints
     restartRouteRequest()
   }
 
-  /** Standard-style basemap configuration. Applied live. */
   fun setMapStyleConfig(config: Map<String, Any>?) {
     if (config == mapStyleConfig) return
     mapStyleConfig = config
     applyMapStyleConfig()
   }
 
-  /**
-   * Re-request the route after a change to the request parameters.
-   *
-   * Clearing `hasRequestedRoute` is what the existing `setRouteAlternatives`
-   * does; the routing props follow the same path so that changing a profile
-   * mid-trip actually produces a new route instead of leaving a stale one.
-   */
   private fun restartRouteRequest() {
-    hasRequestedRoute = false
-    if (enabled) startIfReady()
+    requestNewRoute()
   }
 
   fun setRouteAlternatives(enabled: Boolean) {
+    if (routeAlternatives == enabled) return
     routeAlternatives = enabled
-    hasRequestedRoute = false
-    if (this.enabled) startIfReady()
+    requestNewRoute()
   }
 
   fun setShowsSpeedLimits(enabled: Boolean) {
@@ -737,18 +996,102 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     applyUiVisibility()
   }
 
+  private var showsWaypoints = true
+
+  fun setShowsWaypoints(enabled: Boolean) {
+    showsWaypoints = enabled
+    applyWaypointVisibility()
+  }
+
+  private fun armLayerOrderGuard() {
+    val mapView = attachedMapView ?: return
+    layerOrderGuardFrames = 0
+    if (layerOrderGuard != null) return
+    layerOrderGuard = runCatching {
+      mapView.mapboxMap.subscribeRenderFrameFinished {
+        layerOrderGuardFrames += 1
+        val settled = runCatching { enforceLayerOrder(mapView) }.getOrDefault(true)
+        if (settled || layerOrderGuardFrames >= LAYER_ORDER_GUARD_MAX_FRAMES) cancelLayerOrderGuard()
+      }
+    }.getOrNull()
+  }
+
+  private fun cancelLayerOrderGuard() {
+    runCatching { layerOrderGuard?.cancel() }
+    layerOrderGuard = null
+  }
+
+  private fun enforceLayerOrder(mapView: MapView): Boolean {
+    if (attachedMapView !== mapView) return true
+    val style = mapView.mapboxMap.style ?: return false
+    if (!style.isStyleLoaded()) return false
+    val ids = style.styleLayers.map { it.id }
+    val topOverlay = ids.indexOfLast { isRouteOverlayLayer(it) }
+    if (topOverlay < 0) return false
+    applyWaypointVisibility()
+    var moved = false
+    for (puckLayer in PUCK_LAYER_IDS) {
+      val index = ids.indexOf(puckLayer)
+      if (index in 0 until topOverlay) {
+        style.moveStyleLayer(puckLayer, null)
+        moved = true
+      }
+    }
+    if (moved) Log.i(TAG, "Moved the location puck above the route line")
+    return PUCK_LAYER_IDS.any { it in ids } && ids.any { it.startsWith("mapbox-navigation-arrow") }
+  }
+
+  private fun isRouteOverlayLayer(id: String): Boolean =
+    id.startsWith("mapbox-layerGroup") ||
+      id == TOP_LEVEL_ROUTE_LINE_LAYER_ID ||
+      id.startsWith("mapbox-navigation-arrow") ||
+      id == WAYPOINT_LAYER_ID ||
+      id.startsWith("rnmbn-line-")
+
+  private var waypointAdvance = "automatic"
+
+  fun setWaypointAdvance(value: String?) {
+    waypointAdvance = if (value == "manual") "manual" else "automatic"
+    mapboxNavigation?.let { applyArrivalController(it) }
+  }
+
+  private fun applyArrivalController(nav: MapboxNavigation) {
+    if (waypointAdvance == "manual") {
+      runCatching { nav.setArrivalController(holdLegArrivalController) }
+        .onFailure { Log.w(TAG, "Could not hold leg advance on arrival", it) }
+    } else {
+      runCatching { nav.setArrivalController() }
+        .onFailure { Log.w(TAG, "Could not restore automatic leg advance", it) }
+    }
+  }
+
+  private fun applyWaypointVisibility() {
+    val style = attachedMapView?.mapboxMap?.style ?: return
+    if (!style.styleLayerExists(WAYPOINT_LAYER_ID)) return
+    runCatching {
+      style.setStyleLayerProperty(
+        WAYPOINT_LAYER_ID,
+        "visibility",
+        Value(if (showsWaypoints) "visible" else "none")
+      )
+    }
+  }
+
   fun setShowsTripProgress(enabled: Boolean) {
     showsTripProgress = enabled
     applyUiVisibility()
   }
 
   fun setShowsManeuverView(enabled: Boolean) {
+    if (showsManeuverView == enabled) return
     showsManeuverView = enabled
+    if (enabled) installManeuverComponentIfNeeded() else uninstallManeuverComponent()
     applyUiVisibility()
   }
 
   fun setShowsActionButtons(enabled: Boolean) {
     showsActionButtons = enabled
+    if (mayDriveSharedVoice()) MapboxAudioGuidanceController.setUserCanToggle(enabled)
     applyUiVisibility()
   }
 
@@ -759,14 +1102,14 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
   }
 
-  fun setShowsEndOfRouteFeedback(enabled: Boolean) {
-    showsEndOfRouteFeedback = enabled
-  }
 
   fun setShowsContinuousAlternatives(enabled: Boolean) {
+    if (showsContinuousAlternatives == enabled) return
     showsContinuousAlternatives = enabled
-    hasRequestedRoute = false
-    if (this.enabled) startIfReady()
+    mapboxNavigation?.let { nav ->
+      runCatching { nav.setContinuousAlternativesEnabled(enabled) }
+        .onFailure { Log.w(TAG, "setContinuousAlternativesEnabled($enabled) failed", it) }
+    }
   }
 
   fun setUsesNightStyleWhileInTunnel(enabled: Boolean) {
@@ -795,24 +1138,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     applyUiVisibility()
   }
 
-  // ---------------------------------------------------------------------------
-  // Event dispatch
-  // ---------------------------------------------------------------------------
 
-  /**
-   * Send an event to both the view prop callback and the module-level listeners
-   * that back the exported `add*Listener` helpers.
-   *
-   * The view previously dispatched only view events, so every `add*Listener`
-   * helper silently received nothing. The bridge drops the payload when JS has
-   * no subscription for that event.
-   */
 
-  /**
-   * Drop null entries so the payload satisfies `EventDispatcher`, which requires
-   * `Map<String, Any>`. JS receives a missing key instead of an explicit null,
-   * matching the optional fields in the TypeScript types.
-   */
   private fun sanitizeEventPayload(payload: Map<String, Any?>): Map<String, Any> =
     payload.filterValues { it != null }.mapValues { (_, value) -> value as Any }
 
@@ -881,12 +1208,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     onBottomSheetActionPress(sanitizeEventPayload(payload))
     MapboxNavigationEventBridge.emit("onBottomSheetActionPress", payload)
   }
-  /**
-   * Whether enough time has passed to emit a throttled event.
-   *
-   * `lastAtMs` is read and written by the caller so each stream throttles
-   * independently.
-   */
   private fun shouldEmitThrottled(lastAtMs: Long): Boolean {
     if (eventThrottleMs <= 0L) return true
     return android.os.SystemClock.elapsedRealtime() - lastAtMs >= eventThrottleMs
@@ -902,7 +1223,14 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private fun ensureSession(): Boolean {
     if (ownsNavigationSession) return true
-    if (!NavigationSessionRegistry.acquire(sessionOwner)) {
+    if (!NavigationSessionRegistry.acquireOrTakeOver(sessionOwner)) {
+      if (sessionConflictRetries < SESSION_CONFLICT_RETRY_DELAYS_MS.size) {
+        val delay = SESSION_CONFLICT_RETRY_DELAYS_MS[sessionConflictRetries]
+        sessionConflictRetries += 1
+        mainHandler.postDelayed({ if (enabled && !ownsNavigationSession) scheduleStart() }, delay)
+        return false
+      }
+      sessionConflictRetries = 0
       dispatchError(
         mapOf(
           "code" to "NAVIGATION_SESSION_CONFLICT",
@@ -912,6 +1240,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       return false
     }
     ownsNavigationSession = true
+    sessionConflictRetries = 0
     activeInstance = this
     NavigationSessionRegistry.registerStopHandler(sessionOwner) {
       mainHandler.post {
@@ -927,6 +1256,12 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
     NavigationSessionRegistry.registerAdvanceLegHandler(sessionOwner) {
       advanceToNextLeg()
+    }
+    NavigationSessionRegistry.registerPausedProvider(sessionOwner) { paused }
+    NavigationSessionRegistry.registerYieldHandler(sessionOwner) {
+      Log.i(TAG, "Paused session yields to a new navigation view")
+      paused = false
+      stopEmbedded(emitCancel = false)
     }
     return true
   }
@@ -948,21 +1283,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     return token
   }
 
-  /**
-   * Force a measure/layout pass over the natively added children.
-   *
-   * React Native drives layout from JS via Yoga, and `ReactViewGroup` swallows
-   * the `requestLayout()` that `addView` would normally trigger. Children added
-   * natively — our MapView and the four widgets — therefore stay at 0x0 even
-   * though this view and its container are correctly sized. The MapView's
-   * TextureView never gets a surface and the map renders black while the GL
-   * thread logs "Android surface is not valid" forever.
-   *
-   * This existed in the v2 code as `scheduleLayoutNudges` and was mistakenly
-   * removed during the v3 rewrite as Drop-In cruft. It is not Drop-In specific:
-   * it is a React Native layout-timing workaround, and the symptom (map=0x0) is
-   * identical either way.
-   */
   private fun nudgeChildLayout(reason: String) {
     val w = width
     val h = height
@@ -992,12 +1312,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     mainHandler.postDelayed({ nudgeChildLayout("post+800ms") }, 800)
   }
 
-  /**
-   * Re-lay out natively added children whenever React Native resizes us.
-   *
-   * The timed nudges above cover mount; this covers every later size change
-   * (rotation, a parent flex change) without relying on more timers.
-   */
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
     if (attachedMapView != null && w > 0 && h > 0) {
@@ -1005,22 +1319,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
   }
 
-  /**
-   * Build and attach the navigation UI.
-   *
-   * v2 handed this entire job to Drop-In: one `NavigationView` supplied the
-   * map, maneuver banner, trip progress, speed limit, sound button and info
-   * panel. v3 ships no Drop-In, so the UI is assembled here from
-   * `ui-components` widgets and bound to the navigator by `installComponents`.
-   *
-   * Two workarounds from the Drop-In era are deliberately gone:
-   *
-   *  * `TextureMapViewBinder` — we create the MapView ourselves, so
-   *    `MapInitOptions(textureView = true)` asks for a TextureView directly
-   *    instead of swapping out an SDK-internal binder.
-   *  * the SurfaceView z-order fixes in the old `MapViewObserver` — there is no
-   *    longer an SDK-chosen SurfaceView to fight with.
-   */
   @OptIn(ExperimentalPreviewMapboxNavigationAPI::class)
   private fun ensureNavigationUi() {
     if (attachedMapView != null) return
@@ -1030,9 +1328,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       showPlaceholder("Missing Mapbox access token.\nCheck EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN + prebuild.")
       return
     }
-    // The Maps SDK reads the token from resources itself; resolving it here is
-    // purely so a misconfigured app gets MISSING_ACCESS_TOKEN instead of an
-    // opaque failure deep inside the SDK.
     check(token.isNotEmpty())
 
     val activity = expoAppContext.currentActivity as? AppCompatActivity
@@ -1049,8 +1344,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
     val nav = mapboxNavigation
     if (nav == null) {
-      // installComponents binds to a live MapboxNavigation, so the navigator has
-      // to exist first. startIfReady() calls ensureNavigation() before this.
       dispatchError(
         mapOf("code" to "NAVIGATION_INIT_FAILED", "message" to "Navigator is not ready yet.")
       )
@@ -1062,10 +1355,9 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         activity,
         MapInitOptions(
           context = activity,
-          // React Native view trees composite poorly with SurfaceView; a
-          // TextureView renders reliably inside them.
           textureView = true,
-          styleUri = resolveStyleUri()
+          styleUri = resolveStyleUri(),
+          cameraOptions = initialCameraOptions()
         )
       )
     } catch (e: Throwable) {
@@ -1078,50 +1370,32 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       ViewGroup.LayoutParams.MATCH_PARENT,
       ViewGroup.LayoutParams.MATCH_PARENT
     )
+    // WARNING: must precede addView, or the MapView binds to the screen fragment's lifecycle and is destroyed when a screen covers it.
+    attachViewTreeOwnersIfPossible(this, activity)
     nativeLayer.addView(mapView)
     attachedMapView = mapView
     appliedStyleUri = resolveStyleUri()
-    // The first style comes from `MapInitOptions`, so there is no `loadStyle`
-    // callback to hang the config off. Subscribing covers that load and every
-    // later one; writes to a style import are ignored while it is still
-    // loading, so a `mapStyleConfig` set at mount needs this to land at all.
     styleLoadedCancelable = runCatching {
-      mapView.mapboxMap.subscribeStyleLoaded { applyMapStyleConfig() }
+      mapView.mapboxMap.subscribeStyleLoaded {
+        applyMapStyleConfig()
+        renderedNavigationLineIds.clear()
+        renderNavigationLinesIfPossible()
+        armLayerOrderGuard()
+      }
     }.getOrNull()
 
-    // `installComponents` attaches on the lifecycle owner's ON_CREATE and
-    // detaches on ON_DESTROY, so the owners still have to be present on the
-    // view tree — React Native does not always provide them.
-    attachViewTreeOwnersIfPossible(this, activity)
-
-    // Only the maneuver banner and the sound toggle are installed.
-    //
-    // `MapboxTripProgressView` and `MapboxSpeedInfoView` are deliberately left
-    // out. Under Drop-In they sat inside Mapbox's own styled container, which
-    // gave them an exact width; standing alone over the map they do not lay out
-    // usably — `tripProgressContainer` measures itself at wrap_content, so the
-    // bar collapses to a ~125dp strip in the corner with its readouts clipped —
-    // and neither exposes enough theming to blend into a host app anyway.
-    // Reinstating the trip progress bar was tried and reverted for exactly that
-    // reason. Trip progress is already available, and themeable, through this
-    // package's own JS overlay (`bottomSheet`), which is what consumers
-    // actually ship. See docs/v3-migration.md.
-    val maneuver = MapboxManeuverView(activity).also { maneuverView = it }
     val sound = MapboxAudioGuidanceButton(activity).also { soundButton = it }
-    addNavigationChrome(maneuver, sound)
-    applyChromeColors()
+    addSoundButton(sound)
 
     val dataSource = MapboxNavigationViewportDataSource(mapView.mapboxMap)
     val camera = NavigationCamera(mapView.mapboxMap, mapView.camera, dataSource)
     viewportDataSource = dataSource
     navigationCamera = camera
+    applyCameraPadding()
+    applyOrnamentMargins()
 
     nav.installComponents(activity) {
-      // Map layer: these replace Drop-In's internal map wiring.
       componentInstallations += routeLine(mapView) {
-        // The vanishing route line — the traversed part dimming behind the puck
-        // — is opt-in on Android, and `routeLineTracksTraversal` was being
-        // stored and never read. iOS has had this wired all along.
         apiOptions = MapboxRouteLineApiOptions.Builder()
           .vanishingRouteLineEnabled(routeLineTracksTraversal)
           .build()
@@ -1136,24 +1410,15 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         buildRouteArrowOptions(activity)?.let { options = it }
       }
       componentInstallations += navigationCamera(mapView) {
-        // Hand the installer our instances so the props can drive them.
         this.viewportDataSource = dataSource
         this.navigationCamera = camera
       }
       componentInstallations += locationPuck(mapView)
-      // Widget layer: these replace Drop-In's chrome.
-      componentInstallations += maneuver(maneuver) {
-        // `ManeuverConfig` carries its *own* formatter options and builds them
-        // from the device locale — it does not read the ones on
-        // `NavigationOptions`. Without this the banner showed "50 ft" on a
-        // US-locale device while `distanceUnit` said metric and iOS showed
-        // metres. Verified on the emulator.
-        distanceFormatterOptions = DistanceFormatterOptions.Builder(activity)
-          .unitType(resolveUnitType())
-          .build()
-      }
       componentInstallations += audioGuidanceButton(sound)
     }
+    installManeuverComponentIfNeeded()
+    applyChromeColors()
+    startPredictiveCache(nav, mapView)
 
     mapView.setOnTouchListener { _, event ->
       when (event.actionMasked) {
@@ -1173,38 +1438,58 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
 
     Log.i(TAG, "v3 navigation UI attached ($EMBEDDED_BUILD): nativeChildren=${nativeLayer.childCount}")
-    // Without this the MapView stays 0x0 under React Native and renders black.
     scheduleLayoutNudges()
     hideMapOrnaments(mapView)
     hidePlaceholder()
     applyUiVisibility()
     applyLocationPuck()
     renderNavigationMarkersIfPossible()
+    renderNavigationLinesIfPossible()
     applyCameraPitchZoom("ui-attached")
+    keepScreenOn = true
   }
 
-  /**
-   * Lay the widgets over the map.
-   *
-   * Built in code rather than XML so the package ships no layout resources for
-   * host apps to merge, matching how the rest of this view is constructed.
-   *
-   * Placement follows Mapbox's own arrangement, and the constraint that matters
-   * is that these four widgets must not overlap each other: the first attempt
-   * pinned the sound button under a fixed top margin (so it collided with the
-   * maneuver banner, whose height is dynamic) and left the speed-limit view
-   * sitting on top of the trip-progress bar.
-   *
-   *   maneuver        top, full width      (height varies with the instruction)
-   *   sound button    bottom-right
-   *
-   * Anchoring the sound button to the *bottom* rather than the top is what keeps
-   * it clear of the maneuver banner without having to guess its height.
-   */
-  private fun addNavigationChrome(
-    maneuver: MapboxManeuverView,
-    sound: MapboxAudioGuidanceButton
-  ) {
+  private fun startPredictiveCache(nav: MapboxNavigation, mapView: MapView) {
+    if (predictiveCacheController != null) return
+    predictiveCacheController = PredictiveCache.start(nav, mapView)
+  }
+
+  private fun stopPredictiveCache(mapView: MapView?) {
+    val controller = predictiveCacheController ?: return
+    predictiveCacheController = null
+    PredictiveCache.stop(controller, mapView)
+  }
+
+
+  private fun installManeuverComponentIfNeeded() {
+    if (!showsManeuverView || maneuverView != null) return
+    val nav = mapboxNavigation ?: return
+    if (attachedMapView == null) return
+    val activity = expoAppContext.currentActivity as? AppCompatActivity ?: return
+    val maneuver = MapboxManeuverView(activity)
+    maneuverView = maneuver
+    addManeuverView(maneuver)
+    runCatching {
+      nav.installComponents(activity) {
+        maneuverInstallation = maneuver(maneuver) {
+          distanceFormatterOptions = DistanceFormatterOptions.Builder(activity)
+            .unitType(resolveUnitType())
+            .build()
+        }
+      }
+    }.onFailure { Log.w(TAG, "Could not install the maneuver banner", it) }
+    applyChromeColors()
+    scheduleLayoutNudges()
+  }
+
+  private fun uninstallManeuverComponent() {
+    maneuverInstallation?.let { runCatching { it.uninstall() } }
+    maneuverInstallation = null
+    maneuverView?.let { runCatching { nativeLayer.removeView(it) } }
+    maneuverView = null
+  }
+
+  private fun addManeuverView(maneuver: MapboxManeuverView) {
     val density = context.resources.displayMetrics.density
     fun dp(value: Int): Int = (value * density).toInt()
 
@@ -1219,18 +1504,15 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       }
     )
 
-    // The banner inflates its secondary rows — lane guidance, the "then" step,
-    // the expandable upcoming-maneuver list — only once an instruction needs
-    // them, so a one-shot recolour at mount would miss them. Recolouring on each
-    // layout pass catches them as they appear. Text colours and image tints do
-    // not themselves trigger layout, so this cannot feed back on itself.
     maneuver.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
       tintManeuverDescendants(maneuver)
     }
+  }
 
-    // Bottom-right, and anchored to the bottom rather than under a fixed top
-    // margin: the maneuver banner's height varies with the instruction, so a
-    // top-anchored control collides with it.
+  private fun addSoundButton(sound: MapboxAudioGuidanceButton) {
+    val density = context.resources.displayMetrics.density
+    fun dp(value: Int): Int = (value * density).toInt()
+
     nativeLayer.addView(
       sound,
       FrameLayout.LayoutParams(
@@ -1243,16 +1525,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     )
   }
 
-  /**
-   * Parse one `colors` key, tolerating garbage.
-   *
-   * A bad colour string is a consumer typo, not a reason to take down
-   * navigation, so it is logged and skipped and the SDK default stands.
-   *
-   * [HexColor] rather than `Color.parseColor`, so `#RGB`, `#RRGGBB` and
-   * `#RRGGBBAA` all mean here what they mean on iOS — see its docs for why the
-   * platform parser could not be used for the 8-digit form.
-   */
   private fun color(key: String): Int? =
     (colorOverrides[key] as? String)?.let { raw ->
       HexColor.parse(raw) ?: run {
@@ -1261,12 +1533,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       }
     }
 
-  /**
-   * Translate the arrow entries of `colors` into `RouteArrowOptions`.
-   *
-   * Returns null when neither is set, so the caller can leave the installer to
-   * build its own defaults instead of being handed an all-default object.
-   */
   private fun buildRouteArrowOptions(context: Context): RouteArrowOptions? {
     val arrow = color("maneuverArrow")
     val stroke = color("maneuverArrowStroke")
@@ -1278,7 +1544,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     return builder.build()
   }
 
-  /** Install the route-arrow component, replacing any previous installation. */
   @OptIn(ExperimentalPreviewMapboxNavigationAPI::class)
   private fun reinstallRouteArrow() {
     val nav = mapboxNavigation ?: return
@@ -1298,25 +1563,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
   }
 
-  /**
-   * Apply the chrome entries of `colors` to the maneuver banner and the voice
-   * button.
-   *
-   * Two mechanisms, because v3 only gives us the first one for part of it:
-   *
-   *  - `ManeuverViewOptions` covers the banner backgrounds as plain colour ints,
-   *    and `updateManeuverViewOptions` accepts them at any time.
-   *  - text and turn-icon colours are only reachable through `@StyleRes` text
-   *    appearances and a themed `Context`, which cannot be synthesised from a
-   *    runtime colour. So those are set straight onto the views instead — they
-   *    are `AppCompatTextView`s and `AppCompatImageView`s, and the SDK's own
-   *    render path never rewrites the text colour or the image tint, so the
-   *    values hold across instruction changes.
-   *
-   * Reapplied on every layout pass of the banner (see `addNavigationChrome`),
-   * which is what catches views the SDK creates later: the lane-guidance strip,
-   * the "then" row, and the rows of the expandable upcoming-maneuver list.
-   */
   private fun applyChromeColors() {
     if (colorOverrides.isEmpty()) return
 
@@ -1324,8 +1570,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       val background = color("maneuverBackground")
       val subBackground = color("maneuverSubBackground") ?: background
       if (background != null || subBackground != null) {
-        // `ManeuverViewOptions` is the documented path, so keep it: it is what
-        // the sub-layouts the banner inflates later will be built from.
         val options = ManeuverViewOptions.Builder()
         background?.let { options.maneuverBackgroundColor(it) }
         subBackground?.let {
@@ -1335,9 +1579,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         runCatching { maneuver.updateManeuverViewOptions(options.build()) }
           .onFailure { Log.w(TAG, "Could not apply maneuver background colors", it) }
 
-        // …but it does not repaint the layouts that already exist — verified on
-        // device: the banner stayed Mapbox navy with no error logged. So paint
-        // them directly as well, by the ids the SDK's own layouts declare.
         background?.let { setBackgroundById(maneuver, "mainManeuverLayout", it) }
         subBackground?.let {
           setBackgroundById(maneuver, "subManeuverLayout", it)
@@ -1350,12 +1591,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
     soundButton?.let { button ->
       color("floatingButtonBackground")?.let { background ->
-        // Tinted rather than replaced, so the shape drawable keeps its rounded
-        // outline. Applied to both the button and its inner container: the
-        // `audioGuidanceButtonBackground` attribute lands on whichever of the
-        // two the SDK's layout assigns it to, and a tint on the wrong one
-        // leaves a white button — which, with a light `floatingButtonIcon`,
-        // renders as an invisible control.
         val tint = ColorStateList.valueOf(background)
         button.backgroundTintList = tint
         button.containerView.backgroundTintList = tint
@@ -1367,16 +1602,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
   }
 
-  /**
-   * Paint one of the SDK's own layouts, looked up by resource name.
-   *
-   * Library resources merge into the host app's package, so the ids in
-   * `ui-components`' `R.txt` — `mainManeuverLayout`, `subManeuverLayout` and
-   * the two recyclers — are resolvable at runtime. Looked up by name rather
-   * than referenced directly because they are not part of the SDK's Kotlin
-   * API, and missing quietly if the SDK ever renames one: the banner then keeps
-   * its default background instead of the view failing to build.
-   */
   private fun setBackgroundById(root: View, resourceName: String, color: Int) {
     val id = runCatching {
       resources.getIdentifier(resourceName, "id", context.packageName)
@@ -1388,13 +1613,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     root.findViewById<View>(id)?.setBackgroundColor(color)
   }
 
-  /**
-   * Walk the maneuver banner and recolour the text and icons inside it.
-   *
-   * The banner is a `ConstraintLayout` the SDK inflates and repopulates, and it
-   * exposes no accessors for its children, so matching on the concrete view
-   * types is the only way in. They are all public API.
-   */
   private fun tintManeuverDescendants(root: View) {
     val primaryText = color("maneuverText")
     val secondaryText = color("maneuverSecondaryText")
@@ -1411,9 +1629,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       is MapboxSecondaryManeuver -> secondaryText?.let { root.setTextColor(it) }
       is MapboxSubManeuver -> secondaryText?.let { root.setTextColor(it) }
       is MapboxStepDistance -> distanceText?.let { root.setTextColor(it) }
-      // A flat tint, because the two-tone turn icon takes its emphasised and
-      // de-emphasised strokes from theme attributes that cannot be set at
-      // runtime. Documented on `MapboxNavigationColors.maneuverTurnIcon`.
       is MapboxTurnIconManeuver ->
         turnIcon?.let { root.imageTintList = ColorStateList.valueOf(it) }
       is MapboxLaneGuidance ->
@@ -1424,17 +1639,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
   }
 
-  /**
-   * Translate the `colors` prop into Mapbox's colour resources.
-   *
-   * Returns null when nothing was supplied, so the SDK defaults stand rather
-   * than being replaced by an all-default object.
-   *
-   * `routeLine` deliberately also sets the low and unknown congestion colours:
-   * congestion shading is painted over the base line, so leaving those at their
-   * Mapbox-blue defaults makes a recoloured route still look blue wherever
-   * traffic data is absent or free-flowing — which is most of a typical route.
-   */
   private fun buildRouteLineColorResources(): RouteLineColorResources? {
     if (colorOverrides.isEmpty()) return null
 
@@ -1453,7 +1657,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       builder.alternativeRouteUnknownCongestionColor(value)
     }
     color("routeLineAlternativeCasing")?.let { builder.alternativeRouteCasingColor(it) }
-    // Explicit congestion overrides come last so they win over `routeLine`.
     color("congestionLow")?.let { builder.routeLowCongestionColor(it) }
     color("congestionModerate")?.let { builder.routeModerateCongestionColor(it) }
     color("congestionHeavy")?.let { builder.routeHeavyCongestionColor(it) }
@@ -1464,17 +1667,13 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     return builder.build()
   }
 
-  /** Resolve the map style from the day/night/base props, preferring the explicit ones. */
-  // MARK: routing options
 
-  /** Whether the active profile accepts the driving-only request parameters. */
   private fun isDrivingProfile(): Boolean {
     val profile = resolveDirectionsProfile()
     return profile == DirectionsCriteria.PROFILE_DRIVING ||
       profile == DirectionsCriteria.PROFILE_DRIVING_TRAFFIC
   }
 
-  /** Map the `routeProfile` prop onto a Directions profile constant. */
   private fun resolveDirectionsProfile(): String =
     when (routeProfile.trim().lowercase()) {
       "driving" -> DirectionsCriteria.PROFILE_DRIVING
@@ -1492,14 +1691,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       }
     }
 
-  /**
-   * Apply the `routeExclusions` prop.
-   *
-   * The Directions API shares one `exclude` parameter between road classes and
-   * excluded points, which is why this is a single `Exclude` object rather than
-   * two independent builder calls — setting `excludeList` as well would
-   * overwrite it.
-   */
   private fun applyRouteExclusions(builder: RouteOptions.Builder) {
     val exclusions = routeExclusions ?: return
     val driving = isDrivingProfile()
@@ -1507,9 +1698,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
     val criteria = (exclusions["roadClasses"] as? List<*>)?.mapNotNull { raw ->
       val name = (raw as? String)?.trim()
-      // Walking and cycling accept only `ferry` and `cash_only_tolls`; the
-      // Directions API answers 422 for the rest rather than ignoring them,
-      // which fails the whole route request. Verified against the API.
       if (!driving && name != "ferry" && name != "cashOnlyTolls") {
         if (name != null) dropped += name
         return@mapNotNull null
@@ -1564,8 +1752,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       Point.fromLngLat(longitude, latitude)
     }
 
-    // The API rejects the whole request past 50 points, so trim rather than let
-    // a long list fail the route outright.
     if (points != null && points.size > 50) {
       dispatchError(
         mapOf(
@@ -1586,19 +1772,9 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     builder.excludeObject(exclude)
   }
 
-  /**
-   * Apply the `vehicle` prop.
-   *
-   * Metres and metric tons, matching both the Directions API's units and the
-   * iOS `Measurement` units the same prop feeds there, so the prop means the
-   * same thing on both platforms.
-   */
   private fun applyVehicleConstraints(builder: RouteOptions.Builder) {
     val constraints = vehicleConstraints ?: return
     if (constraints.isEmpty()) return
-    // `max_height`, `max_width` and `max_weight` are driving-only: the
-    // Directions API answers 422 "Invalid query param" for them on walking and
-    // cycling, which fails the whole request. Verified against the API.
     if (!isDrivingProfile()) {
       dispatchError(
         mapOf(
@@ -1615,24 +1791,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     (constraints["maxWeight"] as? Number)?.let { builder.maxWeight(it.toDouble()) }
   }
 
-  // MARK: Standard style configuration
 
-  /**
-   * Apply the `mapStyleConfig` prop to the basemap style import.
-   *
-   * Standard styles expose their basemap as a configurable import rather than
-   * fixed layers, which is what `setStyleImportConfigProperty` writes to.
-   *
-   * Classic styles (`navigation-day-v1`, `streets-v12`) have no `basemap`
-   * import, so every write returns an error. That is not worth surfacing per
-   * property — the consumer just paired a config with a style that has nothing
-   * to configure — so it is reported once and then dropped.
-   *
-   * Called on every style load as well as on prop changes: writes are ignored
-   * while a style is still loading, so a config set at mount would land too
-   * early, and switching `mapStyleUri` replaces the import that the previous
-   * config was written to.
-   */
   private fun applyMapStyleConfig() {
     val config = mapStyleConfig ?: return
     if (config.isEmpty()) return
@@ -1671,17 +1830,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
   }
 
-  /**
-   * Build the process-wide `NavigationOptions`.
-   *
-   * `distanceFormatterOptions` is the only way the `distanceUnit` prop can reach
-   * the SDK: everything that renders a distance — the maneuver banner's step
-   * distance, the voice instructions, the trip-progress readouts — formats it
-   * through the formatter built from these options. Before this, `distanceUnit`
-   * was stored on both the view and the module and applied nowhere, so Android
-   * silently used the locale default; the same app that showed "200 m" on iOS
-   * showed "100 ft" on Android.
-   */
   private fun buildNavigationOptions(): NavigationOptions =
     NavigationOptions.Builder(context.applicationContext)
       .distanceFormatterOptions(
@@ -1694,15 +1842,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private fun resolveUnitType(): UnitType =
     if (distanceUnit.trim().lowercase() == "imperial") UnitType.IMPERIAL else UnitType.METRIC
 
-  /**
-   * Re-apply `distanceUnit` when it changes after the navigator exists.
-   *
-   * The formatter is baked into the process-wide `NavigationOptions`, so the
-   * only way to change it is to set the app up again — which recreates
-   * `MapboxNavigation` and would drop a trip in progress. So it is re-applied
-   * only while no session is running; mid-trip it is deferred to the next one
-   * and said so out loud rather than appearing to work.
-   */
   private fun applyDistanceUnit() {
     if (distanceUnit == appliedDistanceUnit) return
     if (mapboxNavigation == null) return
@@ -1715,17 +1854,24 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       )
       return
     }
+    stopEmbedded(emitCancel = false)
     runCatching {
       MapboxNavigationApp.setup(buildNavigationOptions())
       appliedDistanceUnit = distanceUnit
     }.onFailure { Log.w(TAG, "Could not re-apply distanceUnit '$distanceUnit'", it) }
+    if (enabled) startIfReady()
+  }
+
+  private fun releaseStaleNavigation() {
+    val held = mapboxNavigation ?: return
+    val current = runCatching { MapboxNavigationApp.current() }.getOrNull()
+    if (held === current) return
+    Log.w(TAG, "MapboxNavigation was replaced under this view; binding to the new one")
+    stopEmbedded(emitCancel = false)
   }
 
   private fun resolveStyleUri(): String {
     val night = prefersNightMap()
-    // Prefer the prop matching the resolved theme, then the theme-agnostic one,
-    // then the other theme's — so a consumer who only sets `mapStyleUriDay`
-    // still gets it in dark mode rather than falling through to a default.
     val candidates =
       if (night) listOf(mapStyleUriNight, mapStyleUri, mapStyleUriDay)
       else listOf(mapStyleUriDay, mapStyleUri, mapStyleUriNight)
@@ -1733,14 +1879,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       ?: if (night) NAVIGATION_NIGHT_STYLE else NAVIGATION_DAY_STYLE
   }
 
-  /**
-   * Resolve `uiTheme` to a day/night choice for the map.
-   *
-   * `system` follows the Android night-mode configuration, which is the closest
-   * equivalent to what iOS's `StyleManager` does. iOS additionally switches on
-   * sunrise/sunset; there is no v3 Android counterpart for that, so the theme is
-   * the only input here.
-   */
   private fun prefersNightMap(): Boolean = when (uiTheme.trim().lowercase()) {
     "dark", "night" -> true
     "light", "day" -> false
@@ -1748,20 +1886,26 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       Configuration.UI_MODE_NIGHT_YES
   }
 
-  /**
-   * Push the resolved style onto a map that already exists.
-   *
-   * Without this, `mapStyleUri`, `mapStyleUriDay`, `mapStyleUriNight` and
-   * `uiTheme` only had an effect if they were set before the MapView was
-   * created: their setters called `applyUiVisibility()`, which touches widget
-   * visibility and nothing else, so a style change after mount was dropped.
-   */
   private fun applyMapStyle() {
     val mapView = attachedMapView ?: return
     val styleUri = resolveStyleUri()
     if (styleUri == appliedStyleUri) return
     appliedStyleUri = styleUri
-    runCatching { mapView.mapboxMap.loadStyle(styleUri) { applyMapStyleConfig() } }
+    val state = mapView.mapboxMap.cameraState
+    val cameraBefore = CameraOptions.Builder()
+      .center(state.center)
+      .zoom(state.zoom)
+      .bearing(state.bearing)
+      .pitch(state.pitch)
+      .padding(state.padding)
+      .build()
+    runCatching {
+      mapView.mapboxMap.loadStyle(styleUri) {
+        runCatching { mapView.mapboxMap.setCamera(cameraBefore) }
+        applyMapStyleConfig()
+        applyWaypointVisibility()
+      }
+    }
       .onFailure { Log.w(TAG, "Could not load map style '$styleUri'", it) }
   }
 
@@ -1770,22 +1914,12 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   private fun ensureNavigation() {
     if (mapboxNavigation != null) return
 
-    // Set up MapboxNavigationApp before reading from it.
-    //
-    // v2 never had to do this: Drop-In's `NavigationView` called
-    // `MapboxNavigationApp.setup(...)` internally as part of its own
-    // construction, so `current()` was always populated by the time we asked.
-    // With Drop-In gone nothing initialises it, and `current()` returns null
-    // forever — the view then fails with NAVIGATION_INIT_FAILED and never
-    // requests a route. This is invisible at compile time.
     val activity = expoAppContext.currentActivity as? AppCompatActivity
     runCatching {
-      if (!MapboxNavigationApp.isSetup()) {
+      if (!MapboxNavigationApp.isSetup() || appliedDistanceUnit != distanceUnit) {
         MapboxNavigationApp.setup(buildNavigationOptions())
         appliedDistanceUnit = distanceUnit
       }
-      // Attaching to the host activity's lifecycle is what actually creates the
-      // MapboxNavigation instance that `current()` returns.
       activity?.let { MapboxNavigationApp.attach(it) }
     }.onFailure { throwable ->
       Log.w(TAG, "MapboxNavigationApp setup failed", throwable)
@@ -1809,32 +1943,41 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     nav.registerArrivalObserver(arrivalObserver)
     nav.registerRoutesObserver(routesObserver)
     nav.registerOffRouteObserver(offRouteObserver)
+    rerouteController = runCatching { nav.getRerouteController() }.getOrNull()?.also { controller ->
+      runCatching { controller.registerRerouteStateV2Observer(rerouteStateObserver) }
+        .onFailure { Log.w(TAG, "Could not observe reroute state", it) }
+    }
+    applyArrivalController(nav)
+    runCatching { nav.setContinuousAlternativesEnabled(showsContinuousAlternatives) }
+      .onFailure { Log.w(TAG, "setContinuousAlternativesEnabled failed", it) }
 
     MapboxAudioGuidanceController.setMuted(mute)
     MapboxAudioGuidanceController.setVoiceVolume(voiceVolume)
     MapboxAudioGuidanceController.setLanguage(language)
+    MapboxAudioGuidanceController.bind(userCanToggle = showsActionButtons)
   }
 
   private fun startIfReady() {
     if (!enabled) return
+    if (!isAttachedToWindow && !paused) return
     Log.i(TAG, "startIfReady ($EMBEDDED_BUILD): enabled=true hasPerm=${hasLocationPermission()} ownsSession=$ownsNavigationSession")
     if (!hasLocationPermission()) {
       showPlaceholder("Location permission required.\nGrant ACCESS_FINE_LOCATION to start embedded navigation.")
       dispatchError(mapOf("code" to "LOCATION_PERMISSION_REQUIRED", "message" to "Embedded navigation requires location permission."))
       return
     }
+    releaseStaleNavigation()
     if (!ensureSession()) {
+      if (sessionConflictRetries > 0) return
       showPlaceholder("Navigation session conflict.\nStop other navigation sessions first.")
       return
     }
 
-    // Navigator first: `installComponents` binds the UI to a live
-    // MapboxNavigation, so the UI cannot be built before it exists.
     ensureNavigation()
     ensureNavigationUi()
     applyUiVisibility()
-    setNavigationBarsHidden(true)
-    applyCameraMode("start")
+    if (!paused) setNavigationBarsHidden(true)
+    if (!hasActiveRoute) applyCameraMode("start")
 
     val nav = mapboxNavigation ?: return
 
@@ -1845,61 +1988,116 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       return
     }
 
-    // `startOrigin` is documented optional. Drop-In used to source the device
-    // location itself; v3 has no equivalent, so fall back to the newest fix
-    // from the navigator and, failing that, run free drive until one arrives.
-    val origin = startOrigin.toAnyPointOrNull()
-      ?: lastJourneyLocation?.let { Point.fromLngLat(it.longitude, it.latitude) }
+    if (hasRequestedRoute) return
+
+    val origin = resolveRouteOrigin()
 
     if (origin == null) {
       if (!awaitingOriginFix) {
         awaitingOriginFix = true
-        Log.i(TAG, "startIfReady ($EMBEDDED_BUILD): no origin yet, starting free drive for a fix")
-        runCatching { nav.startTripSession() }.onFailure { throwable ->
-          awaitingOriginFix = false
-          dispatchError(
-            mapOf(
-              "code" to "NAVIGATION_INIT_FAILED",
-              "message" to (throwable.message ?: "Could not start a location session")
+        if (originWaitStartedAtMs == 0L) originWaitStartedAtMs = nowMs()
+        if (lastJourneyLocation == null) {
+          Log.i(TAG, "startIfReady ($EMBEDDED_BUILD): no origin yet, starting free drive for a fix")
+          runCatching { nav.startTripSession() }.onFailure { throwable ->
+            awaitingOriginFix = false
+            dispatchError(
+              mapOf(
+                "code" to "NAVIGATION_INIT_FAILED",
+                "message" to (throwable.message ?: "Could not start a location session")
+              )
             )
-          )
+          }
         }
+        mainHandler.postDelayed({
+          if (awaitingOriginFix && lastJourneyLocation != null) {
+            awaitingOriginFix = false
+            startIfReady()
+          }
+        }, ORIGIN_WAIT_MS + 50L)
+        mainHandler.postDelayed({
+          if (awaitingOriginFix && lastJourneyLocation == null && !hasReceivedRawLocation) {
+            val seconds = GUIDANCE_WATCHDOG_TIMEOUT_MS / 1000
+            dispatchError(
+              mapOf(
+                "code" to "NO_LOCATION_FIX",
+                "message" to "No startOrigin was given and no location fix arrived within " +
+                  "${seconds}s, so no route can be requested yet. Still waiting. On a " +
+                  "simulator or emulator, set a location; otherwise pass startOrigin or " +
+                  "shouldSimulateRoute."
+              )
+            )
+          }
+        }, GUIDANCE_WATCHDOG_TIMEOUT_MS)
       }
-      showPlaceholder("Waiting for your location…")
+      if (!hasActiveRoute) showPlaceholder("Waiting for your location…")
       return
     }
 
-    if (hasRequestedRoute) return
     hasRequestedRoute = true
-    hasEmittedArrival = false
-    hidePlaceholder()
+    originWaitStartedAtMs = 0L
+    if (!hasActiveRoute) hidePlaceholder()
 
+    val requested = validWaypoints(waypoints)
+    val intermediates =
+      if (hasActiveRoute && routedWaypointsProp != null && sameWaypointList(requested, routedWaypointsProp)) {
+        val legIndex = runCatching { lastJourneyProgress?.currentLegProgress?.legIndex }.getOrNull() ?: 0
+        routedIntermediates.drop(legIndex.coerceAtLeast(0))
+      } else {
+        requested
+      }
+    pendingWaypointsProp = requested
+    pendingIntermediates = intermediates
+    pendingDestination = dest
+
+    val stops = buildList<Map<String, Any>?> {
+      add(null)
+      addAll(intermediates)
+      add(destination)
+    }
     val coordinates = buildList {
-      add(origin)
-      addAll(parseWaypoints(waypoints))
+      add(origin.point)
+      addAll(parseWaypoints(intermediates))
       add(dest)
     }
     Log.i(
       TAG,
-      "startIfReady ($EMBEDDED_BUILD): requesting route coords=${coordinates.size} alt=$routeAlternatives"
+      "startIfReady ($EMBEDDED_BUILD): requesting route coords=${coordinates.size} alt=$routeAlternatives heading=${origin.heading}"
     )
-    requestRouteAndStartGuidance(nav, coordinates)
+    requestRouteAndStartGuidance(nav, coordinates, origin.heading, stops)
   }
 
-  /**
-   * Request a route and go straight into guidance.
-   *
-   * v2 drove this through Drop-In in three steps —
-   * `api.startDestinationPreview`, `api.startRoutePreview`, then
-   * `api.startActiveGuidance` — with a fallback path for when the preview came
-   * back empty. None of those exist in v3, and the preview was never a
-   * user-facing step here anyway: the old code walked straight through it. So
-   * the flow collapses to requesting routes, handing them to the navigator and
-   * starting the session, which also removes the empty-preview fallback.
-   *
-   * `requestRoutes` and `NavigationRouterCallback` are unchanged from v2.
-   */
-  private fun requestRouteAndStartGuidance(nav: MapboxNavigation, coordinates: List<Point>) {
+  private fun validWaypoints(value: List<Map<String, Any>>?): List<Map<String, Any>> =
+    value.orEmpty().filter { it.toAnyPointOrNull() != null }
+
+  private fun approachesFor(stops: List<Map<String, Any>?>): List<String?>? {
+    val approaches = stops.mapIndexed { index, stop ->
+      if (index == 0) null
+      else if (approachOf(stop) == "curb") DirectionsCriteria.APPROACH_CURB
+      else DirectionsCriteria.APPROACH_UNRESTRICTED
+    }
+    return approaches.takeIf { list -> list.any { it == DirectionsCriteria.APPROACH_CURB } }
+  }
+
+  private fun waypointNamesFor(stops: List<Map<String, Any>?>): List<String?>? {
+    val names = stops.mapIndexed { index, stop ->
+      if (index == 0) ""
+      else ((stop?.get("name") as? String) ?: "")
+        .replace(";", ",")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+        .take(80)
+    }
+    if (names.all { it.isEmpty() }) return null
+    if (names.sumOf { it.length } + names.size > WAYPOINT_NAMES_MAX_TOTAL_CHARS) return null
+    return names
+  }
+
+  private fun requestRouteAndStartGuidance(
+    nav: MapboxNavigation,
+    coordinates: List<Point>,
+    originHeading: Double? = null,
+    stops: List<Map<String, Any>?> = emptyList()
+  ) {
     if (coordinates.size < 2) {
       hasRequestedRoute = false
       dispatchError(mapOf("code" to "ROUTE_ERROR", "message" to "At least origin and destination are required."))
@@ -1907,66 +2105,145 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       return
     }
 
+    val profile = resolveDirectionsProfile()
     val routeOptionsBuilder = RouteOptions.builder()
-      .applyDefaultNavigationOptions()
+      .applyDefaultNavigationOptions(profile)
       .applyLanguageAndVoiceUnitOptions(context)
       .coordinatesList(coordinates)
+      .voiceUnits(
+        if (distanceUnit.trim().lowercase() == "imperial") DirectionsCriteria.IMPERIAL
+        else DirectionsCriteria.METRIC
+      )
       .alternatives(routeAlternatives)
       .steps(true)
       .bannerInstructions(true)
       .voiceInstructions(true)
       .layersList(MutableList<Int?>(coordinates.size) { null })
+    if (profile == DirectionsCriteria.PROFILE_DRIVING_TRAFFIC) {
+      routeOptionsBuilder.snappingIncludeClosuresList(
+        listOf<Boolean?>(true) + List(coordinates.size - 1) { null }
+      )
+    }
 
-    // After `applyDefaultNavigationOptions()`, which sets driving-traffic.
-    routeOptionsBuilder.profile(resolveDirectionsProfile())
+    if (languageExplicit && language.isNotBlank()) routeOptionsBuilder.language(language)
+    if (originHeading != null) {
+      routeOptionsBuilder.bearingsList(
+        listOf<Bearing?>(
+          Bearing.builder().angle(originHeading).degrees(ORIGIN_HEADING_TOLERANCE_DEG).build()
+        ) + List(coordinates.size - 1) { null }
+      )
+    }
+    if (stops.size == coordinates.size) {
+      approachesFor(stops)?.let { routeOptionsBuilder.approachesList(it) }
+      waypointNamesFor(stops)?.let { routeOptionsBuilder.waypointNamesList(it) }
+    }
     applyRouteExclusions(routeOptionsBuilder)
     applyVehicleConstraints(routeOptionsBuilder)
 
     val routeOptions = routeOptionsBuilder.build()
 
-    nav.requestRoutes(
+    cancelRouteRequest()
+    val generation = routeGeneration
+    val isCurrent = { generation == routeGeneration && mapboxNavigation === nav && enabled }
+    val targetDestination = pendingDestination
+    val targetWaypointsProp = pendingWaypointsProp
+    val targetIntermediates = pendingIntermediates
+    routeRequestId = nav.requestRoutes(
       routeOptions,
       object : NavigationRouterCallback {
-        // `RouterOrigin` was an enum-like type in v2 and is a plain String in v3.
         override fun onRoutesReady(routes: List<NavigationRoute>, routerOrigin: String) {
+          if (!isCurrent()) return
           if (routes.isEmpty()) {
-            hasRequestedRoute = false
-            dispatchError(mapOf("code" to "NO_ROUTE", "message" to "No route found"))
-            showPlaceholder("No route found.")
+            routeRequestId = null
+            handleRouteFailure("NO_ROUTE", "No route found", "No route found.")
             return
           }
           mainHandler.post {
+            if (!isCurrent()) return@post
+            routeRequestId = null
+            if (nav.isDestroyed) {
+              hasRequestedRoute = false
+              return@post
+            }
+            val isFirstRoute = !hasActiveRoute
+            val set = runCatching { nav.setNavigationRoutes(routes) }
+            if (set.isFailure) {
+              Log.w(TAG, "setNavigationRoutes failed", set.exceptionOrNull())
+              handleRouteFailure(
+                "ROUTE_ERROR",
+                set.exceptionOrNull()?.message ?: "Could not set the route",
+                "Failed to start guidance."
+              )
+              return@post
+            }
+            routedDestination = targetDestination
+            routedWaypointsProp = targetWaypointsProp
+            routedIntermediates = targetIntermediates
+            pendingDestination = null
+            pendingWaypointsProp = null
+            pendingIntermediates = emptyList()
+            mainHandler.removeCallbacks(rerouteRetry)
+            rerouteRetryAttempt = 0
+            isTargetRerouteFailing = false
             emitRouteChangeFrom(routes.first())
-            nav.setNavigationRoutes(routes)
+            hasActiveRoute = true
+            hasEmittedArrival = false
+            lastWaypointArrivalLeg = null
+            emitOffRoute(false, rerouteFailed = false)
             startSession(nav, routes.first())
             hidePlaceholder()
             applyUiVisibility()
-            applyCameraMode("guidance-started")
+            if (isFirstRoute) applyCameraMode("guidance-started")
+            MapboxAudioGuidanceController.reapply()
           }
         }
 
         override fun onFailure(reasons: List<RouterFailure>, routeOptions: RouteOptions) {
-          hasRequestedRoute = false
+          if (!isCurrent()) return
+          routeRequestId = null
           val message = reasons.firstOrNull()?.message ?: "Route request failed"
-          dispatchError(mapOf("code" to "ROUTE_ERROR", "message" to message))
-          showPlaceholder("Failed to request a route.")
+          val retryable = reasons.isEmpty() || reasons.any { it.isRetryable }
+          handleRouteFailure("ROUTE_ERROR", message, "Failed to request a route.", retryable)
         }
 
         override fun onCanceled(routeOptions: RouteOptions, routerOrigin: String) {
+          if (!isCurrent()) return
+          routeRequestId = null
           hasRequestedRoute = false
         }
       }
     )
   }
 
-  /**
-   * Start the trip session, simulating the route when asked.
-   *
-   * v2 set `api.routeReplayEnabled(...)` on Drop-In and let it decide. v3 makes
-   * this an explicit choice of entry point: `startReplayTripSession` consumes
-   * events pushed onto `mapboxReplayer`, while `startTripSession` uses real
-   * device location.
-   */
+  private fun handleRouteFailure(
+    code: String,
+    message: String,
+    placeholder: String,
+    retryable: Boolean = true,
+  ) {
+    hasRequestedRoute = false
+    if (!hasActiveRoute) {
+      dispatchError(mapOf("code" to code, "message" to message))
+      showPlaceholder(placeholder)
+      return
+    }
+    if (rerouteRetryAttempt == 0) {
+      dispatchError(
+        mapOf(
+          "code" to "REROUTE_FAILED",
+          "message" to "Could not route to the new target; keeping the current route. $message"
+        )
+      )
+    }
+    isTargetRerouteFailing = true
+    emitOffRoute(true, rerouteFailed = true, reason = "destinationChange")
+    if (!retryable) return
+    val delay = REROUTE_RETRY_DELAYS_MS[rerouteRetryAttempt.coerceAtMost(REROUTE_RETRY_DELAYS_MS.size - 1)]
+    rerouteRetryAttempt += 1
+    mainHandler.removeCallbacks(rerouteRetry)
+    mainHandler.postDelayed(rerouteRetry, delay)
+  }
+
   private fun startSession(nav: MapboxNavigation, route: NavigationRoute) {
     if (!shouldSimulateRoute) {
       runCatching { nav.startTripSession() }.onFailure { throwable ->
@@ -1976,7 +2253,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
             "message" to (throwable.message ?: "Could not start the trip session")
           )
         )
-      }
+      }.onSuccess { armGuidanceWatchdog() }
       return
     }
 
@@ -1988,38 +2265,108 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       events.firstOrNull()?.let { replayer.seekTo(it) }
       nav.startReplayTripSession()
       replayer.play()
+      armGuidanceWatchdog()
     }.onFailure { throwable ->
       Log.w(TAG, "Route simulation failed; falling back to live location", throwable)
-      runCatching { nav.startTripSession() }
+      runCatching { nav.startTripSession() }.onSuccess { armGuidanceWatchdog() }
     }
+  }
+
+  private fun armGuidanceWatchdog() {
+    cancelGuidanceWatchdog()
+    if (hasReceivedRouteProgress) return
+
+    val work = Runnable {
+      guidanceWatchdog = null
+      if (hasReceivedRouteProgress) return@Runnable
+      val seconds = GUIDANCE_WATCHDOG_TIMEOUT_MS / 1000
+      if (hasReceivedRawLocation) {
+        dispatchError(
+          mapOf(
+            "code" to "GUIDANCE_NOT_PROGRESSING",
+            "message" to "Guidance started but produced no progress in ${seconds}s, " +
+              "although location fixes are arriving. The navigator is most likely not in " +
+              "active guidance: check for a second MapboxNavigationView mounted at the same " +
+              "time (only one embedded session is supported), and for " +
+              "\"billing session is not running\" in the Mapbox log."
+          )
+        )
+      } else {
+        dispatchError(
+          mapOf(
+            "code" to "NO_LOCATION_FIX",
+            "message" to "Guidance started but no location fix arrived within " +
+              "${seconds}s, so the navigator produced no progress. " +
+              "Check that location permission is granted and the emulator has a location set " +
+              "(Extended controls > Location, or `adb emu geo fix <lon> <lat>`), " +
+              "or pass `shouldSimulateRoute` to replay the route without device fixes."
+          )
+        )
+      }
+    }
+    guidanceWatchdog = work
+    mainHandler.postDelayed(work, GUIDANCE_WATCHDOG_TIMEOUT_MS)
+  }
+
+  private fun cancelGuidanceWatchdog() {
+    guidanceWatchdog?.let { mainHandler.removeCallbacks(it) }
+    guidanceWatchdog = null
   }
 
 
   private fun stopEmbedded(emitCancel: Boolean) {
+    cancelRouteRequest()
     mainHandler.removeCallbacksAndMessages(null)
+    guidanceWatchdog = null
+    hasReceivedRouteProgress = false
+    hasReceivedRawLocation = false
+    paused = false
+    keepScreenOn = false
+    startScheduled = false
+    hasActiveRoute = false
+    originWaitStartedAtMs = 0L
+    lastEmittedRouteSignature = null
+    lastBannerSignature = null
+    lastBannerDistance = Double.NaN
+    lastOffRouteKey = null
+    lastWaypointArrivalLeg = null
+    lastRoadName = null
+    routedDestination = null
+    routedWaypointsProp = null
+    routedIntermediates = emptyList()
+    pendingDestination = null
+    pendingWaypointsProp = null
+    pendingIntermediates = emptyList()
+    rerouteRetryAttempt = 0
+    isTargetRerouteFailing = false
+    appliedLocationPuckStates = null
 
-    attachedMapView?.let { mapView ->
-      clearNavigationMarkers(mapView)
-      // We own the MapView now, so we are responsible for detaching it. Under
-      // Drop-In removing the NavigationView took its internal map with it.
-      runCatching { nativeLayer.removeView(mapView) }
-    }
-    attachedMapView = null
-    viewportDataSource = null
-    navigationCamera = null
-
-    // Detach the installed components explicitly. `installComponents` would
-    // otherwise keep them alive until the host activity is destroyed, which
-    // outlives this view whenever React Native unmounts it.
     componentInstallations.forEach { installation ->
       runCatching { installation.uninstall() }
     }
     componentInstallations.clear()
-    // Held apart from the list so a colours change can replace just this one.
     routeArrowInstallation?.let { installation ->
       runCatching { installation.uninstall() }
     }
     routeArrowInstallation = null
+    maneuverInstallation?.let { runCatching { it.uninstall() } }
+    maneuverInstallation = null
+    runCatching { styleLoadedCancelable?.cancel() }
+    styleLoadedCancelable = null
+    cancelLayerOrderGuard()
+    stopPredictiveCache(attachedMapView)
+
+    attachedMapView?.let { mapView ->
+      clearNavigationMarkers(mapView)
+      runCatching { nativeLayer.removeView(mapView) }
+      runCatching { mapView.onStop() }
+      runCatching { mapView.onDestroy() }
+        .onFailure { Log.w(TAG, "MapView.onDestroy failed", it) }
+    }
+    attachedMapView = null
+    renderedNavigationLineIds.clear()
+    viewportDataSource = null
+    navigationCamera = null
 
     listOfNotNull(maneuverView, soundButton).forEach { child ->
       runCatching { nativeLayer.removeView(child) }
@@ -2027,30 +2374,33 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     maneuverView = null
     soundButton = null
     appliedStyleUri = null
-    runCatching { styleLoadedCancelable?.cancel() }
-    styleLoadedCancelable = null
     setNavigationBarsHidden(false)
 
     mapboxNavigation?.let { nav ->
+      MapboxAudioGuidanceController.unbind()
       runCatching { nav.unregisterLocationObserver(locationObserver) }
       runCatching { nav.unregisterRouteProgressObserver(routeProgressObserver) }
       runCatching { nav.unregisterBannerInstructionsObserver(bannerInstructionsObserver) }
       runCatching { nav.unregisterArrivalObserver(arrivalObserver) }
       runCatching { nav.unregisterRoutesObserver(routesObserver) }
       runCatching { nav.unregisterOffRouteObserver(offRouteObserver) }
+      rerouteController?.let { controller ->
+        runCatching { controller.unregisterRerouteStateV2Observer(rerouteStateObserver) }
+      }
+      runCatching { nav.setArrivalController() }
+      runCatching { nav.setContinuousAlternativesEnabled(true) }
       runCatching { nav.setNavigationRoutes(emptyList()) }
-      // Clearing routes alone leaves the shared MapboxNavigation instance in
-      // Free Drive mode, so its foreground-service notification ("Free Drive
-      // session") lingers indefinitely after a trip ends. Stop the trip
-      // session outright so the notification/service actually tears down.
       runCatching { nav.stopTripSession() }
     }
     mapboxNavigation = null
+    rerouteController = null
 
     hidePlaceholder()
     hasRequestedRoute = false
+    awaitingOriginFix = false
     hasEmittedArrival = false
     lastJourneyLocation = null
+    lastRawLocation = null
     lastJourneyProgress = null
     lastJourneyBanner = null
     setCameraFollowingState(true, "stop")
@@ -2062,7 +2412,93 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
 
 
-  // ── Navigation Marker Rendering ──────────────────────────────────────────────
+  private data class NavigationLinePayload(
+    val id: String,
+    val points: List<Point>,
+    val color: Int,
+    val width: Double,
+    val opacity: Double,
+    val dash: List<Double>?,
+  )
+
+  private fun parseNavigationLine(value: Map<String, Any>): NavigationLinePayload? {
+    val id = (value["id"] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val points = (value["coordinates"] as? List<*>).orEmpty().mapNotNull { raw ->
+      val point = raw as? Map<*, *> ?: return@mapNotNull null
+      val latitude = (point["latitude"] as? Number)?.toDouble() ?: return@mapNotNull null
+      val longitude = (point["longitude"] as? Number)?.toDouble() ?: return@mapNotNull null
+      if (!latitude.isFinite() || !longitude.isFinite()) return@mapNotNull null
+      Point.fromLngLat(longitude, latitude)
+    }
+    val width = (value["width"] as? Number)?.toDouble()?.takeIf { it.isFinite() && it > 0 } ?: 4.0
+    val opacity = ((value["opacity"] as? Number)?.toDouble() ?: 1.0).coerceIn(0.0, 1.0)
+    val dash = (value["dash"] as? List<*>).orEmpty()
+      .mapNotNull { (it as? Number)?.toDouble()?.takeIf { d -> d.isFinite() && d >= 0 } }
+      .takeIf { it.size >= 2 }
+    return NavigationLinePayload(
+      id = id,
+      points = points,
+      color = HexColor.parse(value["color"]) ?: 0xFF2563EB.toInt(),
+      width = width,
+      opacity = opacity,
+      dash = dash,
+    )
+  }
+
+  private fun renderNavigationLinesIfPossible() {
+    val mapView = attachedMapView ?: return
+    mapView.mapboxMap.getStyle { style -> renderNavigationLines(style) }
+  }
+
+  private fun renderNavigationLines(style: Style) {
+    val payloads = navigationLines.orEmpty().mapNotNull(::parseNavigationLine).filter { it.points.size >= 2 }
+    val nextIds = payloads.mapTo(linkedSetOf()) { it.id }
+    for (id in renderedNavigationLineIds.toList()) {
+      if (id in nextIds) continue
+      runCatching { style.removeStyleLayer(navigationLineLayerId(id)) }
+      runCatching { style.removeStyleSource(navigationLineSourceId(id)) }
+      renderedNavigationLineIds.remove(id)
+    }
+    for (line in payloads) {
+      val sourceId = navigationLineSourceId(line.id)
+      val layerId = navigationLineLayerId(line.id)
+      val feature = Feature.fromGeometry(LineString.fromLngLats(line.points))
+      val existing = style.getSourceAs<GeoJsonSource>(sourceId)
+      if (existing != null) {
+        existing.feature(feature)
+      } else if (runCatching { style.addSource(geoJsonSource(sourceId) { feature(feature) }) }.isFailure) {
+        continue
+      }
+      val existingLayer = style.getLayerAs<LineLayer>(layerId)
+      if (existingLayer != null) {
+        runCatching {
+          existingLayer.lineColor(line.color)
+          existingLayer.lineWidth(line.width)
+          existingLayer.lineOpacity(line.opacity)
+          existingLayer.lineDasharray(line.dash ?: emptyList())
+        }
+      } else {
+        runCatching {
+          style.addLayer(
+            lineLayer(layerId, sourceId) {
+              lineColor(line.color)
+              lineWidth(line.width)
+              lineOpacity(line.opacity)
+              lineCap(LineCap.ROUND)
+              lineJoin(LineJoin.ROUND)
+              line.dash?.let { lineDasharray(it) }
+            }
+          )
+        }
+      }
+      renderedNavigationLineIds.add(line.id)
+    }
+    if (payloads.isNotEmpty()) armLayerOrderGuard()
+  }
+
+  private fun navigationLineSourceId(id: String) = "rnmbn-line-$id"
+
+  private fun navigationLineLayerId(id: String) = "rnmbn-line-$id-layer"
 
   private fun renderNavigationMarkersIfPossible() {
     val mapView = attachedMapView ?: return
@@ -2074,23 +2510,39 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       if (!nextIds.contains(markerId)) {
         runCatching { annotationManager.removeViewAnnotation(markerView) }
         navigationMarkerViews.remove(markerId)
+        forgetMarkerMotion(markerId)
       }
     }
 
     markerPayloads.forEach { marker ->
+      val picture = marker.image?.let { image -> markerBitmap(image)?.let { image to it } }
+      navigationMarkerViews[marker.id]?.let { current ->
+        if ((current is android.widget.ImageView) != (picture != null)) {
+          runCatching { annotationManager.removeViewAnnotation(current) }
+          navigationMarkerViews.remove(marker.id)
+        }
+      }
       val existingView = navigationMarkerViews[marker.id]
-      val markerView = existingView ?: createNavigationMarkerView(marker)
-      bindNavigationMarkerView(markerView, marker)
+      val markerView = existingView
+        ?: picture?.let { (image, bitmap) -> createImageMarkerView(marker, image, bitmap) }
+        ?: createNavigationMarkerView(marker)
+      if (picture != null) {
+        val (image, bitmap) = picture
+        val imageView = markerView as android.widget.ImageView
+        if (imageView.tag != image.uri) {
+          imageView.setImageBitmap(bitmap)
+          imageView.tag = image.uri
+        }
+      } else {
+        bindNavigationMarkerView(markerView, marker)
+      }
       val metrics = resolveNavigationMarkerMetrics(marker.size)
-      // Maps 11 reshaped these options: `geometry` became `annotatedFeature`,
-      // and the single anchor plus offset pair became `variableAnchors` — here
-      // via the `annotationAnchor` DSL, with one entry to pin the anchor the
-      // way v2's fixed `offsetY` did. `selected` is deprecated in favour of
-      // `priority`, where a higher number draws on top.
       val viewOptions = viewAnnotationOptions {
         annotatedFeature(AnnotatedFeature.valueOf(marker.point))
         allowOverlap(marker.allowOverlap)
         visible(true)
+        ignoreCameraPadding(true)
+        allowOverlapWithPuck(true)
         priority(if (marker.selected) 1 else 0)
         annotationAnchor {
           anchor(ViewAnnotationAnchor.BOTTOM)
@@ -2102,10 +2554,13 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         runCatching {
           annotationManager.addViewAnnotation(markerView, viewOptions)
           navigationMarkerViews[marker.id] = markerView
+          markerShownAt[marker.id] = marker.point
+          markerUpdatedAt[marker.id] = android.os.SystemClock.uptimeMillis()
         }.onFailure { throwable ->
           Log.w(TAG, "Failed to add navigation marker '${marker.id}'", throwable)
         }
       } else {
+        val shown = markerShownAt[marker.id] ?: marker.point
         runCatching {
           if (!annotationManager.updateViewAnnotation(existingView, viewOptions)) {
             annotationManager.removeViewAnnotation(existingView)
@@ -2114,8 +2569,56 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         }.onFailure { throwable ->
           Log.w(TAG, "Failed to update navigation marker '${marker.id}'", throwable)
         }
+        glideMarker(marker.id, existingView, shown, marker.point, marker.animatesMovement)
       }
     }
+  }
+
+  private fun glideMarker(id: String, view: View, from: Point, to: Point, animates: Boolean) {
+    val manager = attachedMapView?.viewAnnotationManager ?: return
+    markerAnimators.remove(id)?.cancel()
+    val now = android.os.SystemClock.uptimeMillis()
+    val since = now - (markerUpdatedAt[id] ?: now)
+    markerUpdatedAt[id] = now
+    val place = { point: Point ->
+      markerShownAt[id] = point
+      runCatching {
+        manager.updateViewAnnotation(
+          view,
+          viewAnnotationOptions { annotatedFeature(AnnotatedFeature.valueOf(point)) }
+        )
+      }
+    }
+    val distance = FloatArray(1)
+    android.location.Location.distanceBetween(
+      from.latitude(), from.longitude(), to.latitude(), to.longitude(), distance
+    )
+    if (!animates || distance[0] < 0.3f || distance[0] > MARKER_GLIDE_MAX_DISTANCE_M || since <= 0L) {
+      place(to)
+      return
+    }
+    place(from)
+    val animator = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+      duration = since.coerceIn(MARKER_GLIDE_MIN_MS, MARKER_GLIDE_MAX_MS)
+      interpolator = android.view.animation.LinearInterpolator()
+      addUpdateListener { animation ->
+        val t = (animation.animatedValue as Float).toDouble()
+        place(
+          Point.fromLngLat(
+            from.longitude() + (to.longitude() - from.longitude()) * t,
+            from.latitude() + (to.latitude() - from.latitude()) * t
+          )
+        )
+      }
+    }
+    markerAnimators[id] = animator
+    animator.start()
+  }
+
+  private fun forgetMarkerMotion(id: String) {
+    markerAnimators.remove(id)?.cancel()
+    markerShownAt.remove(id)
+    markerUpdatedAt.remove(id)
   }
 
   private fun clearNavigationMarkers(mapView: MapView) {
@@ -2123,6 +2626,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     navigationMarkerViews.values.forEach { markerView ->
       runCatching { annotationManager.removeViewAnnotation(markerView) }
     }
+    navigationMarkerViews.keys.toList().forEach(::forgetMarkerMotion)
     navigationMarkerViews.clear()
   }
 
@@ -2135,16 +2639,21 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     val label = (value["label"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
     val glyph = (value["glyph"] as? String)?.trim()?.takeIf { it.isNotEmpty() }?.take(2) ?: "•"
     val badge = (value["badge"] as? String)?.trim()?.takeIf { it.isNotEmpty() }?.take(3)
-    val variant = normalizeMarkerVariant(value["variant"] as? String)
+    val variant = NavigationMarkerOptions.variant(value["variant"] as? String)
     val customColor = HexColor.parse(value["color"])
     val customBadgeColor = HexColor.parse(value["badgeColor"])
     val customOpacity = (value["opacity"] as? Number)?.toFloat()?.coerceIn(0f, 1f)
-    val size = normalizeMarkerSize(value["size"] as? String)
-    val markerStyle = normalizeMarkerStyle(value["markerStyle"] as? String)
+    val size = NavigationMarkerOptions.size(value["size"] as? String)
+    val markerStyle = NavigationMarkerOptions.style(value["markerStyle"] as? String)
     val showTail = (value["showTail"] as? Boolean) ?: (markerStyle == "pin")
     val selected = (value["selected"] as? Boolean) ?: (variant == "primary" || variant == "success")
     val allowOverlap = (value["allowOverlap"] as? Boolean) ?: true
     val anchorOffsetY = (value["anchorOffsetY"] as? Number)?.toInt()
+    val image = (value["image"] as? Map<*, *>)?.let { raw ->
+      val uri = (raw["uri"] as? String)?.takeIf { it.isNotBlank() }
+      val scale = (raw["scale"] as? Number)?.toFloat() ?: resources.displayMetrics.density
+      uri?.let { NavigationMarkerImage(it, scale.coerceAtLeast(1f)) }
+    }
 
     return NavigationMarkerPayload(
       id = id,
@@ -2162,11 +2671,38 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
       selected = selected,
       allowOverlap = allowOverlap,
       anchorOffsetY = anchorOffsetY,
+      animatesMovement = (value["animatesMovement"] as? Boolean) ?: false,
+      image = image,
     )
+  }
+
+  private fun markerBitmap(image: NavigationMarkerImage): android.graphics.Bitmap? {
+    MarkerImageLoader.cached(image.uri)?.let { return it }
+    MarkerImageLoader.load(context, image.uri) { renderNavigationMarkersIfPossible() }
+    return null
+  }
+
+  private fun createImageMarkerView(
+    marker: NavigationMarkerPayload,
+    image: NavigationMarkerImage,
+    bitmap: android.graphics.Bitmap
+  ): View {
+    val density = resources.displayMetrics.density
+    return android.widget.ImageView(context).apply {
+      setImageBitmap(bitmap)
+      scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+      contentDescription = marker.label ?: marker.id
+      tag = image.uri
+      layoutParams = ViewGroup.LayoutParams(
+        (bitmap.width / image.scale * density).toInt(),
+        (bitmap.height / image.scale * density).toInt()
+      )
+    }
   }
 
   private fun createNavigationMarkerView(marker: NavigationMarkerPayload): View {
     val markerRoot = LinearLayout(context).apply {
+      layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
       orientation = LinearLayout.VERTICAL
       gravity = Gravity.CENTER_HORIZONTAL
       clipChildren = false
@@ -2241,7 +2777,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     glyphView.text = marker.glyph
     glyphView.setTextSize(TypedValue.COMPLEX_UNIT_SP, metrics.glyphTextSp)
 
-    // Tail: shown for "pin" style when showTail is true
     val showTailView = marker.markerStyle == "pin" && marker.showTail
     tail.visibility = if (showTailView) View.VISIBLE else View.GONE
     if (showTailView) {
@@ -2285,26 +2820,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
     root.alpha = alpha
     root.contentDescription = marker.label ?: marker.id
-  }
-
-  private fun normalizeMarkerVariant(raw: String?): String = when (raw?.trim()?.lowercase()) {
-    "primary" -> "primary"
-    "success" -> "success"
-    "warning" -> "warning"
-    "danger" -> "danger"
-    "muted" -> "muted"
-    else -> "default"
-  }
-
-  private fun normalizeMarkerSize(raw: String?): String = when (raw?.trim()?.lowercase()) {
-    "small" -> "small"
-    "large" -> "large"
-    else -> "medium"
-  }
-
-  private fun normalizeMarkerStyle(raw: String?): String = when (raw?.trim()?.lowercase()) {
-    "dot" -> "dot"
-    else -> "pin"
   }
 
   private fun resolveNavigationMarkerMetrics(size: String): NavigationMarkerMetrics = when (size) {
@@ -2355,8 +2870,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     value.toFloat(),
     context.resources.displayMetrics
   ).toInt()
-
-  // ── End Marker Rendering ──────────────────────────────────────────────────────
 
   private fun hideMapOrnaments(mapView: com.mapbox.maps.MapView) {
     runCatching {
@@ -2409,7 +2922,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   }
 
   private fun setCameraFollowingState(next: Boolean, reason: String) {
-    if (isCameraFollowing == next) return
+    if (isCameraFollowing == next && reason != "guidance-started") return
     isCameraFollowing = next
     dispatchCameraFollowingStateChange(
       mapOf(
@@ -2420,25 +2933,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     )
   }
 
-  /**
-   * Apply `cameraPitch` / `cameraZoom` directly to the map camera.
-   *
-   * The Drop-In UI owns its own NavigationCamera and recomputes the viewport on
-   * every location update while following, so these values reliably stick only
-   * while the camera is idle or in overview. That is still a real improvement
-   * over the previous behaviour, where both setters were no-ops.
-   */
-  /**
-   * Apply `cameraPitch` / `cameraZoom`.
-   *
-   * v2 wrote straight to `mapboxMap.setCamera(...)`, which the navigation
-   * camera then overwrote on its next frame — the code even logged a warning
-   * saying so, meaning these two props effectively did nothing while
-   * following. v3 exposes the supported mechanism for this
-   * (`*PropertyOverride`) on the viewport data source, so the values now
-   * actually hold. That is a behaviour change, and a deliberate one: the
-   * alternative is knowingly keeping a broken prop.
-   */
   private fun applyCameraPitchZoom(reason: String) {
     if (cameraPitch == null && cameraZoom == null) return
     val dataSource = viewportDataSource ?: return
@@ -2457,23 +2951,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
   }
 
-  /**
-   * Apply the configured location puck.
-   *
-   * v2 pushed a per-state `LocationPuckOptions` into Drop-In's
-   * `customizeViewStyles`. `LocationPuckOptions` still exists in v3 and
-   * `LocationPuckFactory` still builds one, but nothing consumes it any more:
-   * the `locationPuck` component takes a single `LocationPuck`. The puck is
-   * therefore set straight on the map's location component, using the
-   * active-navigation puck — the state this view spends nearly all its time in.
-   *
-   * Per-state pucks are consequently collapsed to one on Android. The JS prop
-   * shape is unchanged, so callers keep working, but only the
-   * `activeNavigation` (or `default`) entry has a visible effect.
-   */
   private fun applyLocationPuck() {
     val mapView = attachedMapView ?: return
-    // Asset loading is async; avoid rebuilding for an unchanged configuration.
     if (appliedLocationPuckStates == locationPuckStates) return
     val requested = locationPuckStates
 
@@ -2490,8 +2969,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
 
     LocationPuckFactory.buildOptions(context, requested) { options ->
-      // A newer configuration may have arrived while assets were loading.
-      if (locationPuckStates !== requested) return@buildOptions
+      if (locationPuckStates !== requested || attachedMapView !== mapView) return@buildOptions
       runCatching {
         mapView.location.locationPuck = options.activeNavigationPuck
         appliedLocationPuckStates = requested
@@ -2501,40 +2979,18 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
   }
 
-  /**
-   * Show or hide the navigation chrome.
-   *
-   * v2 funnelled this through Drop-In's `customizeViewOptions`, which exposed
-   * roughly fifteen `showX` flags covering widgets Drop-In owned — info panel,
-   * start/end navigation buttons, route preview button, POI name, arrival text
-   * and so on. v3 has no Drop-In and therefore none of those widgets, so only
-   * the props that map onto a widget we actually build are honoured; the rest
-   * are reported once rather than silently ignored.
-   */
   private fun applyUiVisibility() {
     maneuverView?.visibility = if (showsManeuverView) View.VISIBLE else View.GONE
-    // The sound toggle is the only action button v3 gives us out of the box.
     soundButton?.visibility = if (showsActionButtons) View.VISIBLE else View.GONE
 
     if (warnedUnsupportedChrome) return
     val unsupported = buildList {
       if (!showsWayNameLabel) add("showsWayNameLabel")
       if (!showsReportFeedback) add("showsReportFeedback")
-      if (!showsEndOfRouteFeedback) add("showsEndOfRouteFeedback")
-      // Both are honoured on iOS, but their Android widgets do not lay out
-      // usably outside Drop-In's container and cannot be themed from a runtime
-      // colour, so neither view is installed. See addNavigationChrome.
       if (showsTripProgress) add("showsTripProgress (use the bottomSheet overlay instead)")
       if (showsSpeedLimits) add("showsSpeedLimits")
-      // These are real iOS `NavigationViewController` features with no v3
-      // Android counterpart. Listed so they are visibly inert rather than
-      // quietly accepted.
       if (annotatesIntersectionsAlongRoute) add("annotatesIntersectionsAlongRoute")
       if (!usesNightStyleWhileInTunnel) add("usesNightStyleWhileInTunnel")
-      if (!showsContinuousAlternatives) add("showsContinuousAlternatives")
-      // v3 Android installs only the audio-guidance button; the rest of the
-      // native floating buttons have no widget. `showsActionButtons` controls
-      // the one that exists.
       if (!showNativeAudioGuidanceButton) add("nativeFloatingButtons.showAudioGuidanceButton")
       if (showNativeCameraModeButton) add("nativeFloatingButtons.showCameraModeButton")
       if (showNativeRecenterButton) add("nativeFloatingButtons.showRecenterButton")
@@ -2551,6 +3007,26 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     }
   }
 
+  private fun initialCameraOptions(): CameraOptions? {
+    val lat = lastKnownLatitude ?: startOrigin.toAnyPointOrNull()?.latitude()
+    val lng = lastKnownLongitude ?: startOrigin.toAnyPointOrNull()?.longitude()
+    if (lat == null || lng == null) return null
+    return CameraOptions.Builder().center(Point.fromLngLat(lng, lat)).zoom(15.0).build()
+  }
+
+  private fun applyCameraPadding() {
+    val dataSource = viewportDataSource ?: return
+    val padding = cameraPadding ?: return
+    val density = context.resources.displayMetrics.density.toDouble()
+    fun side(key: String) = ((padding[key] as? Number)?.toDouble() ?: 0.0).coerceAtLeast(0.0) * density
+    val insets = EdgeInsets(side("top"), side("left"), side("bottom"), side("right"))
+    runCatching {
+      dataSource.followingPadding = insets
+      dataSource.overviewPadding = insets
+      dataSource.evaluate()
+    }.onFailure { throwable -> Log.w(TAG, "Failed to apply camera padding", throwable) }
+  }
+
   private fun applyCameraMode(reason: String) {
     if (cameraMode.trim().lowercase() == "overview") {
       moveCameraToOverviewInternal(reason)
@@ -2561,9 +3037,6 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   }
 
   private fun moveCameraToOverviewInternal(reason: String) {
-    // v2 had to guess: Drop-In exposed no camera handle, so this reflected over
-    // `view.api` looking for any of six plausible method names. v3 gives us the
-    // NavigationCamera directly, so the reflection is gone.
     val camera = navigationCamera
     if (camera == null) {
       setCameraFollowingState(false, reason)
@@ -2649,6 +3122,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
   }
 
   private fun emitJourneySnapshot() {
+    if (!journeyDataEnabled) return
     if (!shouldEmitThrottled(lastJourneyEmitAtMs)) return
     lastJourneyEmitAtMs = nowMs()
     val location = lastJourneyLocation
@@ -2672,8 +3146,99 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     if (secondary.isNotEmpty()) {
       payload["secondaryText"] = secondary
     }
-    payload["stepDistanceRemaining"] = instruction?.distanceAlongGeometry() ?: 0.0
+    val liveDistance =
+      lastJourneyProgress?.currentLegProgress?.currentStepProgress?.distanceRemaining?.toDouble()
+    payload["stepDistanceRemaining"] = liveDistance ?: instruction?.distanceAlongGeometry() ?: 0.0
+    instruction?.primary()?.type()?.takeIf { it.isNotBlank() }?.let { payload["maneuverType"] = it }
+    instruction?.primary()?.modifier()?.takeIf { it.isNotBlank() }?.let {
+      payload["maneuverModifier"] = it
+    }
+    instruction?.primary()?.degrees()?.let { payload["maneuverDegrees"] = it }
+
+    val (maneuverStep, followingStep) = maneuverStepsFor(instruction)
+    val drivingSide = (instruction?.primary()?.drivingSide() ?: maneuverStep?.drivingSide())
+      ?.trim()?.lowercase()?.takeIf { it == "left" || it == "right" }
+    drivingSide?.let { payload["drivingSide"] = it }
+    val exitNumber = maneuverStep?.maneuver()?.exit()?.takeIf { it > 0 }
+    exitNumber?.let { payload["exitNumber"] = it }
+    val lanes = lanesOf(instruction)
+    lanes?.let { payload["lanes"] = it }
+    val nextManeuver = nextManeuverOf(maneuverStep, followingStep)
+    nextManeuver?.let { payload["nextManeuver"] = it }
+
+    val signature = listOf(
+      primary,
+      secondary,
+      instruction?.primary()?.type().orEmpty(),
+      instruction?.primary()?.modifier().orEmpty(),
+      drivingSide.orEmpty(),
+      exitNumber?.toString().orEmpty(),
+      lanes?.toString().orEmpty(),
+      nextManeuver?.toString().orEmpty()
+    ).joinToString("|")
+    val distance = (payload["stepDistanceRemaining"] as? Number)?.toDouble() ?: Double.NaN
+    val now = nowMs()
+    if (signature == lastBannerSignature) {
+      val moved = !lastBannerDistance.isFinite() || !distance.isFinite() ||
+        kotlin.math.abs(distance - lastBannerDistance) >= BANNER_DISTANCE_STEP_M
+      if (!moved || now - lastBannerEmitAtMs < BANNER_DISTANCE_MIN_GAP_MS) return
+    }
+    lastBannerSignature = signature
+    lastBannerDistance = distance
+    lastBannerEmitAtMs = now
     dispatchBannerInstruction(payload)
+  }
+
+  private fun maneuverStepsFor(instruction: BannerInstructions?): Pair<LegStep?, LegStep?> {
+    if (instruction == null) return null to null
+    val legProgress = lastJourneyProgress?.currentLegProgress ?: return null to null
+    val steps = legProgress.routeLeg?.steps() ?: return null to null
+    val currentIndex = legProgress.currentStepProgress?.stepIndex
+    val bannerStepIndex =
+      if (currentIndex != null &&
+        steps.getOrNull(currentIndex)?.bannerInstructions()?.contains(instruction) == true
+      ) {
+        currentIndex
+      } else {
+        steps.indexOfFirst { it.bannerInstructions()?.contains(instruction) == true }
+          .takeIf { it >= 0 }
+          ?: currentIndex
+          ?: return null to null
+      }
+    return steps.getOrNull(bannerStepIndex + 1) to steps.getOrNull(bannerStepIndex + 2)
+  }
+
+  private fun lanesOf(instruction: BannerInstructions?): List<Map<String, Any>>? {
+    val components = instruction?.sub()?.components() ?: return null
+    val lanes = components
+      .filter { it.type() == BannerComponents.LANE }
+      .map { lane ->
+        val payload = mutableMapOf<String, Any>(
+          "indications" to (lane.directions() ?: emptyList<String>()),
+          "active" to (lane.active() ?: false)
+        )
+        lane.activeDirection()?.takeIf { it.isNotBlank() }?.let { payload["activeDirection"] = it }
+        payload
+      }
+    return lanes.takeIf { it.isNotEmpty() }
+  }
+
+  private fun nextManeuverOf(maneuverStep: LegStep?, followingStep: LegStep?): Map<String, Any>? {
+    if (maneuverStep == null || followingStep == null) return null
+    val banner = maneuverStep.bannerInstructions()?.firstOrNull()?.primary()
+    val text = banner?.text()?.trim()?.takeIf { it.isNotEmpty() }
+      ?: followingStep.maneuver().instruction()?.trim()?.takeIf { it.isNotEmpty() }
+      ?: return null
+    val payload = mutableMapOf<String, Any>(
+      "primaryText" to text,
+      "distance" to maneuverStep.distance()
+    )
+    (banner?.type() ?: followingStep.maneuver().type())
+      ?.takeIf { it.isNotBlank() }?.let { payload["maneuverType"] = it }
+    (banner?.modifier() ?: followingStep.maneuver().modifier())
+      ?.takeIf { it.isNotBlank() }?.let { payload["maneuverModifier"] = it }
+    banner?.degrees()?.let { payload["maneuverDegrees"] = it }
+    return payload
   }
 
   private fun emitJourneyData(
@@ -2697,11 +3262,11 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
     val primary = banner?.primary()?.text()?.trim()?.takeIf { it.isNotEmpty() }
     val secondary = banner?.secondary()?.text()?.trim()?.takeIf { it.isNotEmpty() }
     primary?.let { payload["primaryInstruction"] = it }
-    secondary?.let {
-      payload["secondaryInstruction"] = it
-      payload["currentStreet"] = it
-    }
-    banner?.distanceAlongGeometry()?.let { payload["stepDistanceRemaining"] = it }
+    secondary?.let { payload["secondaryInstruction"] = it }
+    lastRoadName?.let { payload["currentStreet"] = it }
+    (progress?.currentLegProgress?.currentStepProgress?.distanceRemaining?.toDouble()
+      ?: banner?.distanceAlongGeometry())
+      ?.let { payload["stepDistanceRemaining"] = it }
 
     if (progress != null) {
       payload["distanceRemaining"] = progress.distanceRemaining.toDouble()
@@ -2714,6 +3279,8 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
 
   private fun emitRouteChangeFrom(route: NavigationRoute) {
     val geometry = route.directionsRoute.geometry() ?: return
+    if (geometry == lastEmittedRouteSignature) return
+    lastEmittedRouteSignature = geometry
     val points = runCatching { PolylineUtils.decode(geometry, 6) }.getOrElse { return }
     if (points.isEmpty()) return
     val coords = points.map { p ->
@@ -2722,7 +3289,7 @@ class MapboxNavigationView(context: Context, appContext: AppContext) : ExpoView(
         "longitude" to p.longitude()
       )
     }
-    dispatchRouteChange(mapOf("coordinates" to coords))
+    dispatchRouteChange(mapOf("coordinates" to coords, "routeId" to route.id))
   }
 
   private fun parseWaypoints(value: List<Map<String, Any>>?): List<Point> {

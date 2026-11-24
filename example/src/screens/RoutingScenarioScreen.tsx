@@ -24,14 +24,6 @@ const VEHICLE_PRESETS: VehiclePreset[] = ['none', 'van', 'truck']
 type LightPreset = 'default' | 'day' | 'dusk' | 'dawn' | 'night'
 const LIGHT_PRESETS: LightPreset[] = ['default', 'day', 'dusk', 'dawn', 'night']
 
-/**
- * Exercises the routing and style-configuration props added in 3.0.0.
- *
- * Deliberately a Standard style, because `mapStyleConfig` only means anything
- * on a style whose basemap is a configurable import — on `navigation-day-v1`
- * the wrapper reports `MAP_STYLE_CONFIG_UNSUPPORTED` instead, which the error
- * line below will show.
- */
 export default function RoutingScenarioScreen() {
   const { hasLocationPermission, permissionStatus, resolvedStartOrigin, requestLocationAccess } =
     useNavigationLocation(true)
@@ -54,8 +46,6 @@ export default function RoutingScenarioScreen() {
         : exclusionPreset === 'tollFerryMotorway'
           ? { roadClasses: ['toll', 'ferry', 'motorway'] }
           : {
-              // A point on Market St, between the start and the destination, so
-              // excluding it should visibly push the route onto another street.
               locations: [{ latitude: 37.7793, longitude: -122.4098 }],
             }
 
@@ -98,49 +88,71 @@ export default function RoutingScenarioScreen() {
       />
 
       <View pointerEvents='box-none' style={styles.overlayRoot}>
-        {!panelOpen ? (
-          <View style={styles.collapsedRow}>
-            <ChipButton label='Panel: show' onPress={() => setPanelOpen(true)} />
-          </View>
-        ) : (
+        {panelOpen ? (
           <ScrollView contentContainerStyle={styles.panel}>
             <Text style={styles.panelTitle}>Routing + Style Config</Text>
             <View style={styles.row}>
-              <ChipButton label='Panel: hide' onPress={() => setPanelOpen(false)} />
+              <ChipButton
+                label='Panel: hide'
+                onPress={() => {
+                  setPanelOpen(false)
+                }}
+              />
             </View>
             <View style={styles.row}>
               <ChipButton
                 label={`Profile: ${profile}`}
-                onPress={() => setProfile((value) => cycle(PROFILES, value))}
+                onPress={() => {
+                  setProfile((value) => cycle(PROFILES, value))
+                }}
               />
               <ChipButton
                 label={`Exclude: ${exclusionPreset}`}
-                onPress={() => setExclusionPreset((value) => cycle(EXCLUSION_PRESETS, value))}
+                onPress={() => {
+                  setExclusionPreset((value) => cycle(EXCLUSION_PRESETS, value))
+                }}
               />
             </View>
             <View style={styles.row}>
               <ChipButton
                 label={`Vehicle: ${vehiclePreset}`}
-                onPress={() => setVehiclePreset((value) => cycle(VEHICLE_PRESETS, value))}
+                onPress={() => {
+                  setVehiclePreset((value) => cycle(VEHICLE_PRESETS, value))
+                }}
               />
               <ChipButton
                 label={`Light: ${lightPreset}`}
-                onPress={() => setLightPreset((value) => cycle(LIGHT_PRESETS, value))}
+                onPress={() => {
+                  setLightPreset((value) => cycle(LIGHT_PRESETS, value))
+                }}
               />
             </View>
             <View style={styles.row}>
               <ChipButton
                 label={`3D: ${show3dObjects ? 'on' : 'off'}`}
-                onPress={() => setShow3dObjects((value) => !value)}
+                onPress={() => {
+                  setShow3dObjects((value) => !value)
+                }}
               />
               <ChipButton
                 label={`POI: ${showPoiLabels ? 'on' : 'off'}`}
-                onPress={() => setShowPoiLabels((value) => !value)}
+                onPress={() => {
+                  setShowPoiLabels((value) => !value)
+                }}
               />
             </View>
             <Text style={styles.status}>route: {routeSummary ?? '—'}</Text>
             <Text style={styles.status}>error: {lastError ?? 'none'}</Text>
           </ScrollView>
+        ) : (
+          <View style={styles.collapsedRow}>
+            <ChipButton
+              label='Panel: show'
+              onPress={() => {
+                setPanelOpen(true)
+              }}
+            />
+          </View>
         )}
       </View>
 

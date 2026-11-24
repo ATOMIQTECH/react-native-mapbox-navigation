@@ -1,0 +1,31 @@
+appId: com.expomapboxnavigationexample
+name: A new destination re-routes in place; an unroutable one keeps the route and reports why
+tags:
+  - navigation
+  - reroute
+---
+- runFlow: subflows/open-journey.yaml
+- tapOn:
+    id: journey-move
+- extendedWaitUntil:
+    visible:
+      id: journey-routes
+      text: 'Routes: [2-9].*'
+    timeout: 60000
+- assertNotVisible:
+    id: journey-error
+    text: '.*\(fatal\).*'
+- tapOn:
+    id: journey-unroutable
+- extendedWaitUntil:
+    visible:
+      id: journey-error
+      text: 'Error: REROUTE_FAILED \(recoverable\)'
+    timeout: 60000
+- assertVisible:
+    id: journey-offroute
+    text: 'Off route: off/failed/destinationChange'
+- assertVisible:
+    id: journey-leg
+    text: 'Leg: [0-9]+ \| [0-9]+m left'
+- takeScreenshot: .maestro-artifacts/reroute

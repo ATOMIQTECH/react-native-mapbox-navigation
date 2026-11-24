@@ -1,5 +1,267 @@
 # Changelog
 
+## 4.0.0
+
+Mostly fixes and features from a downstream app's production patch against
+3.1.0, upstreamed so no consumer has to carry one, plus guidance diagnostics.
+
+### Breaking
+
+- **Expo SDK 56 or newer is required** (`expo >= 56`, was `>= 50`). The config
+  plugin is now `app.plugin.ts`, and Expo resolves a TypeScript plugin file from
+  SDK 56 on. Nothing changes in how it is used: keep
+  `"@atomiqlab/react-native-mapbox-navigation"` in your `plugins`. Its options
+  are typed as `MapboxNavigationPluginOptions` for an `app.config.ts`.
+- **iOS builds need Xcode 26.5 or newer** (Mapbox Maps 11.35).
+- **`NavigationError.code` is a `NavigationErrorCode` union** instead of
+  `string`, and every error carries `recoverable`.
+
+**Behaviour changes worth checking before you upgrade:** `onBannerInstruction`
+is now change-driven rather than per tick, `onLocationChange` follows the map
+matcher, Mapbox's native end-of-route card is never shown, and a mid-trip
+`destination`/`waypoints` change re-routes in place. Multi-stop apps that
+advance legs themselves should set `waypointAdvance="manual"`. See *Changed*.
+
+### Added
+
+- **`NO_LOCATION_FIX` through `onError` when guidance starts but no position
+  arrives.** Both platforms start guidance as soon as a route resolves — iOS
+  through `NavigationViewController`, which puts the trip session into active
+  guidance itself, and Android through `startTripSession`, which returns as soon
+  as the session exists. Neither checks that the device is actually producing
+  location fixes, so a simulator or emulator with no location set would compute
+  a route and then sit forever: empty banner, no progress, no voice, and a
+  camera that never positions. Mapbox logs "The navigator is paused" at warning
+  level and nothing reached `onError`, so the only symptom an app saw was a
+  blank navigation view.
+
+  A watchdog now arms when guidance attaches and is cancelled by the first route
+  progress update. If 20s pass with no progress, `onError` fires — and the code
+  distinguishes the two causes, because their remedies are opposite:
+
+  - `NO_LOCATION_FIX` when the device has no position at all (give it one, or
+    pass `shouldSimulateRoute`).
+  - `GUIDANCE_NOT_PROGRESSING` when fixes are arriving and the navigator still
+    produces nothing, which is a session problem rather than a location one —
+    typically a second `MapboxNavigationView` mounted over the first, stopping
+    its billing session ("billing session is not running" in the Mapbox log).
+
+  Android reads this from the raw-location stream feeding the navigator; iOS
+  from the last known `CLLocation`. The timeout is deliberately long enough that
+  a cold GPS fix on a real device does not trip it.
+
+  The same code is also reported, once, when no `startOrigin` is given and the
+  pre-route wait for a device fix has seen none after 20s. That wait used to be
+  silent on both platforms; it still carries on.
+
+The rest of this release upstreams a downstream app's production patch against
+3.1.0, with the parts that encoded one app's choices made opt-in or generic.
+
+- **`waypointAdvance: 'automatic' | 'manual'`.** `manual` holds a multi-stop
+  route's leg after arrival until `advanceToNextWaypoint()`, so a stop completed
+  by an app event cannot race the SDK's own advance. Default `automatic`
+  (unchanged behaviour).
+- **`Waypoint.approach: 'curb' | 'unrestricted'`** — arrive with the stop on the
+  driving side of the road.
+- **`NavigationError.recoverable` and a typed `NavigationErrorCode`.** `true`
+  when navigation carries on or the package retries by itself (`NO_LOCATION_FIX`,
+  `REROUTE_FAILED`, an ignored routing option, …), `false` when nothing happens
+  until the app acts. Treat `false` as fatal and `true` as a notice; an app that
+  treated every unknown code as fatal no longer has to guess. Every code is
+  listed on `NavigationErrorCode`.
+- **`cameraPadding: EdgeInsets`** — frame the following/overview camera inside
+  the part of the map the host's own UI leaves uncovered.
+- **`keepAliveWhenDetached`** — keep the navigator, route and trip session
+  running while a screen is pushed over the view, so coming back only redraws.
+  The session still ends on unmount, on `enabled={false}`, and after 10 minutes
+  detached.
+- **`navigationLines`** — display-only polylines on the navigation map.
+- **`showsWaypoints`** — hide the SDK's start/stop/destination circles.
+- **`ornamentBottomMargin`** — lift the Mapbox logo and attribution above a host
+  panel, whichever banners are shown.
+- **`NavigationMarker.image` / `imageScale`** — draw a picture instead of the
+  bubble, from `require()`, a URL or a `data:` URI. Loaded off the main thread
+  and cached by URI in a bounded cache.
+- **`onJourneyDataChange` only crosses the bridge when something listens** — a
+  handler on the view or an `addJourneyDataChangeListener` subscription.
+- **Richer events.** `onBannerInstruction` gains `maneuverType`,
+  `maneuverModifier`, `maneuverDegrees`, `drivingSide`, `exitNumber`, `lanes`
+  and `nextManeuver` — typed as `ManeuverType` / `ManeuverModifier` — enough to
+  draw a complete custom banner. `onLocationChange`
+  gains `timestamp`, `speedLimit` (`{ value, unit: 'km/h' | 'mph' }`, the
+  posted sign), `roadName` and `matched`. `onRouteProgressChange`
+  gains `legDistanceRemaining` / `legDurationRemaining`. `onRouteChange` gains
+  `routeId` and fires only for a new route geometry. `onOffRoute` gains
+  `rerouteFailed` and `reason` (`deviation`, or `destinationChange` when a new
+  `destination` could not be routed yet and the old route still guides), and
+  both platforms now send `offRoute: false` when a new route is in place.
+
+- **`NavigationMarker.animatesMovement`** — glide a marker to its new position
+  instead of jumping. Off by default.
+
+### Changed
+
+- **Mapbox SDKs: Navigation 3.35.2, Maps 11.35.2, Turf 4.1.0**, pinned
+  **exactly** on both platforms. iOS used to ask Swift Package Manager for
+  "up to next major", so a fresh install could already resolve a newer
+  Navigation SDK on iOS than Android's, and an existing Xcode project kept its
+  first requirement forever. The upgrade brings, among others: the iOS
+  predictive cache now actually downloading map tiles, an Android navigator
+  thread leak on every re-setup fixed, iOS route-decoding crashes fixed, the
+  Android camera framing a fresh map correctly, view annotations no longer
+  crashing with several maps on screen, and fewer flickering lines at
+  navigation pitch. **iOS builds now need Xcode 26.5 or newer.** Maps iOS
+  11.35 reports crash data through MetricKit and declares
+  `NSPrivacyCollectedDataTypeCrashData`, which shows up in your app's App Store
+  privacy report.
+- **Changing `destination` or `waypoints` mid-trip re-routes in place** from the
+  car's current matched position, keeping the session, instead of being ignored
+  (iOS) or restarting guidance (Android). Changes under 15 m are ignored, legs
+  already completed are dropped, and props set in the same render share one
+  request. A failed re-route keeps the running route, reports `REROUTE_FAILED`
+  once plus `onOffRoute({ offRoute: true, rerouteFailed: true, reason:
+  'destinationChange' })`, and retries
+  with backoff — unless the router says no route exists, which only a new target
+  retries.
+- **The first route waits briefly for a good origin.** A cached fix is used only
+  if it is under 15 s old and 50 m accurate; otherwise the best fix within 4 s
+  is taken, with the heading when moving, so routes no longer start behind the
+  car or on a parallel road.
+- **`onBannerInstruction` is change-driven:** it fires when the instruction
+  changes or the distance moves by 10 m, not on every progress tick.
+- **`onLocationChange` follows the map matcher** (including after arrival)
+  instead of route progress, falling back to the raw fix when the two disagree
+  by more than max(30 m, 2× accuracy).
+- **Predictive caching uses the same radii on both platforms** (navigation
+  tiles 3 km around the car and destination, 1 km along the route; map tiles
+  2 km / 500 m). They differed per platform.
+- **Mapbox's native end-of-route rating card is never shown.**
+  `showsEndOfRouteFeedback` has only ever been documented as the package's
+  React modal; iOS defaulted the native card on.
+
+### Fixed
+
+- **Android: with `keepAliveWhenDetached`, the map came back black** after a
+  screen was pushed over it and popped. The session kept running, but the
+  `MapView` had bound to the covered screen fragment's lifecycle and was
+  destroyed with it. It now follows the activity, so it only stops and restarts.
+- **Clearing a prop left the old value in place**, and on Android threw
+  "Cannot set prop". Going from a value to `undefined` — `mute={x || undefined}`,
+  or turning the overlay bottom sheet off, which hands back the caller's own
+  `showsTripProgress`/`showsManeuverView`/`showsActionButtons`/`showCancelButton`
+  — now resets the prop to its default on both platforms.
+- **iOS: `showsTripProgress={false}` and `showsManeuverView={false}` were
+  ignored** whenever the other banner stayed up: the time, distance and arrival
+  labels stayed beside the cancel button, and the maneuver banner could not be
+  hidden. Both banners were looked up by names Navigation SDK v3 no longer uses.
+- **`onRouteChange` fired again for the same route** when a kept-alive view
+  came back, contradicting "only a new route geometry emits an event".
+- **Android: `navigationMarkers` without an `image` were never drawn.** Maps
+  SDK 11.35 rejects a view annotation whose view has no layout params, and the
+  built-in pin and dot views were created without any, so every such marker
+  failed with only a log warning.
+- **iOS: opening a navigation screen made up to three billed Directions
+  requests** and fired `onRouteChange` up to three times. A navigation stack's
+  push animation takes the view out of the window for a moment while the
+  first route is being embedded, and every detach tore the session down at once,
+  so the route was requested again and then re-routed in place. A detach now
+  waits half a second before tearing down, and a view that returns in time keeps
+  its route; leaving for good still ends the session, and unmounting or
+  `enabled={false}` still ends it immediately.
+- **iOS: toggling `shouldSimulateRoute` crashed** with "MapboxNavigationProvider
+  was instantiated twice".
+- **iOS: the JS banner showed the maneuver already driven**, paired with the
+  distance to the next one.
+- **Android: the banner's `stepDistanceRemaining` never changed** — it sent the
+  step's constant trigger distance. Journey data had the same bug.
+- **iOS: panning the map snapped straight back** to following.
+- **iOS: `cameraMode="overview"` on a running session did nothing.**
+- **iOS: mute and voice volume were lost from the second session on**, and
+  `mute`, `voiceVolume` and `language` were ignored mid-session.
+- **iOS: map style props were ignored after mount.** Swapping the style no
+  longer jumps the camera to the style's default position.
+- **iOS: a route that finished for an earlier start released the live session**,
+  letting a second view start one and stop the first's billing session.
+- **iOS: arriving tore the map down**, leaving it black, and the SDK's
+  self-dismiss on arrival could close the modal hosting the React Native screen.
+- **iOS: the way-name pill reappeared** with `showsWayNameLabel={false}`, and
+  the native Resume button overlapped host controls.
+- **iOS: the 3D puck model was re-cached on every launch** (the cache key used a
+  per-launch hash seed).
+- **iOS: guidance location** now uses navigation accuracy, an activity type
+  matching the route profile, and no automatic pauses.
+- **Android: "This instance of MapboxNavigation is destroyed"** when a second
+  view mounted, and views stuck on "Waiting for your location…" after the
+  navigator was replaced or a stop/start cycle.
+- **Android: every session leaked its MapView** (renderer, style and tile
+  cache).
+- **Android: the screen slept during guidance.**
+- **Android: the documented `require()`'d 3D puck model never drew.**
+- **Android: route language and spoken units ignored `language` and
+  `distanceUnit`**, and walking/cycling requests carried driving-only options.
+- **Android: voice mute, volume and language set before the first route were
+  lost**, and the voice player was driven off the main thread.
+- **Android: `showsContinuousAlternatives` is honoured** at runtime.
+- **Android: the route line was drawn over the car.** The route goes into the
+  Standard style's `middle` slot, which every other style lacks — including
+  this package's Android default, `navigation-day-v1` — and the SDK then puts
+  it at the top of the layer stack, above the location puck added earlier.
+  With a 3D car model the road visibly ran across the vehicle. The puck is now
+  kept above the route line, its maneuver arrows and `navigationLines` after
+  every route, style load and line update. iOS already ordered these itself.
+- **The config plugin required `@expo/config-plugins` without declaring it.**
+  It only resolved where the package manager happened to hoist it; it now goes
+  through `expo/config-plugins` (`expo` is a peer dependency).
+- **Both: markers vanished inside the camera padding or next to the puck.**
+- **Both: `onWaypointArrive.index` drifted after a re-route** dropped completed
+  stops — it counted legs of the new route. It is now the stop's index in your
+  `waypoints` array.
+- **iOS: turning `showsManeuverView` / `showsTripProgress` back on after
+  mounting with both off showed nothing.** Guidance is rebuilt with the stock
+  banners.
+- **iOS: `showsContinuousAlternatives` only took effect for the first session**,
+  and turning it off also switched off alternative detection. It now only
+  decides whether a faster route is switched to automatically, at any time;
+  Android restores the SDK default when a session ends.
+- **Keep-alive:** returning to a kept-alive view on Android no longer fails with
+  `NAVIGATION_SESSION_CONFLICT` while the covering screen releases the session,
+  and the 10-minute detached limit now fires `onCancelNavigation` on both
+  platforms instead of ending the session silently.
+- **`navigationLines` are updated in place** instead of removed and re-added on
+  every change, and drawn below the puck.
+- **iOS: `distanceUnit` reaches the route request**, so banners and voice use
+  it with Navigation SDK 3.35, which reads the unit from the request and
+  otherwise falls back to the device locale (an en_US simulator showed miles
+  under `distanceUnit="metric"`).
+- **`onCameraFollowingStateChange` reports the initial state** when guidance
+  starts, on both platforms; it used to fire only on a change, so an app never
+  learned the camera was following until the user panned.
+- **Android: a view that does not own the session no longer overrides the
+  running session's mute, volume or voice language.**
+
+### Development
+
+These change nothing a consumer installs; they change how the package is built
+and checked.
+
+- **pnpm** replaces npm (`packageManager` pins the version) for the package and
+  the example app. The example links the package with `link:..`, so library
+  edits reach it without a reinstall.
+- **oxlint and oxfmt replace Biome and the broken ESLint setup.** Type-aware,
+  with `correctness`, `suspicious` and `pedantic` as errors; pre-existing
+  problems are counted in `lint-baseline.json`, which can only shrink.
+- **knip** fails on unused code and undeclared dependencies.
+- **No comments in source**, and **500 lines per file** with exact allowances
+  that only shrink, enforced for TypeScript by a local oxlint plugin
+  (`lint-rules/`) and for Swift, Kotlin, Gradle, Ruby and shell by
+  `scripts/check-source.mjs`. Rationale lives in commit messages.
+- **commitlint** enforces Conventional Commits.
+- **`pnpm check`** runs everything; the git hooks and the new `check` workflow
+  run it too. See `CONVENTIONS.md`.
+- **Docs: `startOrigin` was documented as required on iOS.** It has not been
+  since 2.1.0, which added the iOS device-location fallback; *Platform
+  Behavior* still told you otherwise.
+
 ## 3.1.0
 
 Two unrelated things, both about not making consumers work around this package.

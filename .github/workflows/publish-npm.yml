@@ -2,6 +2,14 @@ name: publish-npm
 
 on:
   workflow_dispatch:
+    inputs:
+      dist-tag:
+        description: npm dist-tag. Use next for a prerelease such as 4.0.0-rc.1.
+        type: choice
+        options:
+          - latest
+          - next
+        default: latest
 
 jobs:
   publish:
@@ -13,19 +21,37 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          registry-url: "https://registry.npmjs.org"
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Match the dist-tag to the version
+        env:
+          DIST_TAG: ${{ inputs.dist-tag }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          case "$version" in
+            *-*) [ "$DIST_TAG" = next ] || { echo "::error::$version is a prerelease; publish it with dist-tag next."; exit 1; } ;;
+            *)   [ "$DIST_TAG" = latest ] || { echo "::error::$version is a release; publish it with dist-tag latest."; exit 1; } ;;
+          esac
+          echo "publishing $version as $DIST_TAG"
 
       - name: Package dry run
-        run: npm pack --dry-run
+        run: pnpm pack --dry-run
 
+      # --no-git-checks: pnpm otherwise refuses to publish from a detached
+      # checkout or any branch other than main.
       - name: Publish to npm
-        run: npm publish --provenance --access public
+        run: pnpm publish --provenance --access public --no-git-checks --tag "$DIST_TAG"
         env:
+          DIST_TAG: ${{ inputs.dist-tag }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

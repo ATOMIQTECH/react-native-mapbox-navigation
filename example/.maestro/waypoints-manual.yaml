@@ -1,0 +1,39 @@
+appId: com.expomapboxnavigationexample
+name: With manual advance, the leg is held at a stop until advanceToNextWaypoint
+tags:
+  - navigation
+  - waypoints
+---
+- runFlow: subflows/open-journey.yaml
+- tapOn:
+    id: journey-manual
+- assertVisible:
+    id: journey-advance
+    text: 'Advance: manual.*'
+- runFlow: subflows/drive-to-stop-a.yaml
+- extendedWaitUntil:
+    visible:
+      id: journey-stops
+      text: 'Stops: 0'
+    timeout: 30000
+- waitForAnimationToEnd:
+    timeout: 8000
+- assertVisible:
+    id: journey-leg
+    text: 'Leg: 0 .*'
+- tapOn:
+    id: journey-advance-now
+- extendedWaitUntil:
+    visible:
+      id: journey-advance
+      text: '.*last call: advanced'
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: journey-leg
+      text: 'Leg: 1 .*'
+    timeout: 15000
+- assertNotVisible:
+    id: journey-error
+    text: '.*\(fatal\).*'
+- takeScreenshot: .maestro-artifacts/waypoints-manual

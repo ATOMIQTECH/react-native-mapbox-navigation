@@ -1,22 +1,17 @@
 {
   "name": "expo-mapbox-navigation",
   "version": "1.0.0",
+  "private": true,
   "main": "index.ts",
   "scripts": {
-    "clean": "rm -rf .expo ios",
-    "start": "expo start",
     "android": "expo run:android",
+    "clean": "rm -rf .expo ios",
     "ios": "expo run:ios",
+    "start": "expo start",
     "web": "expo start --web"
   },
-  "private": true,
-  "expo": {
-    "autolinking": {
-      "nativeModulesDir": ".."
-    }
-  },
   "dependencies": {
-    "@atomiqlab/react-native-mapbox-navigation": "file:..",
+    "@atomiqlab/react-native-mapbox-navigation": "link:..",
     "@react-navigation/native": "^7.1.33",
     "@react-navigation/native-stack": "^7.14.4",
     "@rnmapbox/maps": "10.3.5",
@@ -27,5 +22,11 @@
     "react-native": "0.86.3",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.0"
+  },
+  "packageManager": "pnpm@12.21.0",
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": ".."
+    }
   }
 }

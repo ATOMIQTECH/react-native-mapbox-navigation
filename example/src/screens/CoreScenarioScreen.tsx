@@ -36,6 +36,8 @@ export default function CoreScenarioScreen() {
   const [lastRoutePoints, setLastRoutePoints] = useState(0)
   const [lastError, setLastError] = useState<string | null>(locationError)
   const [arrivalName, setArrivalName] = useState<string | null>(null)
+  const [lastWaypointIndex, setLastWaypointIndex] = useState<number | null>(null)
+  const [lastOffRoute, setLastOffRoute] = useState<string>('none')
 
   useEffect(() => {
     if (location) {
@@ -59,11 +61,11 @@ export default function CoreScenarioScreen() {
         destination={PRIMARY_DESTINATION}
         waypoints={TEST_WAYPOINTS}
         shouldSimulateRoute
-        showsTripProgress
-        showsManeuverView
-        showsActionButtons
-        showsSpeedLimits
-        showsWayNameLabel
+        showsTripProgress={false}
+        showsManeuverView={false}
+        showsActionButtons={false}
+        showsSpeedLimits={false}
+        showsWayNameLabel={false}
         routeAlternatives
         onLocationChange={(payload) => {
           setLastLocation(payload)
@@ -87,7 +89,15 @@ export default function CoreScenarioScreen() {
           setLastError(null)
         }}
         onError={(error) => {
-          setLastError(`${error.code}: ${error.message}`)
+          setLastError(
+            `${error.code} (${error.recoverable ? 'recoverable' : 'fatal'}): ${error.message}`
+          )
+        }}
+        onWaypointArrive={(payload) => {
+          setLastWaypointIndex(payload.index ?? null)
+        }}
+        onOffRoute={(event) => {
+          setLastOffRoute(`${event.offRoute === true ? 'off' : 'on'}/${event.reason ?? '-'}`)
         }}
         onArrive={(payload) => {
           setArrivalName(payload.name ?? 'Destination')
@@ -100,14 +110,14 @@ export default function CoreScenarioScreen() {
       <View pointerEvents='box-none' style={styles.overlayRoot}>
         <View style={styles.panel}>
           <Text style={styles.panelTitle}>Core Scenario</Text>
-          <Text style={styles.panelText}>
+          <Text style={styles.panelText} testID='core-route'>
             Route pts: {lastRoutePoints} | Camera:{' '}
             {lastCameraState?.isCameraFollowing ? 'Following' : 'Overview'}
           </Text>
-          <Text style={styles.panelText}>
+          <Text style={styles.panelText} testID='core-banner'>
             Banner: {lastBanner?.primaryText ?? 'Waiting for banner...'}
           </Text>
-          <Text style={styles.panelText}>
+          <Text style={styles.panelText} testID='core-progress'>
             Progress:{' '}
             {lastProgress
               ? `${Math.round(lastProgress.distanceRemaining)}m • ${Math.round(
@@ -115,17 +125,24 @@ export default function CoreScenarioScreen() {
                 )}s`
               : 'Waiting...'}
           </Text>
-          <Text style={styles.panelText}>
+          <Text style={styles.panelText} testID='core-location'>
             Last lat/lng:{' '}
             {lastLocation
               ? `${lastLocation.latitude.toFixed(5)}, ${lastLocation.longitude.toFixed(5)}`
               : 'N/A'}
           </Text>
-          <Text style={styles.panelText}>
+          <Text style={styles.panelText} testID='core-journey'>
             Journey completion: {lastJourney?.completionPercent ?? 0}% | Arrived:{' '}
             {arrivalName ?? 'No'}
           </Text>
-          {lastError ? <Text style={styles.errorText}>{lastError}</Text> : null}
+          <Text style={styles.panelText} testID='core-stops'>
+            Stop reached: {lastWaypointIndex ?? 'none'} | Off route: {lastOffRoute}
+          </Text>
+          {lastError ? (
+            <Text style={styles.errorText} testID='core-error'>
+              {lastError}
+            </Text>
+          ) : null}
           <View style={styles.row}>
             <Pressable
               onPress={() => {

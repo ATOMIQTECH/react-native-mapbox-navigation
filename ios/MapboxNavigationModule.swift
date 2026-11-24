@@ -1,12 +1,8 @@
 import ExpoModulesCore
 import Foundation
-// v3 module layout: `MapboxCoreNavigation` and `MapboxNavigation` are gone,
-// replaced by `MapboxNavigationCore` (navigator, routing) and
-// `MapboxNavigationUIKit` (NavigationViewController and friends).
 import MapboxNavigationCore
 
 public class MapboxNavigationModule: Module {
-  /// Events forwarded to JS module listeners via `add*Listener`.
   static let moduleEventNames = [
     "onLocationChange",
     "onRouteProgressChange",
@@ -32,9 +28,6 @@ public class MapboxNavigationModule: Module {
 
     Events(MapboxNavigationModule.moduleEventNames)
 
-    // Relay view events to module listeners so the exported `add*Listener`
-    // helpers actually receive data. iOS previously sent no module events at
-    // all, leaving every helper silently dead.
     OnCreate {
       MapboxNavigationEventBridge.shared.setEmitter { [weak self] eventName, payload in
         self?.sendEvent(eventName, payload)
@@ -45,9 +38,6 @@ public class MapboxNavigationModule: Module {
       MapboxNavigationEventBridge.shared.clearEmitter()
     }
 
-    // Track subscriptions per event so the bridge can skip emitting entirely
-    // when nothing is listening. Listed explicitly rather than looped:
-    // ModuleDefinitionBuilder is a result builder and rejects control flow.
     OnStartObserving("onLocationChange") {
       MapboxNavigationEventBridge.shared.startObserving("onLocationChange")
     }
@@ -121,16 +111,6 @@ public class MapboxNavigationModule: Module {
       MapboxNavigationEventBridge.shared.stopObserving("onBottomSheetActionPress")
     }
 
-    // v2 wrote these straight onto the global `NavigationSettings.shared`,
-    // which the SDK observed. v3 removed that class outright, so the settings
-    // now go through `MapboxNavigationSession`, which records them even when no
-    // provider exists yet and applies them to a live one. The JS-visible
-    // behaviour — set at any time, takes effect immediately — is unchanged.
-    //
-    // `MapboxNavigationSession` is main-actor isolated because v3's
-    // `SpeechSynthesizing` is; `assumeIsolated` documents that the main queue
-    // and the main actor are the same execution context here, and keeps the
-    // promise resolving on the same hop v2 used.
     AsyncFunction("setMuted") { (muted: Bool, promise: Promise) in
       self.mute = muted
       DispatchQueue.main.async {
@@ -169,10 +149,6 @@ public class MapboxNavigationModule: Module {
       if !trimmed.isEmpty {
         self.language = trimmed
       }
-      // Route requests still bake in the language, so a new language only
-      // changes future routes. Unlike v2, v3 does expose the synthesizer's
-      // locale, so the *spoken* language now updates on the running session
-      // too.
       DispatchQueue.main.async {
         if !trimmed.isEmpty {
           MainActor.assumeIsolated {
@@ -184,8 +160,6 @@ public class MapboxNavigationModule: Module {
     }
 
     AsyncFunction("getNavigationSettings") { (promise: Promise) in
-      // Reads main-actor state, so it hops to main like the setters do. Still
-      // an AsyncFunction on the JS side, so callers see no difference.
       DispatchQueue.main.async {
         let isFollowing = NavigationSessionRegistry.shared.isCurrentCameraFollowing()
         let (muted, volume, unit) = MainActor.assumeIsolated {
@@ -241,7 +215,7 @@ public class MapboxNavigationModule: Module {
         view.startOrigin = origin
       }
 
-      Prop("enabled") { (view: MapboxNavigationView, enabled: Bool) in
+      Prop("enabled", false) { (view: MapboxNavigationView, enabled: Bool) in
         view.enabled = enabled
       }
 
@@ -257,99 +231,108 @@ public class MapboxNavigationModule: Module {
         view.navigationMarkers = markers
       }
 
-      Prop("shouldSimulateRoute") { (view: MapboxNavigationView, simulate: Bool) in
+      Prop("navigationLines") { (view: MapboxNavigationView, lines: [[String: Any]]?) in
+        view.navigationLines = lines
+      }
+
+      Prop("shouldSimulateRoute", false) { (view: MapboxNavigationView, simulate: Bool) in
         view.shouldSimulateRoute = simulate
       }
 
-      Prop("showCancelButton") { (view: MapboxNavigationView, show: Bool) in
+      Prop("showCancelButton", true) { (view: MapboxNavigationView, show: Bool) in
         view.showCancelButton = show
       }
 
-      Prop("mute") { (view: MapboxNavigationView, mute: Bool) in
+      Prop("mute", false) { (view: MapboxNavigationView, mute: Bool) in
         view.mute = mute
       }
 
-      Prop("voiceVolume") { (view: MapboxNavigationView, volume: Double) in
+      Prop("voiceVolume", 1.0) { (view: MapboxNavigationView, volume: Double) in
         view.voiceVolume = volume
       }
 
-      Prop("cameraPitch") { (view: MapboxNavigationView, pitch: Double) in
+      Prop("cameraPitch") { (view: MapboxNavigationView, pitch: Double?) in
         view.cameraPitch = pitch
       }
 
-      Prop("cameraZoom") { (view: MapboxNavigationView, zoom: Double) in
+      Prop("cameraZoom") { (view: MapboxNavigationView, zoom: Double?) in
         view.cameraZoom = zoom
       }
 
-      Prop("cameraMode") { (view: MapboxNavigationView, mode: String) in
+      Prop("cameraMode", "following") { (view: MapboxNavigationView, mode: String) in
         view.cameraMode = mode
       }
 
-      Prop("mapStyleUri") { (view: MapboxNavigationView, mapStyleUri: String) in
+      Prop("mapStyleUri") { (view: MapboxNavigationView, mapStyleUri: String?) in
         view.mapStyleUri = mapStyleUri
       }
 
-      Prop("mapStyleUriDay") { (view: MapboxNavigationView, mapStyleUriDay: String) in
+      Prop("mapStyleUriDay") { (view: MapboxNavigationView, mapStyleUriDay: String?) in
         view.mapStyleUriDay = mapStyleUriDay
       }
 
-      Prop("mapStyleUriNight") { (view: MapboxNavigationView, mapStyleUriNight: String) in
+      Prop("mapStyleUriNight") { (view: MapboxNavigationView, mapStyleUriNight: String?) in
         view.mapStyleUriNight = mapStyleUriNight
       }
 
-      Prop("uiTheme") { (view: MapboxNavigationView, uiTheme: String) in
+      Prop("uiTheme", "system") { (view: MapboxNavigationView, uiTheme: String) in
         view.uiTheme = uiTheme
       }
 
-      Prop("routeAlternatives") { (view: MapboxNavigationView, routeAlternatives: Bool) in
+      Prop("routeAlternatives", false) { (view: MapboxNavigationView, routeAlternatives: Bool) in
         view.routeAlternatives = routeAlternatives
       }
 
-      Prop("showsSpeedLimits") { (view: MapboxNavigationView, showsSpeedLimits: Bool) in
+      Prop("showsSpeedLimits", true) { (view: MapboxNavigationView, showsSpeedLimits: Bool) in
         view.showsSpeedLimits = showsSpeedLimits
       }
 
-      Prop("showsWayNameLabel") { (view: MapboxNavigationView, showsWayNameLabel: Bool) in
+      Prop("showsWayNameLabel", true) { (view: MapboxNavigationView, showsWayNameLabel: Bool) in
         view.showsWayNameLabel = showsWayNameLabel
       }
 
-      Prop("showsTripProgress") { (view: MapboxNavigationView, showsTripProgress: Bool) in
+      Prop("showsWaypoints", true) { (view: MapboxNavigationView, showsWaypoints: Bool) in
+        view.showsWaypoints = showsWaypoints
+      }
+
+      Prop("waypointAdvance") { (view: MapboxNavigationView, waypointAdvance: String?) in
+        view.waypointAdvance = waypointAdvance ?? "automatic"
+      }
+
+      Prop("showsTripProgress", true) { (view: MapboxNavigationView, showsTripProgress: Bool) in
         view.showsTripProgress = showsTripProgress
       }
 
-      Prop("showsManeuverView") { (view: MapboxNavigationView, showsManeuverView: Bool) in
+      Prop("showsManeuverView", true) { (view: MapboxNavigationView, showsManeuverView: Bool) in
         view.showsManeuverView = showsManeuverView
       }
 
-      Prop("showsActionButtons") { (view: MapboxNavigationView, showsActionButtons: Bool) in
+      Prop("showsActionButtons", true) { (view: MapboxNavigationView, showsActionButtons: Bool) in
         view.showsActionButtons = showsActionButtons
       }
 
-      Prop("showsReportFeedback") { (view: MapboxNavigationView, showsReportFeedback: Bool) in
+      Prop("showsReportFeedback", true) { (view: MapboxNavigationView, showsReportFeedback: Bool) in
         view.showsReportFeedback = showsReportFeedback
       }
 
-      Prop("showsEndOfRouteFeedback") { (view: MapboxNavigationView, showsEndOfRouteFeedback: Bool) in
-        view.showsEndOfRouteFeedback = showsEndOfRouteFeedback
-      }
 
-      Prop("showsContinuousAlternatives") { (view: MapboxNavigationView, showsContinuousAlternatives: Bool) in
+      Prop("showsContinuousAlternatives", true) { (view: MapboxNavigationView, showsContinuousAlternatives: Bool) in
         view.showsContinuousAlternatives = showsContinuousAlternatives
       }
 
-      Prop("usesNightStyleWhileInTunnel") { (view: MapboxNavigationView, usesNightStyleWhileInTunnel: Bool) in
+      Prop("usesNightStyleWhileInTunnel", true) { (view: MapboxNavigationView, usesNightStyleWhileInTunnel: Bool) in
         view.usesNightStyleWhileInTunnel = usesNightStyleWhileInTunnel
       }
 
-      Prop("routeLineTracksTraversal") { (view: MapboxNavigationView, routeLineTracksTraversal: Bool) in
+      Prop("routeLineTracksTraversal", false) { (view: MapboxNavigationView, routeLineTracksTraversal: Bool) in
         view.routeLineTracksTraversal = routeLineTracksTraversal
       }
 
-      Prop("annotatesIntersectionsAlongRoute") { (view: MapboxNavigationView, annotatesIntersectionsAlongRoute: Bool) in
+      Prop("annotatesIntersectionsAlongRoute", false) { (view: MapboxNavigationView, annotatesIntersectionsAlongRoute: Bool) in
         view.annotatesIntersectionsAlongRoute = annotatesIntersectionsAlongRoute
       }
 
-      Prop("distanceUnit") { (view: MapboxNavigationView, unit: String) in
+      Prop("distanceUnit", "metric") { (view: MapboxNavigationView, unit: String) in
         view.distanceUnit = unit
       }
 
@@ -357,7 +340,7 @@ public class MapboxNavigationModule: Module {
         view.nativeFloatingButtons = value
       }
 
-      Prop("language") { (view: MapboxNavigationView, language: String) in
+      Prop("language", "") { (view: MapboxNavigationView, language: String) in
         view.language = language
       }
 
@@ -365,9 +348,6 @@ public class MapboxNavigationModule: Module {
         view.colors = value
       }
 
-      // Routing options. These change the request, not the rendering, so each
-      // setter clears the "already requested" latch and re-runs the start
-      // check — the same thing `routeAlternatives` does.
       Prop("routeProfile") { (view: MapboxNavigationView, value: String?) in
         view.routeProfile = value ?? "driving-traffic"
         view.restartRouteRequestIfNeeded()
@@ -391,8 +371,28 @@ public class MapboxNavigationModule: Module {
         view.locationPuck = value
       }
 
-      Prop("eventThrottleMs") { (view: MapboxNavigationView, value: Double) in
+      Prop("eventThrottleMs", 0.0) { (view: MapboxNavigationView, value: Double) in
         view.eventThrottleMs = value
+      }
+
+      Prop("cameraPadding") { (view: MapboxNavigationView, value: [String: Any]?) in
+        view.cameraPadding = value
+      }
+
+      Prop("ornamentBottomMargin") { (view: MapboxNavigationView, value: Double?) in
+        view.ornamentBottomMargin = value
+      }
+
+      Prop("journeyDataEnabled") { (view: MapboxNavigationView, value: Bool?) in
+        view.journeyDataEnabled = value ?? true
+      }
+
+      Prop("keepAliveWhenDetached") { (view: MapboxNavigationView, value: Bool?) in
+        view.keepAliveWhenDetached = value ?? false
+      }
+
+      OnViewDidUpdateProps { (view: MapboxNavigationView) in
+        view.didUpdateProps()
       }
     }
   }

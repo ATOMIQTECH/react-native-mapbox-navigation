@@ -1,6 +1,8 @@
 import type { ComponentType, ReactNode } from 'react'
 import type { StyleProp, ViewStyle } from 'react-native'
 
+import type { NavigationError } from './NavigationError.types'
+
 /** Geographic coordinate in WGS84 format. */
 export type Coordinate = {
   /** Latitude in range -90..90 */
@@ -13,6 +15,12 @@ export type Coordinate = {
 export type Waypoint = Coordinate & {
   /** Optional label for UI/debug output. */
   name?: string
+  /**
+   * `curb` makes the route arrive with the stop on the driving side of the road,
+   * so the driver never has to cross traffic to reach the stop.
+   * `unrestricted` (default) arrives from either side.
+   */
+  approach?: 'curb' | 'unrestricted'
 }
 
 export type NavigationMarkerVariant =
@@ -118,6 +126,38 @@ export type NavigationMarker = Coordinate & {
    * Positive values move the marker upward. Overrides the size-preset default.
    */
   anchorOffsetY?: number
+  /**
+   * A picture drawn instead of the bubble: `require('./pin.png')`, a remote or file URL, or a
+   * `data:image/png;base64,…` URI. Each picture is loaded once and cached by URI; the bubble shows
+   * until it has loaded. The view is anchored by its bottom, so use `anchorOffsetY` to put the
+   * picture's tip on the coordinate.
+   */
+  image?: NavigationAssetSource
+  /**
+   * Pixel density of `image` (3 for an @3x render). Defaults to the density `require()` reports,
+   * else the screen's.
+   */
+  imageScale?: number
+  /**
+   * Glide to a new position over the time since the last update instead of jumping, for a
+   * marker that follows something moving. Jumps of more than 500 m are never animated.
+   * Defaults to `false`.
+   */
+  animatesMovement?: boolean
+}
+
+/** A display-only line on the embedded navigation map. */
+export type NavigationLine = {
+  id: string
+  coordinates: Coordinate[]
+  /** Hex colour, `#RGB`, `#RRGGBB` or `#RRGGBBAA`. */
+  color?: string
+  /** Line width in points. Defaults to 4. */
+  width?: number
+  /** 0..1. Defaults to 1. */
+  opacity?: number
+  /** Dash pattern in line widths, e.g. `[0.1, 2]` for round dots. */
+  dash?: number[]
 }
 
 /** Bottom sheet visibility/customization controls. */
@@ -257,6 +297,14 @@ export type LocationUpdate = {
   speed?: number
   altitude?: number
   accuracy?: number
+  /** When the fix was taken, in milliseconds since the Unix epoch (not when it reached JS). */
+  timestamp?: number
+  /** Posted speed limit where the driver is, in the sign's own unit. Absent when the map has none. */
+  speedLimit?: { value: number; unit: 'km/h' | 'mph' }
+  /** `false` when this fix is the raw device position rather than the one snapped to the road. */
+  matched?: boolean
+  /** Name or reference of the road the driver is on, e.g. `KN 5 Rd`. */
+  roadName?: string
 }
 
 /** Route progress payload emitted by native layer. */
@@ -272,11 +320,25 @@ export type RouteProgress = {
    * that do not report it.
    */
   legIndex?: number
+  /** Metres left to the end of the current leg (the next stop on a multi-stop route). */
+  legDistanceRemaining?: number
+  /** Seconds left to the end of the current leg. */
+  legDurationRemaining?: number
 }
 
 /** Route geometry payload emitted when a new route is selected/used. */
 export type RouteChangeEvent = {
   coordinates: Coordinate[]
+  /** The navigator's id for the main route. Only a new route geometry emits an event. */
+  routeId?: string
+}
+
+/** Space, in points, at each edge of the map — for example what the host's own UI covers. */
+export type EdgeInsets = {
+  top?: number
+  bottom?: number
+  left?: number
+  right?: number
 }
 
 /** Structured journey data suitable for custom bottom banner UIs. */
@@ -316,8 +378,19 @@ export type ArrivalEvent = {
 
 /** Emitted when the user leaves or rejoins the active route. */
 export type OffRouteEvent = {
-  /** `true` when off-route (rerouting), `false` when back on the route. */
+  /**
+   * `true` when off-route (rerouting), `false` when a new route is in place or
+   * the driver is back on the route. Both platforms send the `false`.
+   */
   offRoute?: boolean
+  /** `true` when a reroute request failed (offline, no route); the old route stays. */
+  rerouteFailed?: boolean
+  /**
+   * What the event is about. `deviation`: the driver left the route and the SDK reroutes.
+   * `destinationChange`: `destination` or `waypoints` changed and the new route could not be
+   * calculated yet — the driver is still on the old route, which keeps guiding.
+   */
+  reason?: 'deviation' | 'destinationChange'
   /** iOS: the location the reroute was triggered from, when available. */
   latitude?: number
   longitude?: number
@@ -334,19 +407,76 @@ export type DestinationChangedEvent = {
   longitude: number
 }
 
-/** Error payload emitted by native layer. */
-export type NavigationError = {
-  /** Machine-readable error code. */
-  code: string
-  /** Developer-readable error details. */
-  message: string
-}
-
 /** Banner instruction payload emitted during guidance. */
 export type BannerInstruction = {
   primaryText: string
   secondaryText?: string
   stepDistanceRemaining?: number
+  /** Mapbox maneuver type of the upcoming maneuver, e.g. `turn`, `roundabout`, `arrive`. */
+  maneuverType?: ManeuverType
+  /** Mapbox maneuver modifier, e.g. `left`, `slight right`, `uturn`. */
+  maneuverModifier?: ManeuverModifier
+  /** Roundabout exit angle, degrees. */
+  maneuverDegrees?: number
+  /** Which side of the road traffic drives on at the maneuver. */
+  drivingSide?: 'left' | 'right'
+  /** Roundabout or rotary exit to take, counted from the entry (1 = first exit). */
+  exitNumber?: number
+  /** Lanes at the upcoming maneuver, left to right, when the route has lane data. */
+  lanes?: LaneIndication[]
+  /** The maneuver after the upcoming one, and how far apart the two are. */
+  nextManeuver?: NextManeuver
+}
+
+/** Maneuver types from the Mapbox Directions API. */
+export type ManeuverType =
+  | 'depart'
+  | 'arrive'
+  | 'turn'
+  | 'continue'
+  | 'new name'
+  | 'merge'
+  | 'on ramp'
+  | 'off ramp'
+  | 'fork'
+  | 'end of road'
+  | 'roundabout'
+  | 'rotary'
+  | 'roundabout turn'
+  | 'exit roundabout'
+  | 'exit rotary'
+  | 'notification'
+
+/** Maneuver modifiers and lane indications from the Mapbox Directions API. */
+export type ManeuverModifier =
+  | 'uturn'
+  | 'sharp right'
+  | 'right'
+  | 'slight right'
+  | 'straight'
+  | 'slight left'
+  | 'left'
+  | 'sharp left'
+  | 'none'
+
+/** One lane at a maneuver. */
+export type LaneIndication = {
+  /** Mapbox lane indications, e.g. `left`, `straight`, `slight right`, `uturn`. */
+  indications: ManeuverModifier[]
+  /** Whether this lane leads onto the route. */
+  active: boolean
+  /** The indication this lane should be used for, when it is active. */
+  activeDirection?: ManeuverModifier
+}
+
+/** The maneuver that follows the upcoming one. */
+export type NextManeuver = {
+  primaryText: string
+  maneuverType?: ManeuverType
+  maneuverModifier?: ManeuverModifier
+  maneuverDegrees?: number
+  /** Metres between the upcoming maneuver and this one. */
+  distance: number
 }
 
 /** Overlay bottom-sheet action event payload. */
@@ -620,8 +750,6 @@ export interface MapStyleConfig {
  * ```
  */
 export interface MapboxNavigationColors {
-  // --- Route line ----------------------------------------------------------
-
   /**
    * The main route line.
    *
@@ -657,8 +785,6 @@ export interface MapboxNavigationColors {
   /** Restricted sections, such as private or permit-only roads. */
   restrictedRoad?: string
 
-  // --- Turn arrow drawn on the map -----------------------------------------
-
   /**
    * The arrow drawn on the map over the upcoming turn.
    *
@@ -668,8 +794,6 @@ export interface MapboxNavigationColors {
   maneuverArrow?: string
   /** The outline drawn around {@link maneuverArrow}. */
   maneuverArrowStroke?: string
-
-  // --- Maneuver banner -----------------------------------------------------
 
   /**
    * The background of the maneuver banner at the top of the screen.
@@ -711,13 +835,6 @@ export interface MapboxNavigationColors {
    */
   maneuverTurnIcon?: string
 
-  // --- Trip progress bar (iOS only) ----------------------------------------
-  //
-  // Android ships no trip progress bar: v3's `MapboxTripProgressView` only
-  // lays out correctly inside Drop-In's info panel, which v3 removed. Use this
-  // package's `bottomSheet` overlay there — it is JS, so it takes your own
-  // styles directly. These three keys are ignored on Android.
-
   /**
    * **iOS only.** The background of the trip progress bar along the bottom of
    * the screen — the one showing time remaining, distance and arrival time.
@@ -740,8 +857,6 @@ export interface MapboxNavigationColors {
   /** **iOS only.** The cancel button in the trip progress bar. */
   tripProgressIcon?: string
 
-  // --- Floating map buttons ------------------------------------------------
-
   /**
    * The background of the round buttons floating over the map — the voice
    * toggle, and on iOS also the camera, overview and feedback buttons.
@@ -763,6 +878,11 @@ export interface MapboxNavigationViewProps {
   destination: Waypoint
   /** Display-only markers rendered directly on the native navigation map. */
   navigationMarkers?: NavigationMarker[]
+  /**
+   * Display-only lines drawn on the embedded navigation map, for example the
+   * path someone walked. Each line keeps its `id` across updates.
+   */
+  navigationLines?: NavigationLine[]
   /**
    * Replace the standard navigation pointer (location puck) with a 3D model,
    * custom 2D images, a recolored default puck, or nothing at all.
@@ -827,6 +947,11 @@ export interface MapboxNavigationViewProps {
    * that only displays progress. Clamped to `0`–`10000`.
    */
   eventThrottleMs?: number
+  /**
+   * Frames the following and overview camera inside the part of the map that the host's own
+   * banner and panel don't cover, so the puck and the road ahead aren't hidden under them.
+   */
+  cameraPadding?: EdgeInsets
   waypoints?: Waypoint[]
   shouldSimulateRoute?: boolean
   showCancelButton?: boolean
@@ -856,6 +981,24 @@ export interface MapboxNavigationViewProps {
   routeAlternatives?: boolean
   showsSpeedLimits?: boolean
   showsWayNameLabel?: boolean
+  /**
+   * Draw the SDK's start, stop and destination circles on the route. Turn it off when the app
+   * marks the place the driver is going itself, so the map shows one point there, not two.
+   * Defaults to `true`.
+   */
+  showsWaypoints?: boolean
+  /**
+   * Who moves a multi-stop route on to its next leg.
+   *
+   * - `automatic` (default): the SDK advances when the driver arrives at a stop.
+   * - `manual`: the leg is held after arrival until you call
+   *   `advanceToNextWaypoint()` — for stops completed by an app event (a parcel
+   *   handed over) rather than by reaching the coordinate. With the SDK
+   *   advancing as well, the two race and a stop can be skipped.
+   *
+   * `onWaypointArrive` fires in both modes.
+   */
+  waypointAdvance?: 'automatic' | 'manual'
   showsTripProgress?: boolean
   showsManeuverView?: boolean
   showsActionButtons?: boolean
@@ -875,6 +1018,18 @@ export interface MapboxNavigationViewProps {
    * controls alternative-route display itself.
    */
   showsContinuousAlternatives?: boolean
+  /**
+   * Keep the navigator, its route and its trip session running while the view is
+   * detached from the window (a screen pushed over it), so coming back only
+   * redraws. The session still ends on unmount, on `enabled={false}` and after
+   * 10 minutes detached; that last one fires `onCancelNavigation`.
+   */
+  keepAliveWhenDetached?: boolean
+  /**
+   * Points to lift the Mapbox logo and attribution button off the bottom edge,
+   * for a host panel that overlaps the bottom of the map.
+   */
+  ornamentBottomMargin?: number
   /** Switch to the night style inside tunnels. iOS only. */
   usesNightStyleWhileInTunnel?: boolean
   /** Fade the traversed portion of the route line. iOS only. */
@@ -953,10 +1108,6 @@ export interface MapboxNavigationViewProps {
   }) => void
 }
 
-// ---------------------------------------------------------------------------
-// Custom location puck (navigation pointer)
-// ---------------------------------------------------------------------------
-
 /**
  * A source for a puck image or 3D model asset.
  *
@@ -975,7 +1126,10 @@ export interface MapboxNavigationViewProps {
  * modelUri: { uri: 'asset://car.glb' }
  * ```
  */
-export type LocationPuckAssetSource = string | number | { uri: string }
+export type NavigationAssetSource = string | number | { uri: string }
+
+/** The asset source a location puck accepts. Same shape as `NavigationAssetSource`. */
+export type LocationPuckAssetSource = NavigationAssetSource
 
 /**
  * Replace the pointer with a glTF/GLB 3D model.
@@ -1121,3 +1275,5 @@ export type LocationPuckStates = {
  * ```
  */
 export type LocationPuckConfig = LocationPuckAppearance | LocationPuckStates
+
+export type { NavigationError, NavigationErrorCode } from './NavigationError.types'

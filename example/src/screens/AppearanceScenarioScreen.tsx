@@ -16,8 +16,6 @@ type ColorMode = (typeof COLOR_MODES)[number]
 const nextColorMode = (mode: ColorMode): ColorMode =>
   COLOR_MODES[(COLOR_MODES.indexOf(mode) + 1) % COLOR_MODES.length]
 
-// `hex6` and `hex8` MUST look the same; `hex3` is the same green coarsened to
-// one nibble per channel; `alpha` is the only mode with real transparency.
 const COLOR_PALETTES: Record<Exclude<ColorMode, 'mapbox'>, Record<string, string>> = {
   hex6: {
     routeLine: '#1E9E5A',
@@ -62,49 +60,23 @@ const COLOR_PALETTES: Record<Exclude<ColorMode, 'mapbox'>, Record<string, string
 }
 
 export default function AppearanceScenarioScreen() {
-  const {
-    hasLocationPermission,
-    permissionStatus,
-    resolvedStartOrigin,
-    requestLocationAccess,
-  } = useNavigationLocation(true)
+  const { hasLocationPermission, permissionStatus, resolvedStartOrigin, requestLocationAccess } =
+    useNavigationLocation(true)
   const [destinationMode, setDestinationMode] = useState<'primary' | 'alternate'>('primary')
   const [theme, setTheme] = useState<ThemeOption>('system')
   const [stylePreset, setStylePreset] = useState<StylePreset>('navigation')
   const [showsTripProgress, setShowsTripProgress] = useState(true)
-  // The cancel button lives inside the iOS trip progress bar, so the bar only
-  // disappears when both of these are off. Exposed as a chip so that path is
-  // actually testable.
   const [showCancelButton, setShowCancelButton] = useState(true)
   const [showsManeuverView, setShowsManeuverView] = useState(true)
   const [showsActionButtons, setShowsActionButtons] = useState(true)
   const [showsSpeedLimits, setShowsSpeedLimits] = useState(true)
   const [showsWayNameLabel, setShowsWayNameLabel] = useState(true)
-  // Demonstrates the `colors` prop: a green theme instead of Mapbox blue,
-  // covering the route line, the on-map turn arrow, the maneuver banner and the
-  // floating buttons — so this toggle exercises every group the prop reaches.
-  //
-  // It cycles the *hex format* rather than just on/off, because that is the
-  // only way to see that the formats agree. `hex6` and `hex8` are the same
-  // palette written two ways with the alpha byte at `FF`, so they have to
-  // render identically — if eight digits were read as `#AARRGGBB` the `1E` in
-  // `#1E9E5AFF` would become a 12% alpha over a lilac, which is unmistakable.
-  // `hex3` is the same green to one nibble, and `alpha` is the one mode that
-  // asks for real translucency.
   const [colorMode, setColorMode] = useState<ColorMode>('mapbox')
   const [routeAlternatives, setRouteAlternatives] = useState(true)
-  // Collapses this panel to a single chip. The panel otherwise covers the
-  // native maneuver banner, which is the thing several of the `colors` keys
-  // theme — so without this there is no way to actually look at them.
   const [panelOpen, setPanelOpen] = useState(true)
   const [showsContinuousAlternatives, setShowsContinuousAlternatives] = useState(true)
 
   const destination = destinationMode === 'primary' ? PRIMARY_DESTINATION : ALT_DESTINATION
-  // `standard` and `standard-satellite` are Mapbox's v3 Standard styles: 3D
-  // buildings, landmarks and lighting. Included here to prove the wrapper works
-  // with them — both platforms put the route line and turn arrow in the
-  // `middle` slot, so they draw above the basemap but below labels and 3D
-  // extrusions rather than fighting them.
   const STYLE_URIS: Record<StylePreset, { day: string; night: string }> = {
     navigation: {
       day: 'mapbox://styles/mapbox/navigation-day-v1',
@@ -160,105 +132,115 @@ export default function AppearanceScenarioScreen() {
       />
 
       <View pointerEvents='box-none' style={styles.overlayRoot}>
-        {!panelOpen ? (
-          <View style={styles.collapsedRow}>
-            <ChipButton label='Panel: show' onPress={() => setPanelOpen(true)} />
-          </View>
+        {panelOpen ? (
+          <ScrollView contentContainerStyle={styles.panel}>
+            <Text style={styles.panelTitle}>Appearance + Route Scenario</Text>
+            <View style={styles.row}>
+              <ChipButton
+                label='Panel: hide'
+                onPress={() => {
+                  setPanelOpen(false)
+                }}
+              />
+            </View>
+            <View style={styles.row}>
+              <ChipButton
+                label={`Destination: ${destinationMode}`}
+                onPress={() => {
+                  setDestinationMode((value) => (value === 'primary' ? 'alternate' : 'primary'))
+                }}
+              />
+              <ChipButton
+                label={`Theme: ${theme}`}
+                onPress={() => {
+                  const order: ThemeOption[] = ['system', 'light', 'dark', 'day', 'night']
+                  const current = order.indexOf(theme)
+                  setTheme(order[(current + 1) % order.length])
+                }}
+              />
+              <ChipButton
+                label={`Style: ${stylePreset}`}
+                onPress={() => {
+                  const order: StylePreset[] = [
+                    'navigation',
+                    'standard',
+                    'standard-satellite',
+                    'streets',
+                    'satellite',
+                  ]
+                  const current = order.indexOf(stylePreset)
+                  setStylePreset(order[(current + 1) % order.length])
+                }}
+              />
+            </View>
+            <View style={styles.row}>
+              <ChipButton
+                label={`TripProgress: ${showsTripProgress ? 'on' : 'off'}`}
+                onPress={() => {
+                  setShowsTripProgress((value) => !value)
+                }}
+              />
+              <ChipButton
+                label={`Cancel: ${showCancelButton ? 'on' : 'off'}`}
+                onPress={() => {
+                  setShowCancelButton((value) => !value)
+                }}
+              />
+              <ChipButton
+                label={`Maneuver: ${showsManeuverView ? 'on' : 'off'}`}
+                onPress={() => {
+                  setShowsManeuverView((value) => !value)
+                }}
+              />
+              <ChipButton
+                label={`Actions: ${showsActionButtons ? 'on' : 'off'}`}
+                onPress={() => {
+                  setShowsActionButtons((value) => !value)
+                }}
+              />
+            </View>
+            <View style={styles.row}>
+              <ChipButton
+                label={`SpeedLimits: ${showsSpeedLimits ? 'on' : 'off'}`}
+                onPress={() => {
+                  setShowsSpeedLimits((value) => !value)
+                }}
+              />
+              <ChipButton
+                label={`WayName: ${showsWayNameLabel ? 'on' : 'off'}`}
+                onPress={() => {
+                  setShowsWayNameLabel((value) => !value)
+                }}
+              />
+              <ChipButton
+                label={`Colors: ${colorMode}`}
+                onPress={() => {
+                  setColorMode(nextColorMode)
+                }}
+              />
+              <ChipButton
+                label={`Alternatives: ${routeAlternatives ? 'on' : 'off'}`}
+                onPress={() => {
+                  setRouteAlternatives((value) => !value)
+                }}
+              />
+              <ChipButton
+                label={`ContinuousAlt: ${showsContinuousAlternatives ? 'on' : 'off'}`}
+                onPress={() => {
+                  setShowsContinuousAlternatives((value) => !value)
+                }}
+              />
+            </View>
+          </ScrollView>
         ) : (
-        <ScrollView contentContainerStyle={styles.panel}>
-          <Text style={styles.panelTitle}>Appearance + Route Scenario</Text>
-          <View style={styles.row}>
-            <ChipButton label='Panel: hide' onPress={() => setPanelOpen(false)} />
-          </View>
-          <View style={styles.row}>
+          <View style={styles.collapsedRow}>
             <ChipButton
-              label={`Destination: ${destinationMode}`}
+              label='Panel: show'
               onPress={() => {
-                setDestinationMode((value) => (value === 'primary' ? 'alternate' : 'primary'))
-              }}
-            />
-            <ChipButton
-              label={`Theme: ${theme}`}
-              onPress={() => {
-                const order: ThemeOption[] = ['system', 'light', 'dark', 'day', 'night']
-                const current = order.indexOf(theme)
-                setTheme(order[(current + 1) % order.length])
-              }}
-            />
-            <ChipButton
-              label={`Style: ${stylePreset}`}
-              onPress={() => {
-                const order: StylePreset[] = [
-                  'navigation',
-                  'standard',
-                  'standard-satellite',
-                  'streets',
-                  'satellite',
-                ]
-                const current = order.indexOf(stylePreset)
-                setStylePreset(order[(current + 1) % order.length])
+                setPanelOpen(true)
               }}
             />
           </View>
-          <View style={styles.row}>
-            <ChipButton
-              label={`TripProgress: ${showsTripProgress ? 'on' : 'off'}`}
-              onPress={() => {
-                setShowsTripProgress((value) => !value)
-              }}
-            />
-            <ChipButton
-              label={`Cancel: ${showCancelButton ? 'on' : 'off'}`}
-              onPress={() => {
-                setShowCancelButton((value) => !value)
-              }}
-            />
-            <ChipButton
-              label={`Maneuver: ${showsManeuverView ? 'on' : 'off'}`}
-              onPress={() => {
-                setShowsManeuverView((value) => !value)
-              }}
-            />
-            <ChipButton
-              label={`Actions: ${showsActionButtons ? 'on' : 'off'}`}
-              onPress={() => {
-                setShowsActionButtons((value) => !value)
-              }}
-            />
-          </View>
-          <View style={styles.row}>
-            <ChipButton
-              label={`SpeedLimits: ${showsSpeedLimits ? 'on' : 'off'}`}
-              onPress={() => {
-                setShowsSpeedLimits((value) => !value)
-              }}
-            />
-            <ChipButton
-              label={`WayName: ${showsWayNameLabel ? 'on' : 'off'}`}
-              onPress={() => {
-                setShowsWayNameLabel((value) => !value)
-              }}
-            />
-            <ChipButton
-              label={`Colors: ${colorMode}`}
-              onPress={() => {
-                setColorMode(nextColorMode)
-              }}
-            />
-            <ChipButton
-              label={`Alternatives: ${routeAlternatives ? 'on' : 'off'}`}
-              onPress={() => {
-                setRouteAlternatives((value) => !value)
-              }}
-            />
-            <ChipButton
-              label={`ContinuousAlt: ${showsContinuousAlternatives ? 'on' : 'off'}`}
-              onPress={() => {
-                setShowsContinuousAlternatives((value) => !value)
-              }}
-            />
-          </View>
-        </ScrollView>
         )}
       </View>
 

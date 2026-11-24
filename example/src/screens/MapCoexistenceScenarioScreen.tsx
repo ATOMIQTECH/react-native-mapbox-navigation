@@ -8,29 +8,8 @@ import { LocationPermissionOverlay } from '../components/LocationPermissionOverl
 import { PRIMARY_DESTINATION } from '../constants/navigation'
 import { useNavigationLocation } from '../hooks/useNavigationLocation'
 
-/**
- * `@rnmapbox/maps` reads its token from its own module rather than from the
- * `MBXAccessToken` this package's config plugin writes into Info.plist, so the
- * example hands it the same public token.
- */
 Mapbox.setAccessToken(process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN ?? null)
 
-/**
- * Both Mapbox packages in one app — the scenario that actually breaks builds.
- *
- * `@rnmapbox/maps` wants the Mapbox Maps SDK from CocoaPods while the
- * Navigation SDK v3 exists only as a Swift package, and both declare
- * `com.mapbox.maps` on Android where the plain and `-ndk27` artifacts collide.
- * The config plugin reconciles all of that on its own, so this screen exists to
- * prove it: if the two ever stop sharing one Maps SDK, this is the screen that
- * fails to link rather than a consumer's app.
- *
- * Note the example's `plugins` array lists `@rnmapbox/maps` *after* this
- * package on purpose. Expo runs mods last-registered-first, so that ordering
- * puts `$ExpoMapboxNavigation.post_install` ahead of `$RNMapboxMaps.post_install`
- * in the Podfile — the order that used to require the consumer to reshuffle
- * their plugin list.
- */
 export default function MapCoexistenceScenarioScreen() {
   const [mode, setMode] = useState<'map' | 'navigation'>('map')
   const { hasLocationPermission, permissionStatus, resolvedStartOrigin, requestLocationAccess } =
@@ -44,7 +23,9 @@ export default function MapCoexistenceScenarioScreen() {
         {(['map', 'navigation'] as const).map((value) => (
           <Pressable
             key={value}
-            onPress={() => setMode(value)}
+            onPress={() => {
+              setMode(value)
+            }}
             style={[styles.tab, mode === value && styles.tabActive]}
           >
             <Text style={[styles.tabLabel, mode === value && styles.tabLabelActive]}>

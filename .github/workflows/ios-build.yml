@@ -17,14 +17,14 @@ on:
     branches: [main]
     paths:
       - 'ios/**'
-      - 'app.plugin.js'
+      - 'app.plugin.ts'
       - 'expo-module.config.json'
       - 'example/**'
       - '.github/workflows/ios-build.yml'
   pull_request:
     paths:
       - 'ios/**'
-      - 'app.plugin.js'
+      - 'app.plugin.ts'
       - 'expo-module.config.json'
       - 'example/**'
       - '.github/workflows/ios-build.yml'
@@ -55,17 +55,24 @@ jobs:
           pod --version
           sw_vers
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            example/pnpm-lock.yaml
 
       - name: Install library dependencies
-        run: npm install --no-audit --no-fund
+        run: pnpm install --frozen-lockfile
 
       - name: Install example dependencies
         working-directory: example
-        run: npm install --no-audit --no-fund
+        run: pnpm install --frozen-lockfile
 
       # Must precede `pod install`: CocoaPods reads ~/.netrc when fetching the
       # Mapbox binary frameworks.
@@ -83,7 +90,7 @@ jobs:
       - name: Prebuild example app
         if: env.HAS_MAPBOX_TOKEN == 'true'
         working-directory: example
-        run: npx expo prebuild --platform ios --no-install
+        run: pnpm exec expo prebuild --platform ios --no-install
 
       - name: Install pods
         if: env.HAS_MAPBOX_TOKEN == 'true'
